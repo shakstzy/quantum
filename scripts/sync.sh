@@ -10,6 +10,8 @@ BRANCH="main"
 
 mkdir -p "$(dirname "$LOG")"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
+heartbeat() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] tick" >> "$LOG"; }
+heartbeat
 
 # single-instance lock (mkdir is atomic on macOS)
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
