@@ -94,29 +94,37 @@ def publish_candidate(candidate_id: int) -> int:
         return 2
 
     live = os.environ.get("LIVE") == "1"
+    desired_status = "queued" if live else "dry_run"
     posted_any = False
+
     for acct in accounts:
         caption = make_caption(cand, acct, camp)
         gres = gate(candidate_id, acct["id"], caption=caption)
+        full_checks = json.dumps([asdict(c) for c in gres.checks])
+
+        gate_id, attempt_id = db.create_publish_attempt_after_gate(
+            candidate_id=candidate_id,
+            account_id=acct["id"],
+            render_id=render["id"],
+            caption=caption,
+            gate_passed=gres.passed,
+            failed_checks=gres.failed,
+            full_checks_json=full_checks,
+            status=desired_status,
+        )
         if not gres.passed:
             print(f"gate FAILED for account={acct['alias']}: {gres.failed}", file=sys.stderr)
             continue
-
-        attempt_id = db.insert_publish_attempt(
-            candidate_id=candidate_id,
-            render_id=render["id"],
-            account_id=acct["id"],
-            status="dry_run" if not live else "queued",
-            caption=caption,
-            hashtags="",
-        )
 
         payload = {
             "attempt_id": attempt_id,
             "alias": acct["alias"],
             "platform": acct["platform"],
+            "zernio_account_id": acct["zernio_account_id"],
             "filepath": render["filepath"],
             "caption": caption,
+            "campaign": camp["slug"],
+            "disclosures": {"paid_partnership": True, "ad_disclosure": True},
             "live": live,
         }
 
@@ -126,20 +134,48 @@ def publish_candidate(candidate_id: int) -> int:
             posted_any = True
             continue
 
-        if "ZERNIO_NO_CONFIRM" not in os.environ:
-            print("LIVE=1 set. zernio-post requires `PUBLISH` confirmation in caller env.", file=sys.stderr)
+        # Live publish flow. Per Codex code review #2 we must build a real payload
+        # with caption + disclosure flags + accountId, NOT just pass a filepath.
+        # Step 1: upload media to zernio.
+        up = subprocess.run(["bash", str(ZERNIO), "upload", render["filepath"]],
+                            capture_output=True, text=True, timeout=300)
+        if up.returncode != 0:
+            db.update_publish_attempt(attempt_id, status="failed",
+                                      failure_reason=f"upload: {up.stderr[-400:]}")
+            print(f"upload FAILED account={acct['alias']}: {up.stderr[-200:]}", file=sys.stderr)
+            continue
+        try:
+            public_url = json.loads(up.stdout).get("publicUrl")
+        except Exception:
+            db.update_publish_attempt(attempt_id, status="failed",
+                                      failure_reason="upload: no publicUrl in response")
+            continue
 
-        cmd = ["bash", str(ZERNIO), "post", render["filepath"]]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if proc.returncode != 0:
-            with db.conn() as c:
-                c.execute("UPDATE publish_attempts SET status = 'failed', failure_reason = ? WHERE id = ?",
-                          (proc.stderr[-500:], attempt_id))
-            print(f"FAILED account={acct['alias']}: {proc.stderr[-200:]}", file=sys.stderr)
+        # Step 2: assemble post payload. v1 keeps it minimal; full per-platform shape
+        # lives in `_core/skills/zernio-post/references/<platform>.md`. If zernio-post
+        # rejects the payload shape, we surface it; v2 will use the full shape.
+        post_body = {
+            "accountId": acct["zernio_account_id"],
+            "platform": acct["platform"],
+            "mediaUrls": [public_url],
+            "caption": caption,
+            "disclosures": payload["disclosures"],
+            "publishNow": True,
+        }
+        body_path = LOG_DIR / f"publish-payload-{attempt_id}.json"
+        body_path.parent.mkdir(parents=True, exist_ok=True)
+        body_path.write_text(json.dumps(post_body, indent=2))
+
+        post = subprocess.run(["bash", str(ZERNIO), "post", str(body_path)],
+                              capture_output=True, text=True, timeout=300)
+        if post.returncode != 0:
+            db.update_publish_attempt(attempt_id, status="failed",
+                                      failure_reason=f"post: {post.stderr[-400:]}")
+            print(f"post FAILED account={acct['alias']}: {post.stderr[-200:]}", file=sys.stderr)
             continue
 
         try:
-            resp = json.loads(proc.stdout)
+            resp = json.loads(post.stdout)
             post_id = resp.get("_id") or resp.get("id")
             url = resp.get("platform_url") or resp.get("url")
         except Exception:

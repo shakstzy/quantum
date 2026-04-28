@@ -61,7 +61,7 @@ cand_id = db.insert_candidate(
     transcript_excerpt="Most AI tools fail because they solve a problem that doesn't pay. Founders chase technical novelty over market urgency. The ones that survive treat every demo as a sales call.",
     ngram_hash="a"*64,
     perceptual_hash="b"*64,
-    duplicate_score=0.1,
+    duplicate_score=0.0,
     status="candidate",
 )
 print(f"  source id={sid} account id={aid} candidate id={cand_id}")
@@ -91,7 +91,7 @@ db.update_candidate_status($CAND_ID, "qa_approved")
 PY
 python "$SRC/gate.py" "$CAND_ID" "$ACCT_ID" --caption "Why most AI tools die in their first quarter #ad #aisaas"
 
-echo "== smoke 5/6: insert fake render + run publish dry-run =="
+echo "== smoke 5/6: insert fake render + run publish dry-run (also verifies gate ledger enforcement) =="
 python <<PY
 import sys, os; sys.path.insert(0, os.environ['CLIPPING_WS_ROOT']+'/bot/src')
 import db
@@ -100,6 +100,16 @@ db.insert_render(candidate_id=$CAND_ID, template="vertical-captions-v1",
                  render_hash="d"*64)
 PY
 python "$SRC/publish.py" "$CAND_ID" || true
+echo "-- verify every publish_attempt has a gate_decision_id (ledger enforcement)"
+python <<'PY'
+import sys, os; sys.path.insert(0, os.environ['CLIPPING_WS_ROOT']+'/bot/src')
+import db
+with db.conn() as c:
+    rows = c.execute("SELECT id, gate_decision_id FROM publish_attempts").fetchall()
+    bad = [r for r in rows if r['gate_decision_id'] is None]
+    print(f"  publish_attempts={len(rows)} bound_to_gate={len(rows)-len(bad)} unbound={len(bad)}")
+    assert not bad, "publish_attempts exist without gate_decision_id; ledger broken"
+PY
 
 echo "== smoke 6/6: track northstar + kill-list =="
 python "$SRC/track.py" northstar
