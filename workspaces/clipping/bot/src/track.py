@@ -18,7 +18,7 @@ from pathlib import Path
 
 import db
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2].parents[1]
 ZERNIO = REPO_ROOT / "_core" / "skills" / "zernio-post" / "scripts" / "zernio.sh"
 LOG_DIR = Path.home() / ".quantum" / "clipping" / "logs"
 INBOX = Path.home() / ".quantum" / "clipping" / "inbox" / "payouts"

@@ -16,8 +16,8 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WS_ROOT = REPO_ROOT / "workspaces" / "clipping"
+WS_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = WS_ROOT.parents[1]
 SCHEMA = WS_ROOT / "shared" / "schema.sql"
 
 STATE_DIR = Path.home() / ".quantum" / "clipping"
