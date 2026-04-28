@@ -24,7 +24,15 @@ export async function downloadCloudfront(url, destDir, options = {}) {
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       const expectedLen = Number(res.headers.get('content-length') || '0');
       const contentType = res.headers.get('content-type') || 'application/octet-stream';
+      // Refuse non-media payloads (HTML error pages, JSON, etc.) - the CDN should always serve image/* or video/*.
+      if (!/^(image|video|application\/octet-stream)/i.test(contentType)) {
+        throw new Error(`unexpected content-type: ${contentType}`);
+      }
+      // Hard ceiling: 500 MB. Long videos top out far below this; anything larger is a bug or a different asset.
+      const MAX_BYTES = 500 * 1024 * 1024;
+      if (expectedLen > MAX_BYTES) throw new Error(`content-length ${expectedLen} exceeds ceiling ${MAX_BYTES}`);
       const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_BYTES) throw new Error(`body ${buf.length} exceeds ceiling ${MAX_BYTES}`);
       if (expectedLen > 0 && buf.length !== expectedLen) {
         throw new Error(`length mismatch: got ${buf.length}, expected ${expectedLen}`);
       }

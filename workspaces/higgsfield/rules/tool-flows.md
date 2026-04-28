@@ -1,6 +1,6 @@
 # Tool Flows (canonical)
 
-Per-tool UI selectors, backend slugs, and body schemas for the five Higgsfield tool families. This is the single source of truth . Scripts import slugs from here; when slugs change, update here and nowhere else.
+Per-tool UI selectors, backend slugs, and body schemas for the five Higgsfield tool families. **Reference doc, not imported by scripts.** The live catalogs are hardcoded in `scripts/image.mjs`, `scripts/video.mjs`, `scripts/marketing.mjs`, `scripts/cinema.mjs`. When slugs / costs / labels drift, update both this doc AND the script catalog.
 
 ## API pattern (all tools)
 
@@ -115,8 +115,8 @@ Auth refresh: `POST https://clerk.higgsfield.ai/v1/client/sessions/<sid>/tokens`
 
 - Every form submission goes through the Generate button; mouse must arrive via bezier path, dwell 120ms, then click.
 - DataDome's `x-datadome-clientid` cookie is reset between tools; skill treats each tool session as a fresh behavioral context (browse phase before first click per tool).
-- Free gens (`use_free_gens: true`) are charged zero against wallet but have a daily cap per `/user/free-gens/v2`. Skill prefers free gens when available.
-- Unlim (`use_unlim: true`) is charged zero against subscription credits for supported models on `has_unlim: true` plans. Skill auto-enables when user has unlim, unless `--no-unlim` passed.
+- Free gens (`use_free_gens: true`) are charged zero against wallet but have a daily cap per `/user/free-gens/v2`. The `--free-gens` CLI flag is documented but not currently wired (TODO).
+- Unlim (`use_unlim: true`) is charged zero against subscription credits for supported models on `has_unlim: true` plans. Skill auto-enables when user has unlim. `--no-unlim` flag is not implemented (TODO).
 - **Slug path is case-sensitive but underscore/hyphen varies.** Some live URLs use hyphens (`/jobs/nano-banana-2`), others underscores (`/jobs/v2/seedance_2_0`, `/jobs/v2/cinematic_studio_image`). `waitForJobPostResponse` in `ui-submit.mjs` accepts either via `slug.replace(/[_-]/g, '[_-]')`.
 - **localStorage side-channel.** Every tool page hydrates `inputImages` / `mediasV3` / `medias` / `assets` from `hf:*` localStorage keys. DOM-chip clearing is NOT enough; `clearPersistedAttachments(page)` must run post-JWT and pre-submit for every flow (see `ui-submit.mjs`).
 - **Shared backend slugs.** Some frontend model variants share one backend slug (e.g. Seedance 2.0 and Seedance 2.0 Fast both POST to `/jobs/v2/seedance_2_0`, differentiated only by body param). When adding a catalog entry for a new variant, always probe the live POST URL with `HF_DEBUG=1` before writing a new `backend_slug`.
