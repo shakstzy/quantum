@@ -236,7 +236,15 @@ def open_chat_db_readonly() -> tuple[sqlite3.Connection, pathlib.Path]:
         sys.exit(f"chat.db not found at {CHAT_DB}")
     tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="quantum-imsg-"))
     tmp_db = tmp_dir / "chat.db"
-    shutil.copy2(CHAT_DB, tmp_db)
+    try:
+        shutil.copy2(CHAT_DB, tmp_db)
+    except PermissionError:
+        sys.exit(
+            "PermissionError reading chat.db. The invoking binary lacks Full Disk Access.\n"
+            "When run via launchd, grant FDA to /bin/bash:\n"
+            "  System Settings -> Privacy & Security -> Full Disk Access -> + -> Cmd+Shift+G -> /bin/bash\n"
+            "Then: launchctl kickstart -k gui/$(id -u)/com.shakstzy.quantum-imessage"
+        )
     # Also copy WAL/SHM if present so we get the latest committed state.
     for suffix in ("-wal", "-shm"):
         src = CHAT_DB.with_name(CHAT_DB.name + suffix)
