@@ -19,7 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 RAW = ROOT / "raw" / "calendar"
 
 START = "2000-01-01"
-PACE_SEC = 0.2
+PACE_SEC = 0.1
 
 
 def gog_json(args: list[str]) -> dict | list:

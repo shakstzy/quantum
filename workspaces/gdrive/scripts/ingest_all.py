@@ -29,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 RAW = ROOT / "raw" / "gdrive"
 LOG = ROOT / "raw" / ".ingest-log"
 
-PACE_SEC = 0.2
+PACE_SEC = 0.1
 HEAVY_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
 
 # Native Google formats -> export format.

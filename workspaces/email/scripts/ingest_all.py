@@ -28,7 +28,7 @@ KEEP_HEADERS = {
     "message-id", "in-reply-to", "references", "list-id", "list-unsubscribe",
 }
 
-PACE_SEC = 0.2  # 5 req/sec
+PACE_SEC = 0.1  # 10 req/sec; thread.get is 10 quota units, well under Gmail's 250/sec/user budget
 
 
 def gog_json(args: list[str]) -> dict | list:

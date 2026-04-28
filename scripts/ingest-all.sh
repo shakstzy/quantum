@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # One-time bulk ingest: Gmail + Calendar + Drive across all 4 accounts.
-# Sequential per service per account. Resumable; safe to re-run.
-# Read-only operations only; no CONFIRM gate needed.
+# Fully parallel: 12 jobs (4 accounts x 3 services) run concurrently.
+# Safe because Google API quotas are per-user-per-API, so accounts and services
+# don't share budgets. Each job paces internally at 10 req/sec.
+# Resumable; safe to re-run; read-only operations only.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,39 +16,46 @@ ACCOUNTS=(
   "adithya@outerscope.xyz"
   "adithya@synps.xyz"
 )
+SERVICES=("calendar" "gdrive" "email")
 
 start_ts="$(date +%s)"
 echo "=== ingest-all start: $(date -Iseconds) ==="
+echo "launching $(( ${#ACCOUNTS[@]} * ${#SERVICES[@]} )) jobs in parallel"
 
-run_step() {
-  local label="$1"; shift
-  local logfile="$LOG/${label}.log"
-  echo
-  echo "--- $label ---"
-  echo "log: $logfile"
-  if ! "$@" >>"$logfile" 2>&1; then
-    echo "!! $label FAILED (continuing); see $logfile" | tee -a "$LOG/ingest-all.log"
+declare -a PIDS=()
+declare -a LABELS=()
+
+for svc in "${SERVICES[@]}"; do
+  for acct in "${ACCOUNTS[@]}"; do
+    label="${svc}-${acct}"
+    logfile="$LOG/${label}.log"
+    echo "--- launch ${label} -> ${logfile}"
+    (
+      python3 "$ROOT/workspaces/${svc}/scripts/ingest_all.py" --account "$acct"
+      ec=$?
+      if [ $ec -eq 0 ]; then
+        echo "ok ${label}"
+      else
+        echo "!! ${label} FAILED (exit ${ec}); see ${logfile}"
+      fi
+    ) >>"$logfile" 2>&1 &
+    PIDS+=($!)
+    LABELS+=("$label")
+  done
+done
+
+# Mirror per-job completion to stdout so the orchestrator output (and any tail-based
+# monitor) sees ok/!! lines as jobs finish.
+for i in "${!PIDS[@]}"; do
+  pid="${PIDS[$i]}"
+  label="${LABELS[$i]}"
+  if wait "$pid"; then
+    tail -n 1 "$LOG/${label}.log" 2>/dev/null
   else
-    echo "ok $label"
+    tail -n 1 "$LOG/${label}.log" 2>/dev/null || echo "!! ${label} FAILED"
   fi
-}
-
-# Calendar first (smallest, cheapest, sanity-check auth on every account).
-for acct in "${ACCOUNTS[@]}"; do
-  run_step "calendar-${acct}" python3 "$ROOT/workspaces/calendar/scripts/ingest_all.py" --account "$acct"
-done
-
-# Drive next (metadata is cheap; download/markitdown takes time).
-for acct in "${ACCOUNTS[@]}"; do
-  run_step "gdrive-${acct}" python3 "$ROOT/workspaces/gdrive/scripts/ingest_all.py" --account "$acct"
-done
-
-# Email last (highest volume).
-for acct in "${ACCOUNTS[@]}"; do
-  run_step "email-${acct}" python3 "$ROOT/workspaces/email/scripts/ingest_all.py" --account "$acct"
 done
 
 end_ts="$(date +%s)"
 elapsed=$((end_ts - start_ts))
-echo
 echo "=== ingest-all done: $(date -Iseconds)  (elapsed ${elapsed}s) ==="
