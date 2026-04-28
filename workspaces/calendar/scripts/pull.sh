@@ -21,11 +21,10 @@ END="$(date -v+${FUTURE}d +%Y-%m-%d)"
 STAMP="$(date +%Y-%m-%d)"
 
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct%@*}"
-  slug="${slug//./-}"
+  slug="${acct//[@.]/-}"
   out="$RAW/${STAMP}-${slug}.json"
   echo "pulling $acct events ${START}..${END} -> $out"
-  gog -a "$acct" -j calendar events --start "$START" --end "$END" > "$out"
+  gog -a "$acct" -j calendar events --all --from "$START" --to "$END" --all-pages > "$out"
 done
 
 echo "done. files in $RAW"

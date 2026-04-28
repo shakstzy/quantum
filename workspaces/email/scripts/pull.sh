@@ -17,11 +17,10 @@ ACCOUNTS=(
 
 STAMP="$(date +%Y-%m-%d)"
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct%@*}"
-  slug="${slug//./-}"
+  slug="${acct//[@.]/-}"
   out="$RAW/${STAMP}-${slug}.json"
   echo "pulling $acct -> $out"
-  gog -a "$acct" -j gmail search "newer_than:${DAYS}d" > "$out"
+  gog -a "$acct" -j gmail search "newer_than:${DAYS}d" --all > "$out"
 done
 
 echo "done. files in $RAW"

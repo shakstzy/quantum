@@ -19,11 +19,10 @@ CUTOFF="$(date -v-${DAYS}d +%Y-%m-%dT%H:%M:%S)"
 STAMP="$(date +%Y-%m-%d)"
 
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct%@*}"
-  slug="${slug//./-}"
+  slug="${acct//[@.]/-}"
   out="$RAW/${STAMP}-${slug}.json"
   echo "pulling $acct drive (modified after $CUTOFF) -> $out"
-  gog -a "$acct" -j drive search "modifiedTime > '${CUTOFF}'" > "$out"
+  gog -a "$acct" -j drive search --raw-query "modifiedTime > '${CUTOFF}'" --all-pages > "$out"
 done
 
 echo "done. files in $RAW"
