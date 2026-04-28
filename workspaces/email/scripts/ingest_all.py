@@ -43,7 +43,10 @@ def gog_json(args: list[str]) -> dict | list:
         last_err = proc.stderr.strip()
         retryable = any(token in last_err for token in (
             "rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded",
-            "429", "503", "backendError", "internalError",
+            "429", "503", "500", "502", "504",
+            "backendError", "internalError",
+            "TLS handshake timeout", "i/o timeout", "context deadline",
+            "connection reset", "EOF", "no such host", "temporary failure",
         ))
         if not retryable:
             raise RuntimeError(f"gog {' '.join(args)} failed (exit {proc.returncode}): {last_err}")
