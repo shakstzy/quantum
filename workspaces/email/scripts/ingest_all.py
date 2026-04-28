@@ -49,7 +49,11 @@ def slugify(account: str) -> str:
 
 
 def strip_payload(payload: dict) -> dict:
-    """Strip attachment binaries; keep attachment metadata. Recurse into multipart."""
+    """Strip attachment binaries; keep attachment metadata. Recurse into multipart.
+
+    For multipart/alternative with both text/plain and text/html siblings, drop the
+    text/html sibling -- plaintext carries the same content at ~10x less weight.
+    """
     if not payload:
         return payload
     out = {
@@ -64,7 +68,6 @@ def strip_payload(payload: dict) -> dict:
     body = payload.get("body", {}) or {}
     mt = (payload.get("mimeType") or "").lower()
     if mt.startswith("text/"):
-        # Keep text bodies inline.
         if "data" in body:
             out["body"] = {"data": body["data"], "size": body.get("size")}
         elif "attachmentId" in body:
@@ -72,7 +75,6 @@ def strip_payload(payload: dict) -> dict:
         else:
             out["body"] = {"size": body.get("size")}
     else:
-        # Attachment: keep metadata only.
         if "attachmentId" in body or payload.get("filename"):
             out["attachment"] = {
                 "filename": payload.get("filename"),
@@ -80,9 +82,20 @@ def strip_payload(payload: dict) -> dict:
                 "size": body.get("size"),
                 "attachmentId": body.get("attachmentId"),
             }
-    parts = payload.get("parts")
+    parts = payload.get("parts") or []
     if parts:
-        out["parts"] = [strip_payload(p) for p in parts]
+        sibling_mts = {(p.get("mimeType") or "").lower() for p in parts}
+        kept_parts = []
+        for p in parts:
+            p_mt = (p.get("mimeType") or "").lower()
+            if p_mt == "text/html" and "text/plain" in sibling_mts:
+                kept_parts.append({
+                    "mimeType": "text/html",
+                    "body": {"size": (p.get("body") or {}).get("size"), "dropped": "plaintext-sibling-present"},
+                })
+                continue
+            kept_parts.append(strip_payload(p))
+        out["parts"] = kept_parts
     return out
 
 
