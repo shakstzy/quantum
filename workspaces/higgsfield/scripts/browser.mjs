@@ -5,7 +5,7 @@ import { chromium } from 'patchright';
 import { buildInitScript } from './fingerprint.mjs';
 import { attachJwtCapture } from './jwt.mjs';
 import { chmod, mkdir } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const PROFILE_DIR = process.env.HF_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/higgsfield`;
@@ -20,14 +20,23 @@ function seededInt() {
 export function getProfileDir() { return PROFILE_DIR; }
 
 function acquirePidfile() {
-  if (existsSync(PIDFILE)) {
+  mkdirSync(PROFILE_DIR, { recursive: true });
+  // Atomic create (O_EXCL). Two simultaneous launches: only one wins.
+  let fd;
+  try {
+    fd = openSync(PIDFILE, 'wx');
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    // Existing pidfile: alive -> refuse; dead -> reclaim atomically by unlink+retry.
     const old = parseInt(readFileSync(PIDFILE, 'utf8').trim(), 10);
     if (old && isAlive(old)) {
       throw new Error(`Profile locked by pid ${old}. Wait for it to finish or kill it.`);
     }
-    // Stale; overwrite
+    try { unlinkSync(PIDFILE); } catch (_) {}
+    fd = openSync(PIDFILE, 'wx'); // if this races and EEXISTs, surface it
   }
-  writeFileSync(PIDFILE, String(process.pid));
+  writeFileSync(fd, String(process.pid));
+  closeSync(fd);
   process.on('exit', releasePidfile);
   process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
   process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });

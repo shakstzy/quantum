@@ -124,11 +124,15 @@ export async function selectCinemaMode(page, mode) {
   const allCandidates = await page.evaluate(l => {
     const lblLower = l.toLowerCase();
     const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-    return tabs.map((t, i) => ({
-      idx: i,
-      line1: (t.innerText || '').trim().split('\n')[0].trim(),
-      aria: t.getAttribute('aria-selected')
-    })).filter(x => x.line1.toLowerCase() === lblLower);
+    return tabs.map((t, i) => {
+      const r = t.getBoundingClientRect();
+      return {
+        idx: i,
+        line1: (t.innerText || '').trim().split('\n')[0].trim(),
+        aria: t.getAttribute('aria-selected'),
+        x: r.x, y: r.y, w: r.width, h: r.height
+      };
+    }).filter(x => x.line1.toLowerCase() === lblLower && x.x >= 300 && x.w > 0 && x.h > 0);
   }, label);
   for (const cand of allCandidates) {
     const handle = await page.evaluateHandle(({ idx }) => {
