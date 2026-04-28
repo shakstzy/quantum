@@ -10,19 +10,22 @@ import sys
 import time
 import subprocess
 import tempfile
-import urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from instaloader import Instaloader, Post
 from instaloader.exceptions import InstaloaderException, LoginRequiredException
 
+# Delegate all daemon contract (URL, model, payload) to the local-llm skill.
+# If Gemma's port/model/host changes, only that skill's client.py is edited.
+sys.path.insert(0, "/Users/shakstzy/QUANTUM/_core/skills/local-llm")
+from client import chat as local_llm_chat, image_block, LocalLLMUnreachable, UNREACHABLE_HINT
+
 SHORTCODE_RE = re.compile(
     r"instagram\.com/(?:share/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)"
 )
 REEL_RE = re.compile(r"/(?:share/)?reels?/")
 
-MLX_MODEL = "unsloth/gemma-4-26b-a4b-it-UD-MLX-4bit"
 WHISPER_MODEL = "small.en"
 N_FRAMES = 4
 MAX_TOKENS = 400
