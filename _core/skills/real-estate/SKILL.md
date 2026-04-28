@@ -78,7 +78,7 @@ Both sites server-render their React pages and embed every API response into the
 **Why curl_cffi?** It impersonates a real Chrome TLS handshake (JA3 fingerprint, ALPN order, cipher suites). Stock `requests` / `urllib` get fingerprinted as bots within one request. curl_cffi clears the bar at zero ongoing cost.
 
 - Redfin: `chrome131` impersonation works.
-- Zillow (PerimeterX): only `chrome124` impersonation works as of April 2026. If Zillow returns 403 with "px-captcha" in the body, the profile likely needs bumping; check the fix list at https://github.com/lexiforest/curl-cffi/releases.
+- Zillow (PerimeterX): the script auto-rotates across `chrome124`, `safari17_0`, `chrome131`, `chrome120`, `chrome116`, `firefox133`. As of April 2026 chrome124 is primary and safari17_0 is the resilient fallback (PX defaults to detecting Chrome fingerprints). If all profiles fail with `px-captcha`, the IP is softlocked - wait ~30 min or change networks. New profiles ship in curl-cffi releases at https://github.com/lexiforest/curl-cffi/releases; bump `_PROFILE_ROTATION` in `scripts/zillow.py` if PX adapts.
 
 ## Region resolution
 

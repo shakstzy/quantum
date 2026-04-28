@@ -58,23 +58,63 @@ STATE_ABBREVS = {
     "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
 }
 
+# Profile rotation order. PerimeterX bans clusters of fingerprints over time
+# (chrome131 was fine in March, blocked by late April). When the active
+# profile gets PX-walled we drop down the list. safari17_0 has historically
+# been the most resilient because PX defaults bias toward Chrome detection.
+_PROFILE_ROTATION = ["chrome124", "safari17_0", "chrome131", "chrome120", "chrome116", "firefox133"]
 _session: curl_requests.Session | None = None
+_session_profile: str | None = None
+
+
+def _new_session(profile: str) -> curl_requests.Session:
+    s = curl_requests.Session(impersonate=profile)
+    s.get(BASE + "/", headers=DEFAULT_HEADERS, timeout=20)
+    return s
 
 
 def _get_session() -> curl_requests.Session:
-    global _session
+    global _session, _session_profile
     if _session is None:
-        s = curl_requests.Session(impersonate="chrome124")
-        s.get(BASE + "/", headers=DEFAULT_HEADERS, timeout=20)
-        _session = s
+        _session_profile = _PROFILE_ROTATION[0]
+        _session = _new_session(_session_profile)
     return _session
 
 
+def _is_px_block(r) -> bool:
+    return r.status_code == 403 and "px-captcha" in r.text[:1000]
+
+
 def _fetch_html(url: str) -> str:
+    """Fetch a Zillow page, rotating impersonation profiles on PX blocks.
+
+    Per-call cost is 1 request on the happy path. On PX block we open a fresh
+    session with the next profile and retry; we don't loop more than the
+    rotation length to avoid burning the IP across every fingerprint.
+    """
+    global _session, _session_profile
     s = _get_session()
     r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
-    if r.status_code == 403 or "px-captcha" in r.text[:1000]:
-        raise RuntimeError(f"zillow GET {url} -> PX captcha (HTTP {r.status_code}). Throttle, change impersonation, or fall back to a browser.")
+    if _is_px_block(r):
+        # Try other profiles, starting after the current one.
+        try:
+            start = _PROFILE_ROTATION.index(_session_profile or "") + 1
+        except ValueError:
+            start = 0
+        for prof in _PROFILE_ROTATION[start:]:
+            try:
+                s = _new_session(prof)
+            except Exception:
+                continue
+            r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
+            if r.status_code == 200 and not _is_px_block(r):
+                _session, _session_profile = s, prof
+                return r.text
+        raise RuntimeError(
+            f"zillow GET {url} -> PX captcha across all impersonation profiles "
+            f"({_PROFILE_ROTATION}). Wait ~30 min for PX to release the IP, "
+            "or run from a different network."
+        )
     if r.status_code != 200:
         raise RuntimeError(f"zillow GET {url} -> HTTP {r.status_code}: {r.text[:200]}")
     return r.text
