@@ -83,7 +83,7 @@ Both sites server-render their React pages and embed every API response into the
 ## Region resolution
 
 - **Redfin** uses brave-search to find the canonical city URL: query `site:redfin.com <city>`, parse the `/city/<id>/<state>/<name>` URL pattern, extract the integer region_id. ZIP codes (`/zipcode/<5digit>`) and neighborhood URLs are recognized too. Brave is invoked via `_core/skills/brave-search/search.sh`. If it isn't authed, this falls over; fix brave-search first.
-- **Zillow** slugifies free-text directly: `"Austin, TX"` becomes `austin-tx` and the URL becomes `https://www.zillow.com/austin-tx/`. Bare ZIPs work too (`78704`). Pass a full Zillow URL when slugification fails.
+- **Zillow** slugifies free-text directly: `"Austin, TX"` becomes `austin-tx` and the URL becomes `https://www.zillow.com/homes/austin-tx_rb/`. The `_rb` (results-board) path is the one Zillow's frontend uses for filtered queries; the shorter `/austin-tx/` city-guide path also resolves but ignores `searchQueryState` filters in some A/B variants. Bare ZIPs work too (`78704`). Pass a full Zillow URL when slugification fails. Search does an unfiltered fetch first to discover `mapBounds` + `regionSelection`, then re-fetches with filters - without those bounds Zillow falls back to a default region (often Austin).
 
 ## Budget and rate limits
 
