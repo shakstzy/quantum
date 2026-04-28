@@ -75,7 +75,7 @@ When in doubt, treat as destructive.
 ## Secrets hygiene
 
 The agent MUST NOT read, `cat`, print, or transmit:
-- `~/.shakos/secrets/gogcli-oauth-client.json` (client_id + client_secret)
+- `~/.quantum/secrets/gogcli-oauth-client.json` (client_id + client_secret)
 - `~/Library/Application Support/gogcli/config.json`
 - Refresh tokens in macOS Keychain (service `gogcli`). `security find-generic-password` is forbidden.
 - `GOG_ACCESS_TOKEN` env values

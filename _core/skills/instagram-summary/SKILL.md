@@ -74,7 +74,7 @@ Daemon keeps Gemma weights warm. No per-call cold-load tax.
 ## Layout
 
 - Code: `/Users/shakstzy/QUANTUM/_core/skills/instagram-summary/fetch.py` (committed in repo).
-- Runtime venv: `~/.quantum/instagram-summary/.venv/` (out-of-repo, not committed). A separate migration phase moves the existing venv from `~/.claude/skills/instagram-summary/.venv/` to this location; the procedure paths above already assume the post-migration target.
+- Runtime venv: `~/.quantum/instagram-summary/.venv/` (out-of-repo, not committed).
 
 ## QUANTUM notes
 

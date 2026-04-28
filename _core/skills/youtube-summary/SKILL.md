@@ -4,9 +4,9 @@ description: Fetch a YouTube video's transcript and summarize the key points. Tr
 allowed-tools: Bash
 ---
 
-# youtube-summary (QUANTUM stub)
+# youtube-summary
 
-Thin QUANTUM-side trigger doc. The real implementation lives at `~/.claude/skills/youtube-summary/`. This stub exists so Claude routes correctly when working from inside QUANTUM and so the trigger appears in `QUANTUM/CLAUDE.md`.
+Pulls a YouTube transcript via `youtube_transcript_api` and produces a summary. Runtime venv lives at `~/.quantum/youtube-summary/.venv/` (out-of-repo, not committed).
 
 ## When this fires
 
@@ -30,7 +30,7 @@ Do NOT fire for:
 2. Run:
 
    ```
-   ~/.claude/skills/youtube-summary/.venv/bin/python -m youtube_transcript_api <VIDEO_ID> --languages en --format text
+   ~/.quantum/youtube-summary/.venv/bin/python -m youtube_transcript_api <VIDEO_ID> --languages en --format text
    ```
 
 3. stdout is the transcript, newline-separated. Read it, then produce a summary focused on:
