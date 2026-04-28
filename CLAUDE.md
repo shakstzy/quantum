@@ -132,3 +132,21 @@ This project has a Graphify knowledge graph at `graphify-out/`.
 - If `graphify-out/wiki/index.md` exists, navigate it instead of reading raw files.
 - For cross-domain "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep. These traverse the graph's EXTRACTED + INFERRED edges instead of scanning files.
 - After modifying files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Auto-Stack
+
+Three layers keep the graph fresh with zero manual effort. All run via launchd or git, no human in the loop.
+
+| Layer | Trigger | What runs | Cost |
+|-------|---------|-----------|------|
+| 1. Auto-sync | launchd, every 60s (`scripts/sync.sh`, plist `com.shakstzy.quantum-sync`) | stage, secret-scan, commit, pull-rebase, push | free |
+| 2. Git hooks | post-commit and post-checkout (installed by `graphify hook install`) | `graphify update .` (AST refresh on code only) | free |
+| 3. Lint timer | launchd, every 2h (`scripts/graphify-lint.sh`, plist `com.shakstzy.quantum-graphify`) | `cluster-only`; if `check-update` flags pending semantic work, full `graphify .` plus `claude -p` lint writing to `graphify-out/lint-log.md` | bundled in Claude Max |
+
+Logs land in `~/Library/Logs/quantum-graphify.{log,stdout,stderr}` and `~/Library/Logs/quantum-sync.log`.
+
+The Layer 2 hooks cover code refreshes triggered by every auto-sync commit, so `graphify update` runs many times an hour. The Layer 3 timer skips `update` to avoid duplication and only does work git hooks cannot: re-clustering, semantic re-extract on docs/PDFs/images/video, and the Claude wiki lint pass.
+
+Multi-workspace routing into `raw/`: each workspace gets its own subfolder. Symlink real repos in if you want one source of truth, or let `workspaces/<name>/` pipelines deposit fresh files. Either way, Graphify ingests the whole `raw/` tree as one corpus, so cross-workspace edges form automatically and concept-level dedup happens in the semantic pass.
+
+The very first `graphify .` build must be triggered manually once `raw/` has real content. After that, the stack is hands-off.
