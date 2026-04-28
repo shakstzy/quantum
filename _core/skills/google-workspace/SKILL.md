@@ -75,12 +75,13 @@ When in doubt, treat as destructive.
 ## Secrets hygiene
 
 The agent MUST NOT read, `cat`, print, or transmit:
-- `~/.quantum/secrets/gogcli-oauth-client.json` (client_id + client_secret)
-- `~/Library/Application Support/gogcli/config.json`
+- `~/.quantum/secrets/gogcli-oauth-client.json` (OAuth app client_id + client_secret; source material used once to bootstrap gog, NOT what gog reads at runtime)
+- `~/Library/Application Support/gogcli/credentials.json` (active per-account refresh tokens; this is what gog actually reads on every call)
+- `~/Library/Application Support/gogcli/config.json` (account aliases; less sensitive but still off-limits)
 - Refresh tokens in macOS Keychain (service `gogcli`). `security find-generic-password` is forbidden.
 - `GOG_ACCESS_TOKEN` env values
 
-Token health is checked via `gog auth list --check`, never by reading secret files. Both secret paths are outside the QUANTUM git tree.
+Token health is checked via `gog auth list --check`, never by reading secret files. All paths above are outside the QUANTUM git tree.
 
 Env policy: do NOT set `GOG_ACCOUNT` (skill requires explicit `-a`). Do NOT set `GOG_ACCESS_TOKEN` (bypasses auth hygiene).
 

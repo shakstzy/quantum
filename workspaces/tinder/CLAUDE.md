@@ -2,7 +2,7 @@
 
 Tinder automation for Adithya. Patchright-driven (no API-direct), human-paced, ban-aversion is priority #1.
 
-This workspace replaces the SHAKOS `relationships/bot/` which contributed to a shadowban via API-direct calls + mechanically jittered timing. Lessons baked in below.
+This workspace replaces an earlier API-direct bot which contributed to a shadowban via direct `api.gotinder.com` calls and mechanically jittered timing. Lessons baked in below.
 
 ## Hard Rules (non-negotiable)
 
@@ -29,7 +29,6 @@ There is no human-facing CLI. Cron fires `node scripts/<X>.mjs` directly (see `s
 | `scripts/self-check.mjs` | Pre-flight env / deps / config / halt |
 | `scripts/selector-check.mjs` | Interactive DOM selector verification |
 | `scripts/login.mjs` | Open patchright Chromium to tinder.com for manual login (one-time) |
-| `scripts/migrate-shakos.mjs` | One-shot port of SHAKOS `wiki/entities/` + `wiki/conversations/` into the new per-entity raw format |
 
 ### Drafting via `claude -p`
 
