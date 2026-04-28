@@ -37,19 +37,21 @@ export async function scanForHalts(page) {
   }
 }
 
-export async function ensureSelectorsHealthy(page) {
+// Verify the selectors needed for the current script's page. Pass the page's
+// critical selector names — passing all selectors regardless of page would
+// false-fail thread_input on /app/recs etc.
+export async function ensureSelectorsHealthy(page, critical = ["rec_card", "like_button", "nope_button"]) {
   const sels = await selectors();
-  const critical = ["rec_card", "like_button", "nope_button", "matches_tab", "thread_input"];
   const broken = [];
   for (const key of critical) {
     const sel = sels[key];
-    if (!sel) { broken.push(key); continue; }
+    if (!sel || sel.selector == null) { broken.push(key); continue; }
     if (!(await present(page, sel))) broken.push(key);
   }
   if (broken.length) {
     const reason = `selectors_broken:${broken.join(",")}`;
     await setHalt(reason);
     await logSession({ event: "halt", kind: "selector_drift", broken });
-    throw new Error(`HALTED: ${reason}. Run scripts/selector-check.mjs interactively to repair.`);
+    throw new Error(`HALTED: ${reason}. Run scripts/dump-dom.mjs + scripts/analyze-fixture.mjs to find new selectors.`);
   }
 }

@@ -35,7 +35,11 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
   const estMs = caps.swipes.per_session_max * avgGap * 1.5;
   const sessionMs = sessionMinutesMax ? sessionMinutesMax * 60 * 1000 : estMs;
   const sessionEnd = Date.now() + sessionMs;
-  const sessionMaxSwipes = jitter(caps.swipes.per_session_min, caps.swipes.per_session_max + 1);
+  const testLimit = parseInt(process.env.QUANTUM_TINDER_TEST_LIMIT || "0", 10);
+  const sessionMaxSwipes = testLimit > 0
+    ? testLimit
+    : jitter(caps.swipes.per_session_min, caps.swipes.per_session_max + 1);
+  if (testLimit > 0) console.log(`TEST MODE: hard-capped at ${testLimit} swipes`);
 
   await gotoRecs(page);
 
