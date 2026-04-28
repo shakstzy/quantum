@@ -4,9 +4,11 @@ description: Fetch an Instagram post or reel and summarize it. Posts return capt
 allowed-tools: Bash
 ---
 
-# instagram-summary (QUANTUM stub)
+# instagram-summary
 
-Thin QUANTUM-side trigger doc. The real implementation lives at `~/.claude/skills/instagram-summary/`. This stub exists so Claude routes correctly inside QUANTUM and so the trigger appears in `QUANTUM/CLAUDE.md`.
+Posts return caption + metadata + visual analysis of the image(s). Reels additionally return an audio transcript. Both paths end in a multimodal synthesis by `Gemma 4 26B-A4B (MoE)` served via the shared `local-llm` skill (warm HTTP daemon, no per-call cold-load tax). Carousels (multi-image posts) analyze up to 10 items.
+
+Implementation lives in this directory: `fetch.py` is the entrypoint. Runtime venv lives at `~/.quantum/instagram-summary/.venv/` (out of the repo, not committed).
 
 ## When this fires
 
@@ -29,7 +31,7 @@ Do NOT fire for:
 2. **Whisper model cached** for reel audio (~470MB, one-time):
 
    ```
-   ~/.claude/skills/instagram-summary/.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small.en')"
+   ~/.quantum/instagram-summary/.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small.en')"
    ```
 
 Posts work as soon as the local-llm daemon is healthy. Reels also need Whisper.
@@ -37,7 +39,7 @@ Posts work as soon as the local-llm daemon is healthy. Reels also need Whisper.
 ## Procedure
 
 ```
-~/.claude/skills/instagram-summary/.venv/bin/python ~/.claude/skills/instagram-summary/fetch.py <URL>
+~/.quantum/instagram-summary/.venv/bin/python /Users/shakstzy/QUANTUM/_core/skills/instagram-summary/fetch.py <URL>
 ```
 
 Output blocks:
@@ -55,7 +57,7 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 - `LoginRequired`: Instagram demanding auth. Run once with a burner:
 
   ```
-  ~/.claude/skills/instagram-summary/.venv/bin/instaloader --login=<username>
+  ~/.quantum/instagram-summary/.venv/bin/instaloader --login=<username>
   ```
 
 - `yt-dlp failed`: Instagram changed its download surface. `brew upgrade yt-dlp`.
@@ -68,6 +70,11 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 - Reel: 10-18s
 
 Daemon keeps Gemma weights warm. No per-call cold-load tax.
+
+## Layout
+
+- Code: `/Users/shakstzy/QUANTUM/_core/skills/instagram-summary/fetch.py` (committed in repo).
+- Runtime venv: `~/.quantum/instagram-summary/.venv/` (out-of-repo, not committed). A separate migration phase moves the existing venv from `~/.claude/skills/instagram-summary/.venv/` to this location; the procedure paths above already assume the post-migration target.
 
 ## QUANTUM notes
 
