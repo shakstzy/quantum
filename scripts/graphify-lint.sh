@@ -26,12 +26,14 @@ if [[ -z "$(find raw -type f ! -name '.gitkeep' 2>/dev/null | head -1)" ]]; then
   exit 0
 fi
 
-# free pass: AST refresh
+# Note: `graphify update` (AST refresh) is handled by the post-commit hook
+# and the auto-sync committer (~60s cadence), so we skip it here to avoid duplication.
+# This timer's job is the things git hooks DON'T cover: re-clustering, semantic re-extract, and lint.
+
 if [[ -f graphify-out/graph.json ]]; then
-  graphify update . >> "$LOG" 2>&1 || log "graphify update failed (non-fatal)"
   graphify cluster-only . >> "$LOG" 2>&1 || log "graphify cluster-only failed (non-fatal)"
 else
-  log "no existing graph.json; skipping update/cluster-only (run a full build first)"
+  log "no existing graph.json; skipping cluster-only (run a full build first)"
 fi
 
 # check if semantic re-extract is needed
