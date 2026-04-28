@@ -113,6 +113,13 @@ def _slugify_city_state(query: str) -> str | None:
 
 
 def _city_url(query: str) -> str:
+    """Return the canonical Zillow search URL for `query`.
+
+    Uses the `/homes/<slug>_rb/` path. The `/austin-tx/` "city guide" path
+    also works but ignores `searchQueryState` filters in some A/B variants;
+    the `_rb` (results-board) path is the one Zillow's frontend uses for
+    filtered queries.
+    """
     if query.startswith("http"):
         return query
     if query.startswith("/"):
@@ -122,9 +129,7 @@ def _city_url(query: str) -> str:
         raise RuntimeError(
             f"zillow: cannot slugify {query!r}; pass a Zillow URL or 'City, ST' format"
         )
-    if slug.isdigit():
-        return f"{BASE}/{slug}/"
-    return f"{BASE}/{slug}/"
+    return f"{BASE}/homes/{slug}_rb/"
 
 
 # ---------------------------------------------------------------------------
@@ -236,10 +241,28 @@ def property_details(url: str, *, include_raw: bool = False) -> dict:
                 "next_data_keys": list(pp.keys()),
                 "raw": pp if include_raw else None}
     cache = json.loads(cache_raw) if isinstance(cache_raw, str) else cache_raw
-    # cache is keyed like 'ForSaleShopperPlatformFullRenderQuery{"zpid":...,...}'
-    # values are {property: {...}}
-    home = next(iter(cache.values()), {}) if isinstance(cache, dict) else {}
-    prop = (home or {}).get("property") or home or {}
+    # gdpClientCache is keyed by GraphQL operation name + variables. The main
+    # property payload sits under ForSaleShopperPlatformFullRenderQuery on
+    # for-sale listings and OffMarketShopperPlatformRenderQuery on off-market
+    # ones. Other keys (Comps*, School*, MortgageRates*) hold related data
+    # we don't want to mistake for the property record.
+    prop = {}
+    if isinstance(cache, dict):
+        primary_prefixes = (
+            "ForSaleShopperPlatformFullRenderQuery",
+            "OffMarketShopperPlatformRenderQuery",
+            "VariantQuery",
+            "ForSaleDoubleScrollFullRenderQuery",
+        )
+        for k, v in cache.items():
+            if any(k.startswith(p) for p in primary_prefixes) and isinstance(v, dict) and v.get("property"):
+                prop = v["property"]
+                break
+        if not prop:
+            for v in cache.values():
+                if isinstance(v, dict) and v.get("property"):
+                    prop = v["property"]
+                    break
     addr = prop.get("address") or {}
 
     out = {

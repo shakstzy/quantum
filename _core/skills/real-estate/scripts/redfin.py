@@ -293,7 +293,8 @@ def _parse_csv(text: str) -> list[dict]:
             "status": row.get("STATUS"),
             "property_type": row.get("PROPERTY TYPE"),
             "days_on_market": _to_int(row.get("DAYS ON MARKET")),
-            "hoa_per_month": _to_int(row.get("$/SQUARE FEET") and row.get("HOA/MONTH")),
+            "hoa_per_month": _to_int(row.get("HOA/MONTH")),
+            "price_per_sqft": _to_float(row.get("$/SQUARE FEET")),
         })
     return out
 
