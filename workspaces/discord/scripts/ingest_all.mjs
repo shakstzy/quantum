@@ -77,9 +77,36 @@ function writeWatermarks(obj) {
   writeFileSync(WATERMARK_FILE, JSON.stringify(obj, null, 2));
 }
 
-function monthShard(timestamp) {
-  // discord ISO timestamp -> YYYY-MM
-  return timestamp.slice(0, 7);
+// Filesystem-safe slug for friend usernames. Discord usernames are already
+// `[a-z0-9._]+` since the 2023 unique-username migration, but we sanitize
+// anyway to defend against legacy handles or surprise unicode.
+function slugify(s) {
+  return (s || 'unknown').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(0, 60);
+}
+
+// One file per conversation. Self-describing via a header line written once at
+// file creation; subsequent pulls append messages only. Graphify clusters
+// per-conversation, so file boundary = relationship boundary.
+function channelFilePath(channelMeta, channelId) {
+  if (channelMeta.kind === 'dm') {
+    const friend = channelMeta.recipients?.[0];
+    const slug = slugify(friend?.username || friend?.global_name || channelId);
+    return join(RAW_DIR, 'dms', `${slug}--${channelId}.ndjson`);
+  }
+  return join(RAW_DIR, 'group-dms', `${channelId}.ndjson`);
+}
+
+function ensureChannelHeader(filePath, channelMeta, channelId) {
+  if (existsSync(filePath)) return;
+  mkdirSync(dirname(filePath), { recursive: true });
+  const header = {
+    _type: 'channel_header',
+    id: channelId,
+    kind: channelMeta.kind,
+    recipients: channelMeta.recipients,
+    created_at: new Date().toISOString()
+  };
+  writeFileSync(filePath, JSON.stringify(header) + '\n');
 }
 
 function snowflakeToMs(id) {
@@ -95,13 +122,12 @@ function snowflakeFromMs(ms) {
 
 // Trim Discord message to graphify-relevant fields. Preserves full fidelity for
 // content + author + threading; drops embed bloat, mentions arrays we don't
-// need, etc.
-function trimMessage(m, channelMeta) {
+// need, etc. Channel meta lives in the file's header line, not on every msg.
+function trimMessage(m) {
   const trimmed = {
+    _type: 'message',
     id: m.id,
     channel_id: m.channel_id,
-    channel_kind: channelMeta.kind,            // 'dm' | 'group_dm'
-    channel_recipients: channelMeta.recipients, // [{id, username, global_name}]
     timestamp: m.timestamp,
     edited_timestamp: m.edited_timestamp || null,
     type: m.type,
@@ -322,11 +348,15 @@ async function main() {
       }
       const scoreById = new Map(scores.map(s => [s.id, s]));
 
-      // Route + write.
+      // Route + write. Sort chronologically so per-channel files stay ordered.
+      const ordered = pulled.slice().sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+      const channelFile = channelFilePath(channelMeta, ch.id);
       let newest = watermark || '0';
-      for (const m of pulled) {
+      let headerEnsured = false;
+
+      for (const m of ordered) {
         if (BigInt(m.id) > BigInt(newest)) newest = m.id;
-        const trimmed = trimMessage(m, channelMeta);
+        const trimmed = trimMessage(m);
         const pf = preFilter(m);
         let cls, reason;
         if (pf.skip) { cls = 'NOISE'; reason = pf.reason; }
@@ -338,15 +368,19 @@ async function main() {
         if (cls === 'SIGNIFICANT') stats.msgs_significant++; else stats.msgs_noise++;
 
         const sigEntry = { ts: new Date().toISOString(), channel_id: ch.id, message_id: m.id, class: cls, reason };
-        const targetFile = cls === 'SIGNIFICANT' ? join(RAW_DIR, `${monthShard(m.timestamp)}.ndjson`) : REVIEW_FILE;
 
         if (DRY_RUN) {
-          // Print a sample for review.
           const sampleAuthor = trimmed.author?.global_name || trimmed.author?.username || 'unknown';
           const sampleContent = (trimmed.content || '').slice(0, 100).replace(/\n/g, ' ');
-          process.stdout.write(`${cls.padEnd(11)} | ${sampleAuthor.slice(0, 14).padEnd(14)} | ${reason.padEnd(20).slice(0, 20)} | ${sampleContent}\n`);
+          const target = cls === 'SIGNIFICANT' ? channelFile.replace(QUANTUM_ROOT, '.') : REVIEW_FILE.replace(QUANTUM_ROOT, '.');
+          process.stdout.write(`${cls.padEnd(11)} | ${sampleAuthor.slice(0, 14).padEnd(14)} | ${reason.padEnd(20).slice(0, 20)} | ${target.slice(-50)} | ${sampleContent}\n`);
         } else {
-          appendFileSync(targetFile, JSON.stringify(trimmed) + '\n');
+          if (cls === 'SIGNIFICANT') {
+            if (!headerEnsured) { ensureChannelHeader(channelFile, channelMeta, ch.id); headerEnsured = true; }
+            appendFileSync(channelFile, JSON.stringify(trimmed) + '\n');
+          } else {
+            appendFileSync(REVIEW_FILE, JSON.stringify({ ...trimmed, _routed_from: ch.id, _route_reason: reason }) + '\n');
+          }
           appendFileSync(SIGNIFICANCE_LOG, JSON.stringify(sigEntry) + '\n');
         }
       }

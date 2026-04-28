@@ -52,6 +52,11 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     await microFidget(page);
 
     const profile = await readVisibleProfile(page);
+    if (process.env.QUANTUM_TINDER_DEBUG === "1") {
+      const cardCount = await page.$$eval("[class*='recCard__img'][role='img'][aria-label]", els => els.length);
+      const allAriaCards = await page.$$eval("[class*='recCard__img'][role='img'][aria-label]", els => els.slice(0, 3).map(e => e.getAttribute("aria-label")));
+      console.log(`debug: profile=${JSON.stringify(profile)} cards_found=${cardCount} sample_arias=${JSON.stringify(allAriaCards)} url=${page.url()}`);
+    }
     if (!profile.name && !profile.age) {
       await sleep(jitter(800, 1600));
       continue;
