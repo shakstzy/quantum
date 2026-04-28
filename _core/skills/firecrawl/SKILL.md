@@ -51,6 +51,10 @@ _core/skills/firecrawl/scrape.sh "https://example.com/index" links
 - Default cap: 10 scrapes per task. Confirm before going higher.
 - Each scrape costs Firecrawl credits — don't loop blindly. If a page returns garbage, switch format or stop, don't retry.
 
+## Dev best practices
+
+When iterating on scripts that consume firecrawl output (parsing the JSON, building downstream pipelines), cache the first response to disk and develop against the fixture. Each live call costs credits, and reviewer-driven fix loops stack fast. Full pattern in `raw/learnings/2026-04-28-cache-html-during-scraper-dev.md`. Hard cap during dev: ~5 live calls per session per URL shape; if you want a 6th, ask whether the cached response already answers it.
+
 ## Notes
 
 - API endpoint: `https://api.firecrawl.dev/v1/scrape`.
