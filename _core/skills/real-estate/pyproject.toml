@@ -1,0 +1,7 @@
+[project]
+name = "real-estate"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "curl-cffi>=0.15.0",
+]
