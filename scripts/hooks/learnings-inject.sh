@@ -42,8 +42,8 @@ fi
 
 [ -z "$CONTENT" ] && exit 0
 
-# Cap to protect context window
-CONTENT=$(printf '%s' "$CONTENT" | head -c "$MAX_CTX_BYTES")
+# Cap to protect context window; iconv -c strips any partial multibyte char at the boundary
+CONTENT=$(printf '%s' "$CONTENT" | head -c "$MAX_CTX_BYTES" | iconv -c -t UTF-8 2>/dev/null || printf '%s' "$CONTENT" | head -c "$MAX_CTX_BYTES")
 
 # Build payload
 HEADER="<quantum-learnings note=\"auto-injected from raw/learnings/, $COUNT total. Use if relevant; ignore if not.\">"
