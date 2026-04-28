@@ -1,0 +1,16 @@
+{
+  "name": "quantum-discord-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QUANTUM skill: Discord REST primitives as user (Adithya). Patchright-driven Chrome session for all calls.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome"
+  }
+}
