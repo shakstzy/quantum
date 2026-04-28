@@ -15,14 +15,14 @@ export async function gotoRecs(page) {
     await page.goto("https://tinder.com/app/recs", { waitUntil: "domcontentloaded" });
   }
   await sleep(jitter(2400, 4200));
-  // Dismiss any onboarding / "see who likes you" / promo modal that covers the gamepad
-  try { await page.keyboard.press("Escape"); await sleep(jitter(300, 700)); } catch {}
-  try { await page.keyboard.press("Escape"); await sleep(jitter(300, 700)); } catch {}
-  // Wait for the like button to actually be present (up to 12s), since React hydration
-  // and rec-fetch can be slow.
+  // Wait for the like button to be present (up to 12s) since React hydration + rec-fetch can be slow.
   try {
     await page.waitForSelector("button.gamepad-button[class*='sparks-like']", { timeout: 12000 });
   } catch { /* health check downstream will halt loudly */ }
+  // Then wait for at least one rec card photo to actually exist before proceeding.
+  try {
+    await page.waitForSelector("[class*='recCard__img'][role='img'][aria-label]", { timeout: 8000 });
+  } catch { /* swipe loop will keep polling */ }
 }
 
 export async function gotoMatches(page) {
