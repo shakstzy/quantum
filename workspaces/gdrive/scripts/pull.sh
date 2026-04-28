@@ -22,7 +22,7 @@ for acct in "${ACCOUNTS[@]}"; do
   slug="${acct//[@.]/-}"
   out="$RAW/${STAMP}-${slug}.json"
   echo "pulling $acct drive (modified after $CUTOFF) -> $out"
-  gog -a "$acct" -j drive search --raw-query "modifiedTime > '${CUTOFF}'" --all-pages > "$out"
+  gog -a "$acct" -j drive search --raw-query "modifiedTime > '${CUTOFF}'" --max 500 > "$out"
 done
 
 echo "done. files in $RAW"
