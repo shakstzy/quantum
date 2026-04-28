@@ -24,7 +24,7 @@ Pick by job, not by familiarity.
 
 | Use case | Pick | Why |
 |----------|------|-----|
-| Stealth-sensitive sites: Discord, Cloudflare, Datadome, PerimeterX, anti-bot vendors, login walls, captchas, ToS-sensitive surfaces | **patchright** | Stealth Playwright fork. Patches Chromium fingerprint leaks (CDP runtime detection, `navigator.webdriver`, automation flags). Drop-in Playwright API. Already used in `discord` skill and `higgsfield` workspace. |
+| Stealth-sensitive sites: Discord, Cloudflare, Datadome, PerimeterX, anti-bot vendors, login walls, captchas, ToS-sensitive surfaces | **patchright** | Stealth Playwright fork. Patches Chromium fingerprint leaks (CDP runtime detection, `navigator.webdriver`, automation flags). Drop-in Playwright API. Already used in `discord`, `higgsfield`, and `tinder/bot` skills. |
 | Brittle or fast-changing UIs where CSS selectors rot, OR low-detection sites where LLM-driven navigation beats writing selectors. Good for one-off automations and creative tools. | **browser-use + Gemma** | LLM sees the page (vision + accessibility tree) and reasons about clicks. Zero selector maintenance. Pair with the local Gemma daemon (`local-llm` skill at `127.0.0.1:8765`) to keep it free and offline. |
 | Everything else: own apps, public docs, cooperative APIs, deterministic flows with stable selectors | **plain Playwright** | Lightest, best debug ergonomics, no stealth or LLM tax. Default for new skills. |
 
@@ -32,7 +32,7 @@ Pick by job, not by familiarity.
 
 1. **Classify the target site first.** Is there a login wall, captcha, or anti-bot vendor in front? -> patchright. Is the DOM unstable or the flow exploratory? -> browser-use. Otherwise -> plain Playwright.
 2. **Match what the workspace already uses.** If editing an existing skill, do not switch stacks mid-skill without an explicit reason and Adithya's approval.
-3. **Reuse existing skill scaffolding.** `_core/skills/discord` and `workspaces/higgsfield` are the canonical patchright references (Node, npm, `postinstall: patchright install chrome`, custom fingerprint helpers in `scripts/fingerprint.mjs` / `scripts/behavior.mjs`).
+3. **Reuse existing skill scaffolding.** `_core/skills/discord`, `_core/skills/higgsfield`, and `workspaces/tinder/bot` are the canonical patchright references (Node, npm, `postinstall: patchright install chrome`, custom fingerprint helpers in `scripts/fingerprint.mjs` / `scripts/behavior.mjs`).
 4. **Persistent profiles.** Stealth skills store Chrome profiles under `~/.quantum/chrome-profiles/<skill>/`. Reuse that convention; do not invent new profile homes.
 5. **Use Gemma as a tool, not a driver.** See "When to call Gemma" below. Default browser skills are deterministic; Gemma steps in only at fuzzy decision points.
 6. **Audit.** Run the Audit table below before declaring done.
