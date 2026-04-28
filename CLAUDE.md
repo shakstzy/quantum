@@ -146,11 +146,25 @@ Required for every raw file:
 
 1. **Stable, semantic slug in the filename.** Examples: `caroline-tinder-austin.md`, `2026-04-28-investor-call.md`, `chase-checking.md`. Never UUIDs alone, never random hashes alone, never opaque IDs.
 2. **Frontmatter with foreign keys.** YAML at top of every markdown raw file. Include the natural identifiers other workspaces could cross-reference: `phone` (links to `imessage`), `email` (links to `email`), `match_id` / `person_id` (system IDs), `slug`, `source`, `city`, etc.
-3. **Cross-workspace links go in frontmatter.** Use `links: ["<slug>"]` or wikilinks `[[<slug>]]` in body to reference other entities. If a tinder match has a phone, that phone IS the link to her iMessage thread. Make it discoverable.
-4. **Renamings preserve provenance.** If a slug changes (e.g. city re-bucketing), add the old slug to `previous_slugs: [...]` in frontmatter so backlinks resolve.
-5. **One entity per file when the data is per-entity.** Don't shard people across NDJSON months — one person, one file, append over time. Use NDJSON only for high-volume per-event logs that don't have a per-entity owner (e.g. swipe sweeps, page views).
+3. **Edges form via shared identifier values, not explicit `links:` arrays.** Graphify auto-draws an edge whenever the same canonical-form identifier appears in frontmatter or body across two raw files. So if `tinder/caroline-tinder-austin.md` has `phone: "+15125551234"` and `contacts/caroline-smith.md` has `phones: ["+15125551234"]`, the edge is automatic. No explicit `links:` field, no separate linking pass. Use wikilinks `[[<slug>]]` in body only when you want a strong typed reference (e.g. "saw [[caroline-tinder-austin]] at coffee yesterday" in a journal entry).
+4. **Identifiers MUST be in canonical form** so string-equality joins work across workspaces:
+   - **Phones**: E.164 (`+15125551234`). No spaces, no parens, no dashes, country code mandatory.
+   - **Emails**: lowercase, trimmed.
+   - **Slugs**: kebab-case lowercase ascii. No unicode.
+   - **System IDs** (Tinder match_id, Apple Contacts UID, Slack user ID, etc.): exactly as the source provides — never normalize.
+   - **Dates**: ISO-8601 with timezone (`2026-04-28T14:32:11Z`).
+5. **Renamings preserve provenance.** If a slug changes (e.g. city re-bucketing), add the old slug to `previous_slugs: [...]` in frontmatter so backlinks resolve.
+6. **One entity per file when the data is per-entity.** Don't shard people across NDJSON months — one person, one file, append over time. Use NDJSON only for high-volume per-event logs that don't have a per-entity owner (e.g. swipe sweeps, page views).
 
 If a raw deposit can't satisfy these, it doesn't belong in `raw/`. Stash it in the workspace's own state dir or in `~/.quantum/<workspace>/` instead.
+
+### Bulk operations are local-only
+
+Any operation that touches many raw files in sequence (re-tagging, slug renames, regex backfills, schema migrations) is **local disk only**. Network calls to the source platform — Tinder, Slack, Gmail, etc. — are forbidden during bulk passes, because that's the rate spike that flags accounts as bots.
+
+If a workspace genuinely needs to re-fetch data from the source for many entities, it goes through the workspace's normal cron cadence, one entity at a time, paced by the existing rate limiter. No bulk re-pull, no "just run it once to get everything fresh."
+
+Local-only bulk passes (reading markdown, regex extraction, frontmatter rewrites) are always safe regardless of size. They're indistinguishable from `grep` to any external system.
 
 ## Learnings (self-improvement loop)
 
