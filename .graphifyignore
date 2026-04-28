@@ -1,11 +1,25 @@
-references/
-scripts/
+# Generated/derived artifacts
 graphify-out/
+references/
+
+# Operational machinery, not life data
+scripts/
+_core/
+workspaces/
+CLAUDE.md
+README.md
+
+# Ingest watermarks, classification caches, error logs
+raw/.ingest-log/
+**/.ingest-log/
+
+# Tinder profile dump is operational data for the bot, not wiki-worthy
+raw/tinder/
+
+# VCS / dev cruft
 .git/
 .DS_Store
 node_modules/
 __pycache__/
 .venv/
 venv/
-raw/.ingest-log/
-**/.ingest-log/

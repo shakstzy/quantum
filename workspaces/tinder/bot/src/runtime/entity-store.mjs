@@ -212,6 +212,21 @@ function fmtMessageLine({ direction, text, ts }) {
   return `**${who}** ${t} ${text.replace(/\n/g, " ")}`;
 }
 
+// Pull a phone number out of message text in canonical E.164. Returns null if none.
+// Conservative: only matches what plausibly looks like a US number she just typed.
+const PHONE_RE = /(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/g;
+export function extractPhoneFromText(text) {
+  if (!text) return null;
+  PHONE_RE.lastIndex = 0;
+  let m;
+  while ((m = PHONE_RE.exec(text)) !== null) {
+    const [, area, mid, last] = m;
+    if (area[0] === "0" || area[0] === "1") continue; // not a real area code
+    return `+1${area}${mid}${last}`;
+  }
+  return null;
+}
+
 export async function appendMessages(slug, messages) {
   const ent = await loadEntity(slug);
   const have = new Set(ent.conversation.split("\n").filter(l => l.startsWith("**")));

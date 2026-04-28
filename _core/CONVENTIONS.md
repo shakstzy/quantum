@@ -42,14 +42,15 @@ workspaces/<name>/
 - Files land at `raw/<workspace>/YYYY-MM-DD-<slug>.<ext>` OR a documented sharded scheme (e.g. iMessage uses `YYYY-MM.ndjson`).
 - `raw/` is **immutable** after deposit. Workspaces never rewrite a file once written.
 - `raw/` content is gitignored (`raw/*/*` plus `!raw/*/.gitkeep`). Folder structure is committed.
-- Operational state (watermarks, classification caches, error logs) goes under `raw/.ingest-log/`. This path is excluded from `.graphifyignore` so it does not pollute the graph.
+- Operational state (watermarks, classification caches, error logs) goes under `raw/.ingest-log/`. That path is listed in `.graphifyignore`, so the contents stay out of the graph.
 
 ## Graphify integration
 
-- `/graphify` builds the graph from the repo. The cron at `scripts/graphify-lint.sh` handles steady-state refreshes and the bootstrap first build.
-- Cron always passes `--wiki --obsidian --obsidian-dir graphify-out/obsidian` so `graphify-out/wiki/` and `graphify-out/obsidian/` always exist for agents to consult.
+- The first full graph build is **manual**. Adithya runs `/graphify <subfolder> --wiki --obsidian --obsidian-dir graphify-out/obsidian` against a chosen subfolder of `raw/` in an interactive Claude window. The cron does not auto-bootstrap — `raw/` is over `/graphify`'s 200-files / 2M-words confirmation threshold, so it cannot run unattended on the whole corpus.
+- After the bootstrap, `scripts/graphify-lint.sh` (launchd, every 2h) handles steady-state: free `cluster-only` and `update` against the existing graph, and only triggers a semantic re-extract via headless `claude -p` when `graphify check-update` flags pending work.
+- The bootstrapped scope is recorded in `graphify-out/.scope` (one line, e.g. `raw/journal`); the cron reuses that scope for all later refreshes.
 - Workspaces never write to `graphify-out/`. Run `/graphify` (or wait for the cron) instead.
-- AST-only refreshes for code happen via the `post-commit` git hook. The cron handles re-clustering, semantic re-extract, and the Claude lint pass.
+- AST-only refreshes for code happen via the `post-commit` git hook (idempotent, no LLM cost).
 
 ## Wiki consultation (for agents)
 

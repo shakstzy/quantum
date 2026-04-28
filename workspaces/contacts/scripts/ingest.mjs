@@ -17,13 +17,18 @@ const RAW_DIR = resolve(QUANTUM_ROOT, "raw/contacts");
 
 await mkdir(RAW_DIR, { recursive: true });
 
-// JXA script: dump every contact's full data as JSON to stdout.
-// Uses a single osascript invocation (faster than per-contact round-trips).
-const JXA_SCRIPT = `
+const BATCH_SIZE = 200;
+
+// JXA: count contacts (cheap)
+const JXA_COUNT = `Application("Contacts").people().length;`;
+
+// JXA: dump one batch of contacts (slice [start, end)) as JSON.
+const jxaBatch = (start, end) => `
 const Contacts = Application("Contacts");
 const people = Contacts.people();
 const out = [];
-for (let i = 0; i < people.length; i++) {
+const end = Math.min(${end}, people.length);
+for (let i = ${start}; i < end; i++) {
   const p = people[i];
   try {
     const phones = [];
@@ -146,15 +151,30 @@ async function existingByIcId() {
   return { byIcId, slugs };
 }
 
+async function dumpAllContacts() {
+  const startedAt = Date.now();
+  const { stdout: countStr } = await execFile("osascript", ["-l", "JavaScript", "-e", JXA_COUNT], { timeout: 30000 });
+  const total = parseInt(countStr.trim(), 10);
+  console.log(`contacts.app reports ${total} entries; pulling in batches of ${BATCH_SIZE}`);
+  const all = [];
+  for (let start = 0; start < total; start += BATCH_SIZE) {
+    const end = start + BATCH_SIZE;
+    const t0 = Date.now();
+    const { stdout } = await execFile("osascript", ["-l", "JavaScript", "-e", jxaBatch(start, end)], {
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: 600000,
+    });
+    const batch = JSON.parse(stdout);
+    all.push(...batch);
+    console.log(`  batch [${start}-${Math.min(end, total)}): ${batch.length} entries in ${Math.round((Date.now() - t0) / 1000)}s (running total: ${all.length})`);
+  }
+  console.log(`pulled ${all.length} entries in ${Math.round((Date.now() - startedAt) / 1000)}s total`);
+  return all;
+}
+
 async function main() {
   const start = Date.now();
-  console.log("dumping macOS Contacts via JXA...");
-  const { stdout } = await execFile("osascript", ["-l", "JavaScript", "-e", JXA_SCRIPT], {
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 300000,
-  });
-  const dumped = JSON.parse(stdout);
-  console.log(`dumped ${dumped.length} contacts in ${Math.round((Date.now() - start) / 1000)}s`);
+  const dumped = await dumpAllContacts();
 
   const { byIcId, slugs: existingSlugs } = await existingByIcId();
   let created = 0, updated = 0, renamed = 0;
