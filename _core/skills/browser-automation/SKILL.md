@@ -34,7 +34,71 @@ Pick by job, not by familiarity.
 2. **Match what the workspace already uses.** If editing an existing skill, do not switch stacks mid-skill without an explicit reason and Adithya's approval.
 3. **Reuse existing skill scaffolding.** `_core/skills/discord` and `workspaces/higgsfield` are the canonical patchright references (Node, npm, `postinstall: patchright install chrome`, custom fingerprint helpers in `scripts/fingerprint.mjs` / `scripts/behavior.mjs`).
 4. **Persistent profiles.** Stealth skills store Chrome profiles under `~/.quantum/chrome-profiles/<skill>/`. Reuse that convention; do not invent new profile homes.
-5. **Audit.** Run the Audit table below before declaring done.
+5. **Use Gemma as a tool, not a driver.** See "When to call Gemma" below. Default browser skills are deterministic; Gemma steps in only at fuzzy decision points.
+6. **Audit.** Run the Audit table below before declaring done.
+
+## When to call Gemma (LLM-as-a-tool decision rule)
+
+Default: deterministic code drives the browser. Gemma is a helper, not a co-pilot. Every Gemma call costs ~0.5-2s of latency and pollutes timing patterns, so pay only when straight code would fail or rot fast.
+
+**CALL Gemma when at least one is true:**
+
+1. **DOM doesn't have the answer.** Canvas-rendered UI, iframes you can't reach, image-only state, captcha questions, charts. -> `seeWithGemma(page, prompt)`
+2. **Selectors will rot in <30 days.** Auto-generated class names (`css-1a2b3c`, Tailwind JIT, styled-components hashes), A/B-tested layouts, frameworks that re-render with random IDs (Next.js, parts of React), Discord/Higgsfield-class sites that ship UI weekly. -> `findByDescription(page, "primary submit button")` (selector cache makes this near-free on repeat runs)
+3. **Multiple plausible matches; the right one needs meaning.** "Click the primary CTA" on a page with 5 buttons, "find the cancel-subscription link" buried in footer junk, "the Continue button vs Skip vs Maybe Later." -> `findByDescription(...)`
+4. **Free-form extraction from messy text.** Receipts, dynamic article layouts, user-generated content, anything where structure varies per page. -> `extractStructured(page, "{title, author, published_at}")`
+5. **Branch-decision the script can't reliably make.** "Did login succeed, or did it bounce to 2FA, or did it captcha?" "Is this a paywall, a login wall, or the real article?" "Did the upload finish, or is it still processing?" -> `judgeState(page, question, ["logged_in", "needs_2fa", "captcha", "error"])`
+6. **First-time discovery on a new flow.** Use Gemma to find the right elements once, let the selector cache warm, then most subsequent runs skip Gemma entirely.
+
+**Do NOT call Gemma when:**
+
+1. A CSS selector exists and has been stable for 30+ days. Just use it.
+2. The data is in `aria-label`, `data-testid`, or visible text. `getByRole({name})` / `getByText(...)` is faster and free.
+3. You're inside a hot loop (>5 actions/sec). LLM calls don't fit.
+4. The flow is already mapped and the cached selector resolves. Trust the cache.
+5. Sensitive auth surfaces. Never feed Gemma session cookies, password fields, OTP codes, or full request bodies. Vision + visible text only.
+6. Cost-sensitive batch jobs where you've already mapped the page once. Re-use the mapping.
+
+**Decision tree (one-pass):**
+
+```
+Need to interact with the page?
+├─ Stable selector exists?               -> use it (Playwright/patchright direct)
+├─ Visible text / ARIA pins it uniquely? -> getByRole / getByText
+├─ Cached selector from prior run?       -> try cache; if dead, re-discover
+├─ Semantic disambiguation needed?       -> findByDescription(page, "...")
+├─ Need to read the page state?          -> judgeState(page, "...", [opts])
+├─ Pull structured data from messy text? -> extractStructured(page, "...")
+└─ Vision-only signal (canvas/captcha)?  -> seeWithGemma(page, "...")
+```
+
+**Helper module:** `/Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/gemma-helpers.mjs`. Import directly from any Node skill, no extra deps. Selector cache lives at `~/.quantum/gemma-cache/browser-selectors.json` and is keyed by origin + path-template + role + description, so cross-run hits work and per-skill cache busting is `clearSelectorCache()`.
+
+**Usage example (patchright + Gemma helpers):**
+
+```js
+import { chromium } from 'patchright';
+import { findByDescription, judgeState, extractStructured } from '../../local-llm/scripts/gemma-helpers.mjs';
+
+const ctx = await chromium.launchPersistentContext(/* ... */);
+const page = ctx.pages()[0] ?? await ctx.newPage();
+await page.goto('https://example.com/login');
+
+// Deterministic where you can.
+await page.locator('input[name=email]').fill(email);
+await page.locator('input[name=password]').fill(password);
+await page.locator('button[type=submit]').click();
+
+// Fuzzy where you must.
+const state = await judgeState(page, 'What state is this login flow in?', ['logged_in', 'needs_2fa', 'captcha', 'error']);
+if (state?.answer === 'needs_2fa') { /* ... */ }
+
+const cta = await findByDescription(page, 'primary call-to-action button');
+await cta?.click();
+```
+
+**Python parity:** not yet built. If a browser-use (Python) skill needs the same selective-Gemma pattern, port the helpers to `gemma_helpers.py` in this same scripts dir. The OpenAI-compatible endpoint is identical.
+
 
 ## Anti-patterns
 
