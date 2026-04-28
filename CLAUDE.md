@@ -27,6 +27,7 @@ QUANTUM/
 │   ├── health/
 │   ├── people/
 │   ├── library/
+│   ├── tinder/                  (swipes/, matches/, threads/, sent/ all NDJSON)
 │   └── learnings/               (Claude-written observations; auto-injected via hook)
 ├── graphify-out/                (committed; Graphify owns this, do not hand-edit)
 ├── workspaces/                  (one ICM workspace per life domain)
