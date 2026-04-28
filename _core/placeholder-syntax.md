@@ -28,7 +28,7 @@ These are literal strings in markdown files. They are not code variables. The on
 6. After all replacements, the agent scans the entire workspace for any remaining `{{` patterns.
 7. If any remain, the agent flags them and asks the user for the missing information.
 8. Onboarding is complete only when zero placeholders remain.
-9. The icm-audit playbook flags leftover `{{` placeholders as a critical finding.
+9. The icm-audit skill flags leftover `{{` placeholders as a critical finding.
 
 ---
 

@@ -226,7 +226,7 @@ Skills live in `_core/skills/<name>/SKILL.md`. They are stateless callables. Rea
 Workspaces are stateful. They live in `workspaces/<name>/` and follow this CONVENTIONS.md.
 
 Forbidden moves:
-- Putting domain procedures (PLAYBOOK.md, SKILL.md) in `.claude/skills/`. That path is for Claude Code's harness-level skills only.
+- Putting domain procedures (SKILL.md) in `.claude/skills/`. That path is for Claude Code's harness-level skills only.
 - Creating a "workspace" for something that has no state. If it is a one-shot callable, write it as a skill.
 - Symlinking workspace files into `_core/skills/` to wire them up. Skills and workspaces have different lifecycles.
 
@@ -243,11 +243,11 @@ When building a new workspace, the agent MUST run the setup questionnaire intera
 5. Verify zero `{{` patterns remain.
 6. Add row to root `CLAUDE.md` Workspace Index and Routing tables.
 7. Create `raw/<name>/.gitkeep` if ingest workspace.
-8. Run `_core/playbooks/icm-audit/scripts/audit.py` to confirm clean.
+8. Run `_core/skills/icm-audit/scripts/audit.py` to confirm clean.
 
 Do NOT scaffold first and then ask. Do NOT skip the questionnaire because the operator is "obvious." The questionnaire output is the workspace's permanent configuration; treat it like a contract.
 
-The icm-audit playbook flags any workspace with leftover `{{` placeholders as a critical finding.
+The icm-audit skill flags any workspace with leftover `{{` placeholders as a critical finding.
 
 ---
 
@@ -263,7 +263,7 @@ Workflow workspaces may define additional triggers. Ingest workspaces should not
 
 Root QUANTUM CLAUDE.md additionally recognizes:
 - `digest`: cross-workspace activity rollup.
-- `icm audit`: run the icm-audit playbook on demand (also runs every 15 minutes via launchd).
+- `icm audit`: run the icm-audit skill on demand (also runs every 15 minutes via launchd).
 
 ---
 
@@ -343,7 +343,7 @@ Before answering any question about Adithya's life, projects, people, decisions,
 
 ## Enforcement: icm-audit
 
-`_core/playbooks/icm-audit/scripts/audit.py` runs every 15 minutes via launchd (`com.shakstzy.quantum-icm-audit.plist`). Read-only against the QUANTUM repo; writes only to `~/.quantum/audit/`. Diff-only writes mean idle periods do not create churn.
+`_core/skills/icm-audit/scripts/audit.py` runs every 15 minutes via launchd (`com.shakstzy.quantum-icm-audit.plist`). Read-only against the QUANTUM repo; writes only to `~/.quantum/audit/`. Diff-only writes mean idle periods do not create churn.
 
 It checks:
 - Every `workspaces/*/` has a `CLAUDE.md`.
@@ -357,7 +357,7 @@ It checks:
 
 Findings hash to a deterministic JSON; only writes a new run dir when findings change. Last 30 distinct-findings runs retained at `~/.quantum/audit/runs/`.
 
-Run on demand: `python3 _core/playbooks/icm-audit/scripts/audit.py`.
+Run on demand: `python3 _core/skills/icm-audit/scripts/audit.py`.
 
 ---
 

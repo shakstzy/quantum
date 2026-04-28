@@ -13,7 +13,7 @@ Per-run artifacts:
   duplicate-candidates.md    byte-identical (whitespace-normalized) 20-line spans across CLAUDE.md
   report.md + report.json    ranked findings (report.json is canonical for diff)
 
-Full doctrine: _core/playbooks/icm-audit/PLAYBOOK.md
+Full doctrine: _core/skills/icm-audit/SKILL.md
 """
 
 import csv

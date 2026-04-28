@@ -218,7 +218,7 @@ Three layers keep the graph fresh once it exists. All run via launchd or git.
 | 1. Auto-sync | launchd, every 60s (`scripts/sync.sh`, plist `com.shakstzy.quantum-sync`) | stage, secret-scan, commit, pull-rebase, push | free |
 | 2. Git hooks | post-commit and post-checkout (installed by `graphify hook install`) | `graphify update` (AST refresh on code only) | free |
 | 3. Lint timer | launchd, every 2h (`scripts/graphify-lint.sh`, plist `com.shakstzy.quantum-graphify`) | `cluster-only` + `update` against the bootstrapped scope; if `check-update` flags pending semantic work, drives `/graphify` via headless `claude -p` plus a wiki-lint pass writing to `graphify-out/lint-log.md` | bundled in Claude Max (capped at $5/run) |
-| 4. ICM audit | launchd, every 15 min (`_core/playbooks/icm-audit/scripts/audit.py`, plist `com.shakstzy.quantum-icm-audit`) | read-only structural audit of workspaces and routing layers; diff-only writes to `~/.quantum/audit/runs/<ts>/`. Flags missing CLAUDE.md, missing `raw/<ws>/`, leftover `{{` placeholders (Pattern 17), em dashes, ceiling violations, registry drift. | free |
+| 4. ICM audit | launchd, every 15 min (`_core/skills/icm-audit/scripts/audit.py`, plist `com.shakstzy.quantum-icm-audit`) | read-only structural audit of workspaces and routing layers; diff-only writes to `~/.quantum/audit/runs/<ts>/`. Flags missing CLAUDE.md, missing `raw/<ws>/`, leftover `{{` placeholders (Pattern 17), em dashes, ceiling violations, registry drift. | free |
 
 Logs land in `~/Library/Logs/quantum-graphify.{log,stdout,stderr}` and `~/Library/Logs/quantum-sync.log`.
 

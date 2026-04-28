@@ -22,7 +22,7 @@ Do NOT fire for:
 
 1. **Discover routing-layer files.** Filesystem scan for `*.md` under `/Users/shakstzy/QUANTUM/`, excluding `node_modules/`, `.venv/`, `target/`, `__pycache__/`, `.git/`, `raw/`, `graphify-out/`, `references/Interpreted-Context-Methdology-main 3/` (the read-only ICM ref repo), `stages/*/output/` (per-run artifacts).
 
-2. **Classify each file by tier.** L0 = root `CLAUDE.md`. L1 = workspace `CLAUDE.md` / `CONTEXT.md`. L2 = stage `CONTEXT.md`. L3 = `PLAYBOOK.md`, files under `references/` / `shared/` / `setup/` / `rules/`. Tier weights: `L0=10, L1=3, L2=1, L3=0.3`.
+2. **Classify each file by tier.** L0 = root `CLAUDE.md`. L1 = workspace `CLAUDE.md` / `CONTEXT.md`. L2 = stage `CONTEXT.md`. L3 = `SKILL.md`, files under `references/` / `shared/` / `setup/` / `rules/`. Tier weights: `L0=10, L1=3, L2=1, L3=0.3`.
 
 3. **Ceiling check.** Flag CONTEXT.md > 80 lines and reference files > 200 lines (Quality Guardrails in CONVENTIONS.md). Sort by `weighted_cost = tier_weight x bytes`.
 
@@ -44,7 +44,7 @@ Do NOT fire for:
 ## Runtime
 
 ```bash
-python3 /Users/shakstzy/QUANTUM/_core/playbooks/icm-audit/scripts/audit.py
+python3 /Users/shakstzy/QUANTUM/_core/skills/icm-audit/scripts/audit.py
 ```
 
 No dependencies beyond Python 3 stdlib. Read-only against the QUANTUM repo. Writes only to `~/.quantum/audit/`.
@@ -86,8 +86,8 @@ report.json              structured findings; canonical for diff comparison
 
 ## Pattern 16 + 17 registration
 
-- Home: `_core/playbooks/icm-audit/`. This is a playbook (file-based procedure), not a callable Skill.
+- Home: `_core/skills/icm-audit/`. File-based procedure invoked by trigger or scheduled run; not registered with the Skill tool harness.
 - Trigger: row in root `CLAUDE.md` Triggers table for "icm audit".
 - Stage wiring: N/A (trigger-invoked + scheduled).
-- Canonical sources: script lives only at `_core/playbooks/icm-audit/scripts/audit.py`.
-- Smoke test: `PLAYBOOK.md` under 200 lines; lowercase-with-hyphens names; no em dashes; `python3 -m py_compile scripts/audit.py` clean; manual run produces all artifacts when findings change, prints "no change" when they do not.
+- Canonical sources: script lives only at `_core/skills/icm-audit/scripts/audit.py`.
+- Smoke test: `SKILL.md` under 200 lines; lowercase-with-hyphens names; no em dashes; `python3 -m py_compile scripts/audit.py` clean; manual run produces all artifacts when findings change, prints "no change" when they do not.
