@@ -57,7 +57,7 @@ Action: write a full result file. Caller decides whether to retry the failed pla
 
 `posts_create` returned 200 but post status is `processing` or unknown.
 
-Action: poll via `zernio.sh status <post_id>` per PLAYBOOK.md procedure step 9. Terminal states are `published`, `scheduled`, `failed`. If polling reaches the 5-minute budget, reclassify as `async_timeout` and surface to caller.
+Action: poll via `zernio.sh status <post_id>` per SKILL.md procedure step 9. Terminal states are `published`, `scheduled`, `failed`. If polling reaches the 5-minute budget, reclassify as `async_timeout` and surface to caller.
 
 ## What NOT to do
 

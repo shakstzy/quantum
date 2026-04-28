@@ -16,7 +16,7 @@ export async function runLogin({ force = false } = {}) {
     console.error('[discord] Waiting up to 15 minutes for signed-in session...');
     let me;
     try {
-      me = await waitForSignedIn(ctx.page, { timeoutMs: 15 * 60 * 1000, probeEveryMs: 3000 });
+      me = await waitForSignedIn(ctx, { timeoutMs: 15 * 60 * 1000, probeEveryMs: 3000 });
     } catch (e) {
       tripBreaker();
       console.error(`[discord] ${e.message}. Try \`node scripts/run.mjs login\` again.`);

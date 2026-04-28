@@ -79,15 +79,17 @@ function parseArgs(argv) {
 
 // Session holder. All verbs acquire one, run their work, close it.
 class DiscordSession {
-  constructor(ctx, pageApi) {
+  constructor(ctx, pageApi, token) {
     this.ctx = ctx;
     this.pageApi = pageApi;
+    this.token = token;
     this.consecutive401s = 0;
   }
   async call(method, path, opts = {}) {
     if (DEBUG) process.stderr.write(`[discord] ${method} ${path}\n`);
     for (let attempt = 0; attempt < 4; attempt++) {
-      const res = await this.pageApi(this.ctx.page, method, path, opts);
+      const tok = this.ctx.getCapturedToken() || this.token;
+      const res = await this.pageApi(this.ctx.page, method, path, { ...opts, token: tok });
       if (res.status === 429) {
         const retry = (res.body && res.body.retry_after) || 2;
         process.stderr.write(`[discord] 429; sleeping ${retry}s\n`);
@@ -125,14 +127,20 @@ async function openSession() {
     await ctx.close();
     throw e;
   }
-  const tok = await waitForCapturedToken(ctx.page, { timeoutMs: 30000, probeEveryMs: 500 });
+  // CDP captures the Authorization header from the wire as Discord's client
+  // makes its first authenticated call. Allow up to 60s for cold load.
+  const tok = await waitForCapturedToken(ctx, { timeoutMs: 60000, probeEveryMs: 500 });
   if (!tok) {
+    const finalUrl = ctx.page.url();
     await ctx.close();
-    die('[discord] Session expired or never logged in (no Authorization header captured). Run: node scripts/run.mjs login', 3);
+    if (finalUrl.includes('/login')) {
+      die(`[discord] Session expired (page redirected to ${finalUrl}). Run: node scripts/run.mjs login`, 3);
+    }
+    die(`[discord] No Authorization header captured within 60s (page at ${finalUrl}). Run: node scripts/run.mjs login`, 3);
   }
-  const sess = new DiscordSession(ctx, pageApi);
+  const sess = new DiscordSession(ctx, pageApi, tok);
   try {
-    const probe = await sess.pageApi(ctx.page, 'GET', '/api/v9/users/@me');
+    const probe = await pageApi(ctx.page, 'GET', '/api/v9/users/@me', { token: tok });
     if (probe.status === 401) {
       await ctx.close();
       die('[discord] 401 from /users/@me with captured token. Run: node scripts/run.mjs login', 3);

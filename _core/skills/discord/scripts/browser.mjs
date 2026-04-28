@@ -1,7 +1,8 @@
 // browser.mjs -- patchright persistent-context launcher.
-// Used by BOTH login (visible) and runtime verbs (off-screen). Cookies in the
-// profile dir authenticate every navigation. Authorization header is captured
-// at page level via init script when Discord's own client makes API calls.
+// Used by BOTH login (visible) and runtime verbs (off-screen). Auth comes
+// from cookies in the profile dir + a CDP Network listener that captures the
+// Authorization header from outgoing requests on the wire (sees Service
+// Worker traffic, unlike window-level fetch monkeypatch).
 
 import { chromium } from 'patchright';
 import { chmod, mkdir } from 'node:fs/promises';
@@ -11,8 +12,10 @@ import { join } from 'node:path';
 const PROFILE_DIR = process.env.DISCORD_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/discord`;
 const PIDFILE = join(PROFILE_DIR, '.skill.pid');
 const BREAKER_FILE = join(PROFILE_DIR, '.breaker.json');
+const STORAGE_STATE = join(PROFILE_DIR, '.storage-state.json');
 
 export function getProfileDir() { return PROFILE_DIR; }
+export function getStorageStatePath() { return STORAGE_STATE; }
 
 function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (_) { return false; }
@@ -77,6 +80,31 @@ export function breakerAllowsLaunch(force = false) {
   return { ok: true, forced: false };
 }
 
+// Restore cookies that launchPersistentContext drops (Playwright bug #36139).
+// Session cookies (no Expires/Max-Age) are not reliably persisted across
+// runs even when userDataDir is set. We snapshot context.storageState() at
+// close time and re-inject on next launch.
+async function restoreStorageState(context) {
+  if (!existsSync(STORAGE_STATE)) return;
+  try {
+    const state = JSON.parse(readFileSync(STORAGE_STATE, 'utf8'));
+    if (state.cookies && state.cookies.length) {
+      await context.addCookies(state.cookies);
+    }
+  } catch (e) {
+    process.stderr.write(`[discord] warning: could not restore storage state: ${e.message}\n`);
+  }
+}
+
+async function snapshotStorageState(context) {
+  try {
+    const state = await context.storageState();
+    writeFileSync(STORAGE_STATE, JSON.stringify(state, null, 2));
+  } catch (e) {
+    process.stderr.write(`[discord] warning: could not snapshot storage state: ${e.message}\n`);
+  }
+}
+
 // visible=true for login (user needs to see it); false for runtime (off-screen).
 export async function launchContext({ force = false, visible = false } = {}) {
   const check = breakerAllowsLaunch(force);
@@ -111,71 +139,80 @@ export async function launchContext({ force = false, visible = false } = {}) {
     ]
   });
 
-  await context.addInitScript(() => {
+  await restoreStorageState(context);
+
+  // Open a FRESH page rather than reusing the restored about:blank tab; init
+  // scripts and cookie state apply more reliably to new pages
+  // (Playwright #28692).
+  const page = await context.newPage();
+  // Close the about:blank tab patchright opens by default to keep the
+  // surface to one tab.
+  for (const p of context.pages()) {
+    if (p !== page && p.url() === 'about:blank') {
+      try { await p.close(); } catch (_) {}
+    }
+  }
+
+  // CDP listener for Authorization header capture. Network.requestWillBeSent
+  // fires for every request the browser actually emits, including those
+  // initiated by the Service Worker. This is the durable replacement for the
+  // old window.fetch monkeypatch.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  let capturedToken = null;
+  let lastCaptureAt = 0;
+  cdp.on('Network.requestWillBeSent', (e) => {
     try {
-      const origFetch = window.fetch;
-      window.fetch = function(...args) {
-        try {
-          const req = new Request(args[0], args[1]);
-          const auth = req.headers && req.headers.get && req.headers.get('authorization');
-          if (auth && auth.length > 20 && req.url && req.url.indexOf('discord.com/api/') !== -1) {
-            window.__quantumDiscordToken = auth;
-          }
-        } catch (_) {}
-        return origFetch.apply(this, args);
-      };
-      const origSet = XMLHttpRequest.prototype.setRequestHeader;
-      XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-        try {
-          if (typeof name === 'string' && name.toLowerCase() === 'authorization' && typeof value === 'string' && value.length > 20) {
-            window.__quantumDiscordToken = value;
-          }
-        } catch (_) {}
-        return origSet.apply(this, arguments);
-      };
+      const url = e?.request?.url || '';
+      if (url.indexOf('discord.com/api/') === -1) return;
+      const headers = e.request.headers || {};
+      const auth = headers.Authorization || headers.authorization;
+      if (auth && typeof auth === 'string' && auth.length > 20) {
+        capturedToken = auth;
+        lastCaptureAt = Date.now();
+      }
     } catch (_) {}
   });
-
-  const page = context.pages()[0] || await context.newPage();
 
   return {
     context,
     page,
+    cdp,
+    getCapturedToken: () => capturedToken,
+    getLastCaptureAt: () => lastCaptureAt,
     async close() {
+      try { await snapshotStorageState(context); } catch (_) {}
       try { await context.close(); } finally { releasePidfile(); }
     }
   };
 }
 
-// Poll window.__quantumDiscordToken (set by the init script when Discord's own
-// client makes an authenticated API call). Returns the captured token string,
-// or null on timeout.
-export async function waitForCapturedToken(page, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 1500 } = {}) {
+// Wait until the CDP listener captures an Authorization header bound for
+// discord.com/api/*. Returns the token or null on timeout.
+export async function waitForCapturedToken(ctx, { timeoutMs = 60 * 1000, probeEveryMs = 500 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const tok = await page.evaluate(() => window.__quantumDiscordToken || null).catch(() => null);
-    if (tok && typeof tok === 'string' && tok.length > 20) return tok;
+    const tok = ctx.getCapturedToken();
+    if (tok) return tok;
     await new Promise(r => setTimeout(r, probeEveryMs));
   }
   return null;
 }
 
-// Wait until the current page's Discord session is signed in. Returns /users/@me
-// body on success, throws on timeout. Relies on the init-script token capture.
-export async function waitForSignedIn(page, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 2000 } = {}) {
-  const tok = await waitForCapturedToken(page, { timeoutMs, probeEveryMs });
+// Wait until signed in. Captures token via CDP, then verifies with /users/@me.
+export async function waitForSignedIn(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 2000 } = {}) {
+  const tok = await waitForCapturedToken(ctx, { timeoutMs, probeEveryMs });
   if (!tok) throw new Error('waitForSignedIn: no Authorization header captured within timeout');
-  const res = await pageApi(page, 'GET', '/api/v9/users/@me');
+  const res = await pageApi(ctx.page, 'GET', '/api/v9/users/@me', { token: tok });
   if (!res.ok) throw new Error(`waitForSignedIn: /users/@me returned ${res.status}`);
   return res.body;
 }
 
-// Executes a Discord REST call from inside the page context, reusing the
-// Authorization header captured from Discord's own client. Request originates
-// from real Chrome on discord.com: real TLS/JA3, real Client Hints, real origin.
-export async function pageApi(page, method, path, { body, query } = {}) {
-  return await page.evaluate(async ({ method, path, body, query, hasBody }) => {
-    const token = window.__quantumDiscordToken;
+// Executes a Discord REST call from inside the page context, supplying the
+// Authorization header captured by CDP. Request originates from real Chrome
+// on discord.com: real TLS/JA3, real Client Hints, real origin.
+export async function pageApi(page, method, path, { body, query, token } = {}) {
+  return await page.evaluate(async ({ method, path, body, query, hasBody, token }) => {
     if (!token) return { status: 0, ok: false, body: { code: 'NO_TOKEN', message: 'Authorization header not captured yet; Discord client has not made a request' } };
     let url = path;
     if (query) {
@@ -191,5 +228,5 @@ export async function pageApi(page, method, path, { body, query } = {}) {
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     return { status: r.status, ok: r.ok, body: json };
-  }, { method, path, body, query, hasBody: body !== undefined });
+  }, { method, path, body, query, hasBody: body !== undefined, token });
 }
