@@ -36,17 +36,26 @@ From repo root:
 _core/skills/real-estate/re redfin search "Austin, TX" --max-price 700000 --min-beds 3 --num-homes 50
 _core/skills/real-estate/re zillow search "Austin, TX" --max-price 700000 --min-beds 3
 
-# Property details (paste a Redfin or Zillow URL)
+# Search with property-type filter (Redfin)
+_core/skills/real-estate/re redfin search "Austin, TX" --home-types house,condo --max-price 700000
+
+# Manual region override (skip Brave; useful when brave-search is unauthed)
+_core/skills/real-estate/re redfin search "anything" --region-id 30818 --region-type 6 --max-price 700000
+
+# Property details
 _core/skills/real-estate/re redfin property "https://www.redfin.com/TX/Austin/.../home/<id>"
 _core/skills/real-estate/re zillow property "https://www.zillow.com/homedetails/.../<zpid>_zpid/"
 
-# Just the price + listing history
+# Property details + full nested API payloads
+_core/skills/real-estate/re redfin property "<url>" --include-raw
+
+# Just the price + listing history (Redfin)
 _core/skills/real-estate/re redfin history "<redfin-url>"
 
-# Comparable / similar listings
+# Comparable / similar listings (Redfin)
 _core/skills/real-estate/re redfin comps "<redfin-url>"
 
-# Resolve a free-text query into a Redfin region (no fetch)
+# Resolve a free-text query into a Redfin region (no listing fetch)
 _core/skills/real-estate/re redfin resolve "78704"
 ```
 
@@ -90,9 +99,9 @@ Both sites server-render their React pages and embed every API response into the
 | `HTTP 403` on Redfin gis-csv | WAF flagged this IP | wait 30 min, or use mobile hotspot |
 | `px-captcha` body on Zillow | curl_cffi impersonation profile out of date | bump `impersonate=` in `scripts/zillow.py` |
 | `__NEXT_DATA__ not found` | Zillow A/B-tested layout | re-check page source; Next.js script tag may have moved |
-| `brave-search not found` | brave-search skill not installed/authed | fix brave-search first; or pass Redfin URL directly |
+| `brave-search not found` | brave-search skill not installed/authed | fix brave-search first; or pass `--region-id <N> --region-type 6` |
 | Redfin search returns 0 homes | the cache key match is wrong | inspect `dataCache` keys with `/stingray/api/gis?` prefix |
-| `region not resolvable` | Brave returned no Redfin URL | pass a Redfin URL or just `--region-id` |
+| `region not resolvable` | Brave returned no Redfin URL | pass a Redfin URL, or `--region-id <N> --region-type 6` (city) / `2` (zip) |
 
 ## Output shape
 

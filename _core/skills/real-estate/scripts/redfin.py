@@ -307,6 +307,11 @@ def _parse_csv(text: str) -> list[dict]:
     reader = csv.DictReader(io.StringIO(text))
     out = []
     for row in reader:
+        # Redfin slips a "In accordance with local MLS rules..." disclaimer
+        # row into the CSV that DictReader parses as a row with all-empty
+        # values past the first column. Skip rows without an address.
+        if not (row.get("ADDRESS") or "").strip():
+            continue
         # Normalize a few columns to friendlier names.
         out.append({
             "address": row.get("ADDRESS"),
