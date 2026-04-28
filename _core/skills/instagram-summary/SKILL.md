@@ -23,15 +23,12 @@ Do NOT fire for:
 - DM links or live stream links.
 - Re-uploads on other platforms (TikTok, YouTube Shorts). Use the matching skill.
 
-## Prereqs (one-time)
+## Prereqs
 
-1. Local Gemma daemon. The skill posts the final multimodal synthesis to `http://127.0.0.1:8765`. Install via SHAKOS:
+The local Gemma daemon (`com.shakos.local-llm`) is a launchd service installed by SHAKOS. It auto-starts on boot and stays warm in unified memory (~22GB resident). Both prereqs below are one-time-only and should already be done:
 
-   ```
-   bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/install.sh
-   ```
-
-2. Whisper model for reel transcripts (~470MB):
+1. **Daemon installed and loaded.** Confirm with `curl -sS http://127.0.0.1:8765/health`. If unreachable: `bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/start.sh`. First-time install: `bash .../scripts/install.sh`.
+2. **Whisper model cached** for reel audio (~470MB):
 
    ```
    ~/.claude/skills/instagram-summary/.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small.en')"
