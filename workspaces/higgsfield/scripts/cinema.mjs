@@ -352,8 +352,9 @@ export async function runCinema(argv) {
     // Select mode tab. Cinema-studio's DOM has two overlapping tab sets; clickModeTab
     // scopes to the config-bar band and scrolls the chosen panel into view so
     // submitViaUI's proximity picker lands on the right prompt + Generate pair.
-    const tabResult = await clickModeTab(ctx.page, mode === 'video' ? 'Video' : 'Image');
-    console.log(`[higgsfield] mode tab ${mode}:`, JSON.stringify(tabResult));
+    const modeOk = await selectCinemaMode(ctx.page, mode);
+    console.log(`[higgsfield] mode tab ${mode}: ${modeOk ? 'set' : 'FAILED_TO_SWITCH'}`);
+    if (!modeOk) throw new Error(`Could not switch cinema mode to ${mode}; Generate cost did not flip to ${cfg.cost}`);
     await pauseJitter();
 
     const userSub = userIdFromJwtCapture(ctx.jwtCapture);
