@@ -25,16 +25,14 @@ Do NOT fire for:
 
 ## Prereqs
 
-The local Gemma daemon (`com.shakos.local-llm`) is a launchd service installed by SHAKOS. It auto-starts on boot and stays warm in unified memory (~22GB resident). Both prereqs below are one-time-only and should already be done:
-
-1. **Daemon installed and loaded.** Confirm with `curl -sS http://127.0.0.1:8765/health`. If unreachable: `bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/start.sh`. First-time install: `bash .../scripts/install.sh`.
-2. **Whisper model cached** for reel audio (~470MB):
+1. **Local Gemma daemon up.** This skill delegates the multimodal synthesis call to `_core/skills/local-llm/SKILL.md`. Read that stub for daemon contract, lifecycle, and health checks. Posts and reels both fail fast if the daemon is unreachable; surface the error with a pointer to that skill.
+2. **Whisper model cached** for reel audio (~470MB, one-time):
 
    ```
    ~/.claude/skills/instagram-summary/.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small.en')"
    ```
 
-Posts work as soon as the daemon is healthy. Reels also need Whisper.
+Posts work as soon as the local-llm daemon is healthy. Reels also need Whisper.
 
 ## Procedure
 
@@ -53,7 +51,7 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 
 ## Errors
 
-- `local-llm server unreachable`: daemon not running. Run `bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/status.sh`. If unhealthy, check `~/.shakos/local-llm/server.log`.
+- `local-llm server unreachable`: daemon not running or not healthy. Hand off to `_core/skills/local-llm/SKILL.md` (it owns status / start / restart / log inspection). Do not duplicate the recovery procedure here.
 - `LoginRequired`: Instagram demanding auth. Run once with a burner:
 
   ```
