@@ -29,7 +29,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 RAW = ROOT / "raw" / "gdrive"
 LOG = ROOT / "raw" / ".ingest-log"
 
-PACE_SEC = 0.1
+PACE_SEC = 0.1  # Drive quota is roomier (12k/min/user); 10/sec safe
+MAX_RETRIES = 6
 HEAVY_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
 
 # Native Google formats -> export format.
@@ -71,10 +72,22 @@ SKIP_PREFIXES = ("image/", "audio/", "video/")
 
 
 def gog_json(args: list[str]) -> dict | list:
-    proc = subprocess.run(["gog", "-j", *args], check=False, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"gog {' '.join(args)} failed (exit {proc.returncode}): {proc.stderr.strip()}")
-    return json.loads(proc.stdout) if proc.stdout.strip() else {}
+    delay = 1.0
+    last_err = ""
+    for _ in range(MAX_RETRIES):
+        proc = subprocess.run(["gog", "-j", *args], check=False, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return json.loads(proc.stdout) if proc.stdout.strip() else {}
+        last_err = proc.stderr.strip()
+        retryable = any(t in last_err for t in (
+            "rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded",
+            "429", "503", "backendError", "internalError",
+        ))
+        if not retryable:
+            raise RuntimeError(f"gog {' '.join(args)} failed (exit {proc.returncode}): {last_err}")
+        time.sleep(delay)
+        delay = min(delay * 2, 60.0)
+    raise RuntimeError(f"gog {' '.join(args)} failed after {MAX_RETRIES} retries: {last_err}")
 
 
 def slugify(account: str) -> str:

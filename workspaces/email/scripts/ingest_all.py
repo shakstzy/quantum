@@ -68,7 +68,7 @@ def strip_payload(payload: dict) -> dict:
         "mimeType": payload.get("mimeType"),
         "filename": payload.get("filename"),
         "headers": [
-            {"name": h["name"], "value": h["value"]}
+            {"name": h.get("name", ""), "value": h.get("value", "")}
             for h in payload.get("headers", [])
             if h.get("name", "").lower() in KEEP_HEADERS
         ],
