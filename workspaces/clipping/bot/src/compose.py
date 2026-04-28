@@ -20,6 +20,7 @@ import db
 import clip as clipmod
 
 WS_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = WS_ROOT.parents[1]
 REMOTION_ROOT = WS_ROOT / "remotion"
 CANDIDATES_DIR = Path.home() / ".quantum" / "clipping" / "candidates"
 
@@ -108,8 +109,10 @@ def render(candidate_id: int) -> int:
 
         track = smooth_track(detect_face_track(str(cut_path)))
         words = clipmod.words_in_window(tx["segments"], cand["start_s"], cand["end_s"])
+        # Remotion needs the video to be reachable via staticFile(); we pass td as
+        # --public-dir and reference the file by basename.
         props = {
-            "videoSrc": str(cut_path),
+            "videoSrc": cut_path.name,
             "durationSec": cand["end_s"] - cand["start_s"],
             "faceTrack": track,
             "captions": words,
@@ -118,12 +121,12 @@ def render(candidate_id: int) -> int:
         props_path = td / "props.json"
         props_path.write_text(json.dumps(props))
 
-        cmd = ["npx", "remotion", "render", "src/index.ts", "ClipComposition",
-               str(out_path),
-               "--props", str(props_path),
-               "--codec=h264",
-               "--concurrency=4"]
-        proc = subprocess.run(cmd, cwd=REMOTION_ROOT, capture_output=True, text=True)
+        env = os.environ.copy()
+        env["REMOTION_PUBLIC_DIR"] = str(td)
+        render_sh = REPO_ROOT / "_core" / "skills" / "remotion" / "scripts" / "render.sh"
+        cmd = ["bash", str(render_sh), str(REMOTION_ROOT), "ClipComposition",
+               str(out_path), str(props_path)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
         if proc.returncode != 0:
             print("remotion render stderr:", proc.stderr[-2000:], file=sys.stderr)
             return 1
