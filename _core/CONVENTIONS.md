@@ -294,14 +294,17 @@ Every ingest pipeline picks ONE of two shapes and documents the choice in its wo
 **Shape A: item-stream (default for high-volume sources)**
 
 ```
-raw/<ws>/<scope>/YYYY-MM.ndjson
+raw/<ws>/<scope>/<shard>.ndjson
 ```
 
 - One JSON object per line. Each line is one source item (gmail thread, calendar event, drive file, slack message, imessage row).
-- Line is keyed by the source's stable native ID. The ingest writer dedupes within the file before write: read existing IDs, skip if present, append if new.
-- `<scope>` = a partitioning dimension that keeps any single shard small enough to scan: account slug for Google (one Gmail account fits in per-month shards), workspace slug for Slack, omitted entirely for iMessage (single-source).
-- Resume state lives at `raw/.ingest-log/<ws>-<scope>.<ext>` (a watermark timestamp, a processed-IDs file, or a per-channel cursor map). Pull reads it, fetches only what's new, updates it on success.
-- Examples: `raw/email/adithya-eclipse-builders/2026-04.ndjson`, `raw/imessage/2026-04.ndjson`, `raw/slack/eclipse-labs/2026-04.ndjson`.
+- Line is keyed by the source's stable native ID. The ingest writer dedupes within the file before write (read existing IDs, skip if present, append if new) OR rewrites the shard atomically per run when the source returns the full set for that shard each time.
+- `<scope>` = the outer partition that keeps shards independent (one account per Google service, one workspace per Slack team, omitted entirely for iMessage).
+- `<shard>` = the inner partition. Pick the dimension that keeps any one shard scannable AND mirrors the source's natural grain:
+  - **By month** (`2026-04.ndjson`) when items have stable timestamps and arrive over time. Used by `email`, `imessage`, `slack`. Append-only with per-line dedup.
+  - **By sub-source** (`<calendar-name>.ndjson`, `_index.ndjson`) when the source returns a full set per query and shards by inherent identity. Used by `calendar` (one shard per Google calendar) and `gdrive` (single `_index.ndjson` per account). Whole-shard rewrite per run.
+- Resume state lives at `raw/.ingest-log/<ws>-<scope>.<ext>` (processed-IDs file, watermark, cursor map). Whole-shard-rewrite ingests still record processed IDs so re-runs only fetch deltas. The shard rewrite is the dedup mechanism for that shape.
+- Examples: `raw/email/adithya-eclipse-builders/2026-04.ndjson`, `raw/calendar/adithya-shak-kumar-gmail-com/main.ndjson`, `raw/gdrive/adithya-eclipse-builders/_index.ndjson`, `raw/imessage/2026-04.ndjson`, `raw/slack/eclipse-labs/2026-04.ndjson`.
 
 **Shape B: daily-snapshot (for sources without a stable item ID)**
 

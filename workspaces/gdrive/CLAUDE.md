@@ -19,9 +19,9 @@ scripts/pull.sh          fan out ingest_all.py across all 4 accounts in parallel
 - **Source:** Google Drive via `gog -j drive` (4 accounts).
 - **Trigger:** `pull` -> `bash scripts/pull.sh`.
 - **Automation:** `~/Library/LaunchAgents/com.shakstzy.quantum-gdrive.plist` daily at 03:00. Logs at `~/Library/Logs/quantum-gdrive.{stdout,stderr}.log`.
-- **Shape:** item-stream (Shape A per `_core/CONVENTIONS.md`).
-- **Output path:** `raw/gdrive/<account-slug>/{_index.ndjson, files/<fileId>.<ext>, md/<fileId>.md}`.
-- **Format:** NDJSON for the per-account `_index.ndjson` (one file metadata record per line); per-file binary or extracted markdown next to it.
+- **Shape:** item-stream, single-shard-per-account (Shape A per `_core/CONVENTIONS.md`, sub-source variant).
+- **Output path:** `raw/gdrive/<account-slug>/{_index.ndjson, files/<fileId>.<ext>, md/<fileId>.md}`. `_index.ndjson` is the canonical metadata record (one file metadata per line, keyed by fileId). `files/` and `md/` carry per-file artifacts.
+- **Format:** NDJSON for `_index.ndjson`; per-file binary or extracted markdown alongside.
 - **Dedup key:** Drive `fileId`. ingest_all.py reads `raw/.ingest-log/gdrive-<account-slug>.files.txt` and skips processed files.
 - **Watermark:** `raw/.ingest-log/gdrive-<account-slug>.files.txt`.
 - **Mutations:** none here. Uploads/shares via `_core/skills/google-workspace/SKILL.md` (CONFIRM gate; uploads >100 MB or with permission changes always require CONFIRM).
