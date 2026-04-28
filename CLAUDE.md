@@ -27,7 +27,8 @@ QUANTUM/
 │   ├── health/
 │   ├── people/
 │   ├── library/
-│   ├── tinder/                  (swipes/, matches/, threads/, sent/ all NDJSON)
+│   ├── tinder/                  (per-person markdown <first>-<source>-<city>.md)
+│   ├── contacts/                (per-person markdown, macOS Contacts mirror)
 │   └── learnings/               (Claude-written observations; auto-injected via hook)
 ├── graphify-out/                (committed; Graphify owns this, do not hand-edit)
 ├── workspaces/                  (one ICM workspace per life domain)
@@ -41,7 +42,8 @@ QUANTUM/
 │   ├── health/
 │   ├── people/
 │   ├── library/
-│   └── tinder/                  (patchright bot, no api.gotinder.com)
+│   ├── tinder/                  (patchright bot, no api.gotinder.com)
+│   └── contacts/                (macOS Contacts ingest via JXA, daily 4am cron)
 └── scripts/                     (sync helpers; quantum-sync runs via launchd)
 ```
 
@@ -67,9 +69,10 @@ QUANTUM/
 | journal | Manual entries | Daily and weekly reflections |
 | finance | Manual / banking exports | Accounts, transactions, decisions |
 | health | Apple Health exports / manual | Workouts, vitals, habits |
-| people | Manual / contacts | Friends, family, colleagues, network |
+| people | Manual / contacts | Friends, family, colleagues, network NOT in Apple Contacts (manual overlay) |
 | library | Manual / browser captures | Books, articles, papers, watchlists |
 | tinder | tinder.com via patchright (browser automation) | Swipes, matches, threads, outbound drafting + send. Ban-aversion is priority #1; see workspace CLAUDE.md for hard rules. |
+| contacts | macOS Contacts via JXA / osascript | Daily 4am ingest. Per-entry markdown at `raw/contacts/<slug>.md`. Auto-classified `person` / `business` / `noise`. |
 
 Each workspace is self-contained per ICM. Once you cd into a workspace, that workspace's CLAUDE.md takes operational precedence over this root file.
 
