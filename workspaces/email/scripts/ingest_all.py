@@ -28,20 +28,28 @@ KEEP_HEADERS = {
     "message-id", "in-reply-to", "references", "list-id", "list-unsubscribe",
 }
 
-PACE_SEC = 0.1  # 10 req/sec; thread.get is 10 quota units, well under Gmail's 250/sec/user budget
+PACE_SEC = 0.3  # ~3.3 req/sec; Gmail's standard per-user limit is 250 queries/min (~4/sec)
+MAX_RETRIES = 6  # Exponential backoff on 429/rateLimitExceeded
 
 
 def gog_json(args: list[str]) -> dict | list:
-    """Run gog with -j and return parsed JSON. Raises on non-zero exit."""
-    proc = subprocess.run(
-        ["gog", "-j", *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"gog {' '.join(args)} failed (exit {proc.returncode}): {proc.stderr.strip()}")
-    return json.loads(proc.stdout) if proc.stdout.strip() else {}
+    """Run gog with -j; retry with exponential backoff on rate-limit / 429 / 503."""
+    delay = 1.0
+    last_err = ""
+    for attempt in range(MAX_RETRIES):
+        proc = subprocess.run(["gog", "-j", *args], check=False, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return json.loads(proc.stdout) if proc.stdout.strip() else {}
+        last_err = proc.stderr.strip()
+        retryable = any(token in last_err for token in (
+            "rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded",
+            "429", "503", "backendError", "internalError",
+        ))
+        if not retryable:
+            raise RuntimeError(f"gog {' '.join(args)} failed (exit {proc.returncode}): {last_err}")
+        time.sleep(delay)
+        delay = min(delay * 2, 60.0)
+    raise RuntimeError(f"gog {' '.join(args)} failed after {MAX_RETRIES} retries: {last_err}")
 
 
 def slugify(account: str) -> str:
