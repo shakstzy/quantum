@@ -31,7 +31,10 @@ Key lives in `.claude/settings.local.json` under `env.FIRECRAWL_API_KEY`. Claude
    - `format`: defaults to `markdown`. Other options: `html`, `rawHtml`, `links`, `screenshot`.
 3. **Read the JSON.** Output is `{url, title, description, markdown}`.
 4. **Summarize first, paste second.** Lead with a 2-4 sentence synthesis. Only paste the full markdown if Adithya asks, or if saving an artifact.
-5. **Save artifacts on request.** If Adithya asks to keep the source, write to `raw/library/YYYY-MM-DD-<slug>.md` with frontmatter (`url`, `title`, `scraped_at`).
+5. **Output is ephemeral by default.** Do NOT auto-save scrapes to `raw/library/` — that folder feeds the personal knowledge graph and random pages will pollute it. Two buckets:
+   - **Default (no save needed):** stream the JSON to stdout, summarize, done. Most one-off "what does this say" reads stop here.
+   - **Ephemeral save (research runs):** if a downstream skill (e.g. `web-research`) needs the raw markdown on disk, write to `~/.quantum/skill-output/firecrawl/<YYYY-MM-DD-HHMMSS>-<slug>.md`. This path is OUTSIDE the repo and graphify-ignored.
+   - **Promote to library (explicit only):** ONLY on Adithya saying "save this", "add to my library", "keep this", "ingest this" — write to `raw/library/YYYY-MM-DD-<slug>.md` with frontmatter (`url`, `title`, `captured_at`, `intent`, `relevance`, `source_type`). Promotion always requires explicit user intent. If the ephemeral file already exists, promote it (don't re-scrape).
 
 ## Examples
 
