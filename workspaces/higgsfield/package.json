@@ -1,0 +1,16 @@
+{
+  "name": "higgsfield-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QUANTUM shared skill: drive higgsfield.ai for image/video/marketing/cinema generation",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome"
+  }
+}

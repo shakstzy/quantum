@@ -1,0 +1,4 @@
+node_modules/
+.env
+.skill.pid
+.breaker.json
