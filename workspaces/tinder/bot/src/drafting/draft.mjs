@@ -20,7 +20,7 @@ function buildPrompt({ context, intent, voice }) {
   return [
     SYSTEM,
     "",
-    "## Voice profile and playbooks",
+    "## Voice profile and skills",
     voice,
     "",
     "## Now draft for this match",

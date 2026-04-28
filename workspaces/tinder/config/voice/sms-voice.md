@@ -2,7 +2,7 @@
 
 Informal text voice for post-number conversations. Read by stage 05.
 
-Markedly more casual than Tinder voice. Assumes rapport is established. The job between number exchange and the date is keeping warmth alive, not building more rapport. Full Layer D detail in `shared/escalation-playbook.md`.
+Markedly more casual than Tinder voice. Assumes rapport is established. The job between number exchange and the date is keeping warmth alive, not building more rapport. Full Layer D detail in `shared/escalation-skill.md`.
 
 ---
 

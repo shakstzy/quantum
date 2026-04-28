@@ -28,11 +28,11 @@ Thresholds that drive stage 03 nudge/archive logic, stage 04 escalation, and sta
 | Hard cap: time | 4 days of thread activity |
 | Signal-triggered trigger | 3 or more receptivity signals (see below) |
 | Cap-triggered trigger | Either hard cap hit and no number yet |
-| Approach | Plan-first, number-as-logistics (see `escalation-playbook.md` Layer B) |
+| Approach | Plan-first, number-as-logistics (see `escalation-skill.md` Layer B) |
 
 Signal if you can, cap if you must. Never let cap elapse without an attempt.
 
-If she declines or dodges, mark per-person state as `declined-number` and follow the Layer B dodge-recovery in `escalation-playbook.md`. Do not re-ask.
+If she declines or dodges, mark per-person state as `declined-number` and follow the Layer B dodge-recovery in `escalation-skill.md`. Do not re-ask.
 
 ### Receptivity Checklist (A6)
 
