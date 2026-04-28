@@ -7,11 +7,32 @@ description: Drive higgsfield.ai from Claude Code to generate images (Nano Banan
 
 Five tool families on higgsfield.ai, one Node CLI. UI automation first, direct-API fallback, DataDome-aware stealth, resumable state machine, Quantum-compliant output.
 
+## When this fires
+
+Trigger phrases (non-exhaustive): "generate a higgsfield image", "higgsfield video", "make a marketing ad", "cinema studio scene", "nano banana", "soul cinematic", "seedance", "kling 2.5", "veo", "wan", "sora 2", "make me a video / image of X" when context implies higgsfield.
+
+Do NOT fire for:
+- Non-higgsfield AI image/video services (DALL-E, Midjourney, Runway — use their own skills/APIs).
+- Text generation, music generation, audio generation.
+- Edit / remix / inpaint flows on higgsfield (out of scope v1).
+- Character or location creation (`/character`, Soul Cast/Location).
+
 ## Quantum integration
 
-- **Home:** `workspaces/higgsfield/` (skill workspace)
-- **Chrome profile:** `~/.quantum/chrome-profiles/higgsfield/` (persistent; first login is manual; session survives restarts)
-- **Output folder:** `~/.quantum/skill-output/higgsfield/<YYYYMMDD-HHMMSS>-<slug>/` (out of repo, out of `raw/`)
+This is a **generative skill**, not a data-source workspace. Distinction:
+
+| Property | Data-source workspace (slack, journal, ...) | This skill |
+|---|---|---|
+| Direction | Pulls external data INTO `raw/<name>/` | Produces NEW media OUTSIDE the repo |
+| Graphify | Indexes its `raw/` deposits | Outputs are NOT indexed (not personal knowledge) |
+| Output | `raw/<name>/YYYY-MM-DD-*` | `~/.quantum/skill-output/higgsfield/<run>/` |
+| Safe to delete? | No, `raw/` is immutable | Yes, regen any time |
+
+Never deposit Higgsfield outputs into `raw/`. They are not durable knowledge about Adithya's life.
+
+- **Home:** `_core/skills/higgsfield/` (matches the other 13 Quantum skills)
+- **Chrome profile:** `~/.quantum/chrome-profiles/higgsfield/` (persistent, first login manual, session survives restarts)
+- **Output folder:** `~/.quantum/skill-output/higgsfield/<YYYYMMDD-HHMMSS>-<slug>/`
 
 ## Browser runtime contract
 
@@ -28,9 +49,9 @@ Five tool families on higgsfield.ai, one Node CLI. UI automation first, direct-A
 ## First-time setup
 
 ```bash
-cd workspaces/higgsfield
-npm install     # installs patchright + chrome browser
-node scripts/run.mjs login
+cd _core/skills/higgsfield
+npm install                       # installs patchright + chrome browser
+node scripts/run.mjs login        # opens visible Chrome window for Clerk OAuth
 ```
 
 Opens a visible Chrome window. Complete Clerk login (Google / Apple / Microsoft / email). Skill confirms session and writes profile to disk. Future runs reuse silently. If session expires, run `login` again.
@@ -67,10 +88,32 @@ All commands accept `--output <dir>` (override default), `--dry-run` (print inte
 
 ## Files
 
-- `rules/tool-flows.md` — per-tool UI selectors, backend slugs, body schemas (canonical)
+- `scripts/run.mjs` — CLI dispatcher (entry point for every command)
+- `scripts/{image,video,marketing,cinema,batch}.mjs` — per-tool handlers
+- `scripts/{browser,job,state,download,ui-submit,jwt,behavior,fingerprint}.mjs` — shared infra
+- `scripts/diag-*.mjs` — DOM probes for selector-drift debugging (no spend, no submit)
+- `rules/tool-flows.md` — per-tool UI selectors, backend slugs, body schemas (reference; catalogs are hardcoded in `.mjs`)
 - `rules/datadome-defenses.md` — stealth stack, cadence settings, circuit-breaker rules
 - `rules/output-conventions.md` — output folder layout, metadata.json schema
 - `rules/site-map.json` — discovered routes
+
+## Composing into workflows
+
+Higgsfield is a primitive other skills can shell out to. Each run produces a deterministic `<runDir>` containing `state.json` (job_uuid, prompt, params) and `metadata.json` (local_path, sha256, cost_credits_actual). Pattern:
+
+```bash
+RUN_DIR=$(node _core/skills/higgsfield/scripts/run.mjs image \
+  --model nano-banana-pro --prompt "..." --aspect 1:1 --res 1K \
+  | grep -oE "/Users/.*skill-output/higgsfield/[^ ]+")
+LOCAL_PATH=$(jq -r '.local_path' "$RUN_DIR/metadata.json")
+# now hand $LOCAL_PATH to ffmpeg / zernio-post / iMessage / wherever
+```
+
+Composition recipes (Claude can wire these on demand, no extra code needed):
+- **Generate then publish:** `higgsfield image` → `_core/skills/zernio-post` (cross-platform)
+- **Generate then text:** `higgsfield image` → `_core/skills/macos-contacts-imessage` send with attachment
+- **Batch then post-process:** `higgsfield batch --jobs jobs.jsonl` → loop over `metadata.json` files → `_core/skills/ffmpeg` for transcode/thumbnail
+- **Storyboard:** prompt `_core/skills/local-llm` for N scene descriptions → emit `jobs.jsonl` → `higgsfield batch`
 
 ## Out-of-scope (v1)
 

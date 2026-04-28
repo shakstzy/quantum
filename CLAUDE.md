@@ -68,15 +68,9 @@ QUANTUM/
 | people | Manual / contacts | Friends, family, colleagues, network |
 | library | Manual / browser captures | Books, articles, papers, watchlists |
 
-### Generative skill workspaces
-
-Different shape: these PRODUCE artifacts (images, video, ads) instead of ingesting personal data. Outputs live OUTSIDE `raw/` (Graphify ignores them). See each workspace's CLAUDE.md for the boundary.
-
-| Workspace | Tool | Output location |
-|-----------|------|-----------------|
-| higgsfield | higgsfield.ai (image / video / Marketing Studio / Cinema Studio) | `~/.quantum/skill-output/higgsfield/<run-id>/` |
-
 Each workspace is self-contained per ICM. Once you cd into a workspace, that workspace's CLAUDE.md takes operational precedence over this root file.
+
+Generative tools that PRODUCE media (vs. ingest personal data) live under `_core/skills/` instead of `workspaces/`. See the Triggers table below for entry points.
 
 ## Triggers
 
