@@ -1,0 +1,9 @@
+references/
+scripts/
+graphify-out/
+.git/
+.DS_Store
+node_modules/
+__pycache__/
+.venv/
+venv/

@@ -12,3 +12,4 @@ build/
 .idea/
 .vscode/
 references/
+graphify-out/
