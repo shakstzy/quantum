@@ -18,14 +18,24 @@ setup/com.shakstzy.quantum-discord-pull.plist   launchd plist (48h cadence)
 
 ## Conventions
 
-- **Significant messages:** `raw/discord/YYYY-MM.ndjson` (one line per message, sharded by message month per iMessage parity).
-- **Flagged messages:** `raw/discord/_review-list.ndjson`. Bots, system messages (calls, joins, pins), empty content, and Gemma-scored NOISE all land here. Audit periodically; false positives can be moved to the right monthly shard manually (raw is otherwise immutable).
+- **Per-conversation files (file boundary = relationship boundary):**
+  - `raw/discord/dms/<friend-username>--<channel-id>.ndjson` for 1:1 DMs.
+  - `raw/discord/group-dms/<channel-id>.ndjson` for group DMs.
+  - Each file is ONE conversation, append-only, chronologically ordered.
+  - **Line 1** is a self-describing header: `{"_type":"channel_header","id":"<id>","kind":"dm","recipients":[...],"created_at":"<iso>"}`. Written once at file creation; never re-written.
+  - **Lines 2+** are message records: `{"_type":"message","id":"<msg_id>","channel_id":"<id>","timestamp":"<iso>","author":{...},"content":"..."}`.
+  - Why per-conversation: graphify clusters per-file, so each file IS a relationship. Lint passes can scan one conversation at a time. Easy to grep one friend. Easy to delete one conversation for privacy without disturbing others.
+- **Flagged messages:** `raw/discord/_review-list.ndjson` (cross-channel). Bots, system messages (calls, joins, pins), empty content, and Gemma-scored NOISE land here with `_routed_from: <channel_id>` and `_route_reason: <why>`. Audit periodically; false positives can be moved to the right channel file manually (raw is otherwise immutable).
 - **Watermark:** `raw/.ingest-log/discord.channels.json` maps `channel_id -> last_message_id`. Re-runs only fetch `?after=<last_id>`.
-- **Significance audit log:** `raw/.ingest-log/discord.significance.ndjson` (append-only). One line per classified message: `{ts, channel_id, message_id, class, reason}`. Useful for tuning Gemma prompts later.
-- **Friend handles stored raw** (Discord username + global_name + id). Friend resolution to people-graph nodes happens at lint time, not ingest time. Same "full fidelity" rule iMessage uses.
-- **Group DMs:** included. Each message records the full participant list under `channel_recipients`.
+- **Significance audit log:** `raw/.ingest-log/discord.significance.ndjson` (append-only). One line per classified message: `{ts, channel_id, message_id, class, reason}`. Useful for tuning Gemma prompts later or reconstructing what was filtered.
+- **Friend handles stored raw** (username + global_name + id, in the channel header). Friend resolution to people-graph nodes happens at lint time, not ingest time. Same "full fidelity" rule iMessage uses.
+- **Group DMs:** included. Header records the full participant list under `recipients`.
 - **Attachments:** URL refs only. `has_attachment: true` flag set so conversation flow stays readable. We don't download files (Discord CDN URLs may expire later; that's acceptable for graphify purposes).
 - **Cadence:** every 48 hours via `setup/com.shakstzy.quantum-discord-pull.plist`. Logs at `~/Library/Logs/quantum-discord-pull.{stdout,stderr}.log`.
+
+## Friend renames + immutability
+
+If a Discord friend changes their username after we've created their per-conversation file, we keep appending to the OLD-named file (we look up by `channel_id`, not by name). The header line in the file still references the old recipient handle at file-creation time; new messages keep the new handle in their author block. Graphify can de-dup by `channel_header.id`. No churn, no rewrites, raw stays immutable.
 
 ## Pacing (detection-conscious by design)
 
