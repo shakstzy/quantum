@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Pull calendar events across all 4 accounts into raw/calendar/.
-# Usage: pull.sh [past_days] [future_days]   default: 7 30
-set -euo pipefail
+# Incremental Google Calendar ingest across all 4 accounts into raw/calendar/<account>/YYYY-MM.ndjson.
+# Re-entrant: ingest_all.py resumes via raw/.ingest-log/calendar-<account>.events.txt.
+# Runs accounts in parallel (per-user Calendar quotas don't share). Safe at any cadence.
+set -uo pipefail
 
-PAST="${1:-7}"
-FUTURE="${2:-30}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-RAW="$ROOT/raw/calendar"
-mkdir -p "$RAW"
+LOG="$ROOT/raw/.ingest-log"
+mkdir -p "$LOG"
 
 ACCOUNTS=(
   "adithya.shak.kumar@gmail.com"
@@ -16,15 +15,26 @@ ACCOUNTS=(
   "adithya@synps.xyz"
 )
 
-START="$(date -v-${PAST}d +%Y-%m-%d)"
-END="$(date -v+${FUTURE}d +%Y-%m-%d)"
-STAMP="$(date +%Y-%m-%d)"
+declare -a PIDS=()
+declare -a LABELS=()
 
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct//[@.]/-}"
-  out="$RAW/${STAMP}-${slug}.json"
-  echo "pulling $acct events ${START}..${END} -> $out"
-  gog -a "$acct" -j calendar events --all --from "$START" --to "$END" --all-pages > "$out"
+  label="calendar-${acct}"
+  logfile="$LOG/${label}.log"
+  (
+    python3 "$ROOT/workspaces/calendar/scripts/ingest_all.py" --account "$acct"
+  ) >>"$logfile" 2>&1 &
+  PIDS+=($!)
+  LABELS+=("$label")
 done
 
-echo "done. files in $RAW"
+fail=0
+for i in "${!PIDS[@]}"; do
+  if ! wait "${PIDS[$i]}"; then
+    echo "!! ${LABELS[$i]} FAILED (see $LOG/${LABELS[$i]}.log)" >&2
+    tail -n 5 "$LOG/${LABELS[$i]}.log" >&2 || true
+    fail=1
+  fi
+done
+
+exit $fail

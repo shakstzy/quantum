@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Pull recent Gmail messages across all 4 accounts into raw/email/.
-# Usage: pull.sh [days]   default: 7
-set -euo pipefail
+# Incremental Gmail ingest across all 4 accounts into raw/email/<account>/YYYY-MM.ndjson.
+# Re-entrant: ingest_all.py resumes via raw/.ingest-log/email-<account>.threads.txt.
+# Runs accounts in parallel (per-user Gmail quotas don't share). Safe at any cadence.
+set -uo pipefail
 
-DAYS="${1:-7}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-RAW="$ROOT/raw/email"
-mkdir -p "$RAW"
+LOG="$ROOT/raw/.ingest-log"
+mkdir -p "$LOG"
 
 ACCOUNTS=(
   "adithya.shak.kumar@gmail.com"
@@ -15,12 +15,26 @@ ACCOUNTS=(
   "adithya@synps.xyz"
 )
 
-STAMP="$(date +%Y-%m-%d)"
+declare -a PIDS=()
+declare -a LABELS=()
+
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct//[@.]/-}"
-  out="$RAW/${STAMP}-${slug}.json"
-  echo "pulling $acct -> $out"
-  gog -a "$acct" -j gmail search "newer_than:${DAYS}d" --all > "$out"
+  label="email-${acct}"
+  logfile="$LOG/${label}.log"
+  (
+    python3 "$ROOT/workspaces/email/scripts/ingest_all.py" --account "$acct"
+  ) >>"$logfile" 2>&1 &
+  PIDS+=($!)
+  LABELS+=("$label")
 done
 
-echo "done. files in $RAW"
+fail=0
+for i in "${!PIDS[@]}"; do
+  if ! wait "${PIDS[$i]}"; then
+    echo "!! ${LABELS[$i]} FAILED (see $LOG/${LABELS[$i]}.log)" >&2
+    tail -n 5 "$LOG/${LABELS[$i]}.log" >&2 || true
+    fail=1
+  fi
+done
+
+exit $fail

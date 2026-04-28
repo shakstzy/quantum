@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Pull recent Drive file metadata across all 4 accounts into raw/gdrive/.
-# Usage: pull.sh [days]   default: 30
-set -euo pipefail
+# Incremental Google Drive ingest across all 4 accounts into raw/gdrive/<account>/.
+# Re-entrant: ingest_all.py resumes via raw/.ingest-log/gdrive-<account>.files.txt.
+# Uses _core/scripts/.venv (pymupdf4llm dep). Runs accounts in parallel.
+set -uo pipefail
 
-DAYS="${1:-30}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-RAW="$ROOT/raw/gdrive"
-mkdir -p "$RAW"
+LOG="$ROOT/raw/.ingest-log"
+VENV_PY="$ROOT/_core/scripts/.venv/bin/python"
+mkdir -p "$LOG"
+
+if [[ ! -x "$VENV_PY" ]]; then
+  echo "missing venv at $VENV_PY (run _core/scripts/setup-venv.sh or equivalent)" >&2
+  exit 2
+fi
 
 ACCOUNTS=(
   "adithya.shak.kumar@gmail.com"
@@ -15,14 +21,26 @@ ACCOUNTS=(
   "adithya@synps.xyz"
 )
 
-CUTOFF="$(date -v-${DAYS}d +%Y-%m-%dT%H:%M:%S)"
-STAMP="$(date +%Y-%m-%d)"
+declare -a PIDS=()
+declare -a LABELS=()
 
 for acct in "${ACCOUNTS[@]}"; do
-  slug="${acct//[@.]/-}"
-  out="$RAW/${STAMP}-${slug}.json"
-  echo "pulling $acct drive (modified after $CUTOFF) -> $out"
-  gog -a "$acct" -j drive search --raw-query "modifiedTime > '${CUTOFF}'" --max 500 > "$out"
+  label="gdrive-${acct}"
+  logfile="$LOG/${label}.log"
+  (
+    "$VENV_PY" "$ROOT/workspaces/gdrive/scripts/ingest_all.py" --account "$acct"
+  ) >>"$logfile" 2>&1 &
+  PIDS+=($!)
+  LABELS+=("$label")
 done
 
-echo "done. files in $RAW"
+fail=0
+for i in "${!PIDS[@]}"; do
+  if ! wait "${PIDS[$i]}"; then
+    echo "!! ${LABELS[$i]} FAILED (see $LOG/${LABELS[$i]}.log)" >&2
+    tail -n 5 "$LOG/${LABELS[$i]}.log" >&2 || true
+    fail=1
+  fi
+done
+
+exit $fail
