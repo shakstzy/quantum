@@ -277,13 +277,48 @@ Every ingest workspace declares its file nomenclature in a `## Ingest` section i
 - **Source:** [Gmail / Slack / Apple Health / manual / ...]
 - **Trigger:** `pull` -> `bash scripts/pull.sh [args]`
 - **Automation:** [launchd plist label / cron line / "manual only"]
-- **Output path:** `raw/<ws>/YYYY-MM-DD-<slug>.<ext>`
-- **Slug rule:** [account local-part / channel name / ISO date / ...]
+- **Shape:** [item-stream / daily-snapshot] (see "Ingest Dedup Standard" below)
+- **Output path:** see chosen shape
 - **Format:** [JSON / NDJSON / Markdown / ...]
+- **Dedup key:** [native source ID, e.g. gmail threadId / calendar eventId / drive fileId / slack channel+ts / imessage ROWID]
+- **Watermark:** `raw/.ingest-log/<ws>-<scope>.<ext>` (resume state)
 - **Mutations:** [skill at `_core/skills/<name>/SKILL.md` / "none, read-only"]
 ```
 
 `raw/` is immutable. Re-run `pull` to refresh; never hand-edit. Operational state (watermarks, classification caches, error logs) goes under `raw/.ingest-log/`. That path is in `.graphifyignore`, so contents stay out of the graph.
+
+### Ingest Dedup Standard
+
+Every ingest pipeline picks ONE of two shapes and documents the choice in its workspace `CLAUDE.md`. Re-runs of `pull` MUST be idempotent: pulling the same time window twice produces the same `raw/<ws>/` content. This guarantee is what lets the launchd cron run with overlapping windows safely and lets graphify ingest without duplicate concepts.
+
+**Shape A: item-stream (default for high-volume sources)**
+
+```
+raw/<ws>/<scope>/YYYY-MM.ndjson
+```
+
+- One JSON object per line. Each line is one source item (gmail thread, calendar event, drive file, slack message, imessage row).
+- Line is keyed by the source's stable native ID. The ingest writer dedupes within the file before write: read existing IDs, skip if present, append if new.
+- `<scope>` = a partitioning dimension that keeps any single shard small enough to scan: account slug for Google (one Gmail account fits in per-month shards), workspace slug for Slack, omitted entirely for iMessage (single-source).
+- Resume state lives at `raw/.ingest-log/<ws>-<scope>.<ext>` (a watermark timestamp, a processed-IDs file, or a per-channel cursor map). Pull reads it, fetches only what's new, updates it on success.
+- Examples: `raw/email/adithya-eclipse-builders/2026-04.ndjson`, `raw/imessage/2026-04.ndjson`, `raw/slack/eclipse-labs/2026-04.ndjson`.
+
+**Shape B: daily-snapshot (for sources without a stable item ID)**
+
+```
+raw/<ws>/YYYY-MM-DD-<slug>.<ext>
+```
+
+- One file per pull. Each pull overwrites the same path on the same day, so re-runs within a day are idempotent.
+- Use this only when the source has no stable native ID (e.g. an Apple Health export, a manual journal entry, a captured browser screenshot).
+
+**Hard rules**
+
+1. Pick A or B at workspace creation. Document the choice in the workspace `CLAUDE.md` "Ingest" section.
+2. Item-stream writers MUST dedupe by native source ID before append. Never trust the source to send each item once.
+3. Watermarks live under `raw/.ingest-log/`. That path is in `.graphifyignore`, so it never enters the graph.
+4. New ingest workspaces MUST default to Shape A unless the source genuinely lacks stable IDs. Update this section if a third shape is ever needed; do not invent in flight.
+5. Old daily-snapshot files left over from a Shape B -> Shape A migration MUST be deleted in the same change that flips the shape, so graphify never sees both.
 
 ---
 
@@ -293,7 +328,7 @@ Every ingest workspace declares its file nomenclature in a `## Ingest` section i
 - Stage folders: zero-padded numbers prefix: `01-`, `02-`, `03-`
 - Placeholders: `{{SCREAMING_SNAKE_CASE}}` (see `_core/placeholder-syntax.md`)
 - Output artifacts: `<topic-slug>-<artifact-type>.md`
-- Raw deposits: `YYYY-MM-DD-<slug>.<ext>` OR a documented sharded scheme (e.g. iMessage `YYYY-MM.ndjson`)
+- Raw deposits: see "Ingest Dedup Standard". Shape A (default): `raw/<ws>/<scope>/YYYY-MM.ndjson`. Shape B: `raw/<ws>/YYYY-MM-DD-<slug>.<ext>`.
 - No spaces in file or folder names
 - No em dashes anywhere
 
