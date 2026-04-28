@@ -1,0 +1,6 @@
+mlx-whisper>=0.4.0
+scenedetect>=0.6.7
+imagehash>=4.3.1
+pillow>=11.0.0
+opencv-python>=4.10.0
+anthropic>=0.40.0
