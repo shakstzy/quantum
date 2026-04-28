@@ -91,7 +91,6 @@ def main(argv: list[str]) -> int:
         campaign_id=camp["id"],
         rights_status=args.rights,
         rights_evidence=args.evidence,
-        downloaded_at="datetime('now')",  # placeholder; SQLite default would have been used if not provided
         filepath=str(file_path),
     )
     with db.conn() as c:

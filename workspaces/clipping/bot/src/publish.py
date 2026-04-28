@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import db
@@ -33,7 +33,7 @@ def make_caption(cand_row, account_row, campaign_row) -> str:
 
 def emit_dry_run_preview(payload: dict) -> Path:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = LOG_DIR / f"publish-dryrun-{ts}.md"
     path.write_text("# dry-run publish\n\n```json\n" + json.dumps(payload, indent=2) + "\n```\n")
     return path
@@ -42,7 +42,7 @@ def emit_dry_run_preview(payload: dict) -> Path:
 def write_raw_artifact(cand_row, account_row, campaign_row, post_url: str | None) -> Path:
     raw_dir = REPO_ROOT / "raw" / "clipping"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     slug_src = (cand_row["hook"] or f"clip-{cand_row['id']}").lower()
     slug = re.sub(r"[^a-z0-9]+", "-", slug_src).strip("-")[:60] or f"clip-{cand_row['id']}"
     path = raw_dir / f"{today}-{slug}.md"

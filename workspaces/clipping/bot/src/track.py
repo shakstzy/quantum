@@ -13,7 +13,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import db
@@ -76,7 +76,7 @@ def compute_north_star() -> dict:
         ).fetchone()["v"]
         paid = c.execute("SELECT COALESCE(SUM(paid_usd),0) AS p FROM payout_claims WHERE status='paid'").fetchone()["p"]
     metric = {
-        "date": datetime.utcnow().date().isoformat(),
+        "date": datetime.now(timezone.utc).date().isoformat(),
         "approved_publishes": attempts,
         "total_qa_approved_candidates": approved,
         "total_views": total_views,
