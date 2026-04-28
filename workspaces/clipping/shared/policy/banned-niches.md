@@ -31,5 +31,13 @@ from campaigns, sources, and clip candidates. Enforced as a regex filter at thre
 
 ## Implementation
 
-`bot/src/lib/banned.py` exposes `is_banned(text: str) -> tuple[bool, list[str]]` returning hits.
-Update keyword list when a new edge case is found, then re-run audit on existing campaigns to retro-flag.
+The CANONICAL pattern list lives in `bot/src/lib/banned.py` as a Python list
+(`PATTERNS`). The table above is human-readable documentation; the regexes
+contain `|` characters that break naive markdown table parsing, so the Python
+list wins.
+
+When adding a category:
+1. Add the row to the table above for human reference.
+2. Add `(category, regex)` to `PATTERNS` in `banned.py`.
+3. Run `python bot/src/lib/banned.py "<test phrase>"` to confirm the new regex fires.
+4. Re-audit existing campaigns: `python bot/src/discover.py --rescore-banned` (TODO).

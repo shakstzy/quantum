@@ -1,50 +1,48 @@
 """Banned-niche regex filter.
 
-Reads keyword list from `shared/policy/banned-niches.md` (the table cells with
-`(regex, case-insensitive)`) and exposes `is_banned(text)`.
+Patterns live HERE as the canonical source of truth (the markdown file
+`shared/policy/banned-niches.md` is human-readable documentation that should
+mirror this list, but the Python list wins because regexes contain `|`
+characters that break naive markdown table parsing).
 
-Single source of truth: the markdown file. We parse it on import to avoid drift.
+Update both files together when adding a category.
 """
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-WS_ROOT = Path(__file__).resolve().parents[3]
-POLICY = WS_ROOT / "shared" / "policy" / "banned-niches.md"
+# (category, regex). Case-insensitive.
+PATTERNS: list[tuple[str, str]] = [
+    ("gambling-sportsbook",
+     r"bet365|draftkings|fanduel|stake\.com|sportsbook|casino|roulette|poker|slot machine|odds boost|free bet"),
+    ("crypto-trading",
+     r"\b(pump|moon|altcoin shill|to the moon|10x gem|next.{0,5}bitcoin|presale|crypto signal|memecoin)\b"),
+    ("get-rich-quick",
+     r"passive income|get rich|guaranteed (returns|profit|income)|make .{0,5}\$\d{3,5}.{0,10}(per |a |/) ?(day|week|hour)"),
+    ("medical-supplement-claims",
+     r"\b(cure|treats?|reverses?|prevents?)\s+(diabetes|cancer|alzheimer|depression)\b|nootropic|miracle pill|hormone optimize"),
+    ("financial-advice-no-disclaimer",
+     r"buy this stock|guaranteed return|insider tip|day trade|swing trade.{0,30}(this|now)"),
+    ("adult-onlyfans",
+     r"\bonlyfans\b|\bof model\b|sugar daddy|sugar baby|\bescort\b|nsfw promotion"),
+    ("manosphere-redpill",
+     r"\bred pill\b|alpha male|sigma grindset|female nature|hypergamy.{0,30}(women|female)|\bMGTOW\b"),
+    ("conspiracy-misinfo",
+     r"vaccines? cause|plandemic|false flag|new world order|deep state|elite agenda"),
+    ("weight-loss-claims",
+     r"lose \d+ pounds|weight loss (secret|hack|trick)|drop body fat in.{0,20}days"),
+    ("political-paid-endorsement",
+     r"vote for|don't vote|endorsing.{0,20}(candidate|president)"),
+]
 
-
-def _load_patterns() -> list[tuple[str, re.Pattern]]:
-    if not POLICY.exists():
-        return []
-    out: list[tuple[str, re.Pattern]] = []
-    for line in POLICY.read_text().splitlines():
-        if not line.startswith("| ") or "regex" in line.lower() and "Trigger" in line:
-            continue
-        if "`" not in line:
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        category, _why, _ignored, pattern_cell = cells[0], cells[1], cells[2], cells[3]
-        m = re.search(r"`([^`]+)`", pattern_cell)
-        if not m:
-            continue
-        try:
-            out.append((category, re.compile(m.group(1), re.IGNORECASE)))
-        except re.error:
-            continue
-    return out
-
-
-_PATTERNS = _load_patterns()
+_COMPILED = [(cat, re.compile(p, re.IGNORECASE)) for cat, p in PATTERNS]
 
 
 def is_banned(text: str) -> tuple[bool, list[str]]:
     if not text:
         return False, []
     hits: list[str] = []
-    for cat, pat in _PATTERNS:
+    for cat, pat in _COMPILED:
         if pat.search(text):
             hits.append(cat)
     return (len(hits) > 0), hits
@@ -56,4 +54,6 @@ if __name__ == "__main__":
         b, hits = is_banned(" ".join(sys.argv[1:]))
         print(f"banned={b} categories={hits}")
     else:
-        print(f"loaded {len(_PATTERNS)} patterns")
+        print(f"loaded {len(_COMPILED)} patterns")
+        for cat, _ in PATTERNS:
+            print(f"  {cat}")
