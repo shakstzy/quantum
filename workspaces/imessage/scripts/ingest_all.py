@@ -338,7 +338,17 @@ def main() -> int:
         if args.limit:
             sql += f" LIMIT {int(args.limit)}"
 
-        chat_meta_cache: dict[int, tuple[list[str], str]] = {}  # chat_rowid -> (handles, chat_guid)
+        # chat_rowid -> (handles, chat_guid, display_name, participant_names)
+        chat_meta_cache: dict[int, tuple[list[str], str, str | None, list[str]]] = {}
+
+        def get_meta(crid: int) -> tuple[list[str], str, str | None, list[str]]:
+            if crid not in chat_meta_cache:
+                handles = fetch_chat_handles(conn, crid)
+                guid, display_name = fetch_chat_meta(conn, crid)
+                names = [resolve_handle(h, contacts) or h for h in handles]
+                chat_meta_cache[crid] = (handles, guid, display_name, names)
+            return chat_meta_cache[crid]
+
         for r in conn.execute(sql, (watermark,)):
             rowid = int(r["rowid"])
             if rowid > max_rowid_seen:
@@ -365,14 +375,10 @@ def main() -> int:
                     continue
                 text = ""
 
+            handles, chat_guid, chat_display_name, participant_names = get_meta(chat_rowid)
+
             # Classify chat if we haven't yet.
             if chat_key not in chat_class:
-                if chat_rowid not in chat_meta_cache:
-                    chat_meta_cache[chat_rowid] = (
-                        fetch_chat_handles(conn, chat_rowid),
-                        conn.execute("SELECT guid FROM chat WHERE ROWID = ?", (chat_rowid,)).fetchone()["guid"],
-                    )
-                handles, _chat_guid = chat_meta_cache[chat_rowid]
                 sample = fetch_chat_sample(conn, chat_rowid)
                 cls, reason = classify_chat(handles, sample)
                 chat_class[chat_key] = {
@@ -384,21 +390,20 @@ def main() -> int:
                 new_chats_classified += 1
 
             cls_entry = chat_class[chat_key]
-            if chat_rowid not in chat_meta_cache:
-                chat_meta_cache[chat_rowid] = (
-                    cls_entry.get("handles", []),
-                    conn.execute("SELECT guid FROM chat WHERE ROWID = ?", (chat_rowid,)).fetchone()["guid"],
-                )
-            handles, chat_guid = chat_meta_cache[chat_rowid]
+            sender_handle = r["handle"]
+            sender_name = "Adithya" if r["is_from_me"] else (resolve_handle(sender_handle, contacts) if sender_handle else None)
 
             record = {
                 "rowid": rowid,
                 "guid": r["guid"],
                 "chat_rowid": chat_rowid,
                 "chat_guid": chat_guid,
+                "chat_display_name": chat_display_name,
                 "chat_handles": handles,
+                "chat_participant_names": participant_names,
                 "is_group": len(handles) > 1,
-                "handle": r["handle"],
+                "handle": sender_handle,
+                "sender_name": sender_name,
                 "is_from_me": bool(r["is_from_me"]),
                 "service": r["service"],
                 "subject": r["subject"],
