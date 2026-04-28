@@ -120,15 +120,19 @@ await cta?.click();
 When the decision lands on browser-use, default to the local Gemma daemon as the LLM. No cloud cost, no API key.
 
 ```bash
-# Confirm Gemma is up (lifecycle managed by launchd `com.shakos.local-llm`)
-curl -s http://127.0.0.1:8765/v1/models | head
+# Source the canonical endpoint vars (LOCAL_LLM_URL, LOCAL_LLM_BASE_URL, LOCAL_LLM_MODEL, ...).
+# This is the shell parallel to local-llm/client.py — never hardcode the host/port.
+source /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/endpoint.sh
+
+# Confirm Gemma is up (lifecycle managed by launchd `com.quantum.local-llm`)
+curl -s "$LOCAL_LLM_BASE_URL/v1/models" | head
 
 # One-shot via CLI, point browser-use at the OpenAI-compatible local endpoint
-OPENAI_API_KEY=local OPENAI_BASE_URL=http://127.0.0.1:8765/v1 \
+OPENAI_API_KEY=local OPENAI_BASE_URL="$LOCAL_LLM_BASE_URL/v1" \
   bu --headed -- "<task description>"
 ```
 
-For Python lib usage, build a `ChatOpenAI`-compatible client with `base_url=http://127.0.0.1:8765/v1` and pass it into `Agent(...)`. See `local-llm` skill for daemon details.
+For Python lib usage, build a `ChatOpenAI`-compatible client whose `base_url` comes from the `local-llm` skill's `client.py` (`from client import URL` then strip the `/v1/chat/completions` suffix, or just import `MODEL` and reuse the same `URL` host) and pass it into `Agent(...)`. See `local-llm` skill for daemon details. Do NOT hardcode the host/port.
 
 ## Quick-start: patchright skeleton
 

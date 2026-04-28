@@ -26,6 +26,20 @@ except LocalLLMUnreachable as e:
 
 If Gemma's port, host, or model name changes, edit `client.py` once and every consumer auto-fixes. Do NOT copy `URL`, `MODEL`, or the curl payload into a consumer skill.
 
+## Consumer surface (shell / env)
+
+`scripts/endpoint.sh` is the shell parallel to `client.py`. Source it (do not execute it) to export the canonical endpoint vars: `LOCAL_LLM_URL`, `LOCAL_LLM_BASE_URL` (no `/v1/...` suffix), `LOCAL_LLM_HEALTH_URL`, `LOCAL_LLM_MODEL`, plus `LOCAL_LLM_HOST` / `LOCAL_LLM_PORT`. Use it when wiring CLIs that read OpenAI-style env vars (`browser-use`, generic OpenAI clients, etc.):
+
+```bash
+source /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/endpoint.sh
+# Health check
+curl -sS -m 2 "$LOCAL_LLM_HEALTH_URL"
+# Wire any OpenAI-compatible CLI
+OPENAI_API_KEY=local OPENAI_BASE_URL="$LOCAL_LLM_BASE_URL/v1" some-cli ...
+```
+
+Same rule as Python: edit `endpoint.sh` once if the daemon moves, and every shell consumer auto-fixes. Do NOT hardcode `127.0.0.1:8765` or the model string in consumer skills.
+
 ## When this fires
 
 **Direct-inference triggers** (Adithya wants Gemma to answer something locally):
