@@ -8,6 +8,24 @@ allowed-tools: Bash
 
 Canonical contract for the persistent local Gemma server. The daemon, install scripts, plist, and reference docs all live here under `/Users/shakstzy/QUANTUM/_core/skills/local-llm/`. Other QUANTUM skills (currently `instagram-summary`, future workspaces) point at this skill instead of duplicating the curl boilerplate.
 
+## Consumer surface (Python skills)
+
+`client.py` in this directory is the single source of truth for URL + model + payload shape. Python consumers MUST import from it instead of hardcoding any of those values:
+
+```python
+import sys
+sys.path.insert(0, "/Users/shakstzy/QUANTUM/_core/skills/local-llm")
+from client import chat, image_block, LocalLLMUnreachable, UNREACHABLE_HINT
+
+content = [{"type": "text", "text": "describe this"}, image_block("/path/to/img.jpg")]
+try:
+    answer = chat([{"role": "user", "content": content}], max_tokens=400)
+except LocalLLMUnreachable as e:
+    sys.exit(f"{e}\n{UNREACHABLE_HINT}")
+```
+
+If Gemma's port, host, or model name changes, edit `client.py` once and every consumer auto-fixes. Do NOT copy `URL`, `MODEL`, or the curl payload into a consumer skill.
+
 ## When this fires
 
 **Direct-inference triggers** (Adithya wants Gemma to answer something locally):

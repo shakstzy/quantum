@@ -10,6 +10,7 @@ import sys
 import time
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -146,18 +147,12 @@ def transcribe(audio: Path) -> str:
     return " ".join(s.text.strip() for s in segments).strip()
 
 
-LOCAL_LLM_URL = "http://127.0.0.1:8765/v1/chat/completions"
-
-
 def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str = "") -> str:
-    """Vision+text synthesis via the shared local-llm server (mlx_vlm.server, Gemma 4 26B-A4B).
+    """Vision+text synthesis delegated to the shared local-llm skill.
 
-    Server contract: _core/skills/local-llm/SKILL.md.
+    Daemon contract (URL, model, payload shape): `_core/skills/local-llm/client.py`.
     No in-process MLX load; the daemon stays warm across calls.
     """
-    import base64
-    import json
-
     visual_desc = "frames sampled across the reel" if kind == "reel" else "images from the post"
     audio_line = f"AUDIO TRANSCRIPT: {transcript or '(no speech)'}\n\n" if kind == "reel" else ""
     prompt_text = (
@@ -172,38 +167,16 @@ def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str 
     )
 
     content: list[dict] = [{"type": "text", "text": prompt_text}]
-    for img in images:
-        b64 = base64.b64encode(img.read_bytes()).decode()
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-        })
+    content.extend(image_block(img) for img in images)
 
-    payload = json.dumps({
-        "model": MLX_MODEL,
-        "messages": [{"role": "user", "content": content}],
-        "max_tokens": MAX_TOKENS,
-        "temperature": 0.3,
-    }).encode()
-
-    req = urllib.request.Request(
-        LOCAL_LLM_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = json.loads(r.read())
-    except urllib.error.URLError as e:
-        sys.exit(
-            f"local-llm server unreachable at {LOCAL_LLM_URL}: {e}\n"
-            f"Ensure the shared local-llm skill is installed and running:\n"
-            f"  bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/status.sh\n"
-            f"If not installed:\n"
-            f"  bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/install.sh"
+        return local_llm_chat(
+            [{"role": "user", "content": content}],
+            max_tokens=MAX_TOKENS,
+            temperature=0.3,
         )
-    return data["choices"][0]["message"]["content"]
+    except LocalLLMUnreachable as e:
+        sys.exit(f"{e}\n{UNREACHABLE_HINT}")
 
 
 def handle_reel(url: str) -> None:
