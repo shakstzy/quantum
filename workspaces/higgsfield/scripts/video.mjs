@@ -290,7 +290,7 @@ export async function runVideo(argv) {
     run_id: runId,
     cmd: 'video',
     model_frontend: slug,
-    model_backend: slug,
+    model_backend: cat.backend_slug || slug,
     tool_url: VIDEO_URL,
     prompt: argv.prompt,
     params: params_for_state,
@@ -379,7 +379,7 @@ export async function runVideo(argv) {
     }
 
     const submission = await submitViaUI(ctx.page, ctx.context, runDir, {
-      slug,
+      slug: cat.backend_slug || slug,
       prompt: argv.prompt,
       responseTimeoutMs: 60000 // video submit takes longer than image sometimes
     });
