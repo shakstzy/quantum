@@ -330,7 +330,7 @@ def _summarize_home(h: dict) -> dict:
 # Property
 # ---------------------------------------------------------------------------
 
-def property_details(url_or_path: str) -> dict:
+def property_details(url_or_path: str, *, include_raw: bool = False) -> dict:
     if not url_or_path.startswith("http"):
         url_or_path = BASE + (url_or_path if url_or_path.startswith("/") else "/" + url_or_path)
     html = _fetch_html(url_or_path)
@@ -338,39 +338,73 @@ def property_details(url_or_path: str) -> dict:
 
     initial = _cache_entry(ctx, "/stingray/api/home/details/initialInfo") or {}
     above = _cache_entry(ctx, "/stingray/api/home/details/aboveTheFold") or {}
-    below = _cache_entry(ctx, "/stingray/api/home/details/belowTheFold") or {}
+    # Note: belowTheFold lives at the v1 path on property pages.
+    below = (_cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold")
+             or _cache_entry(ctx, "/stingray/api/home/details/belowTheFold")
+             or {})
+    avm = _cache_entry(ctx, "/stingray/api/home/details/avm") or {}
+    rental = _cache_entry(ctx, "/stingray/api/home/details/rental-estimate") or {}
+    similars = _cache_entry(ctx, "/stingray/api/home/details/similars/listings") or {}
+    schools = (_cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/schoolsAndDistrictsInfo")
+               or {})
+    risk = _cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/riskFactorData") or {}
 
-    payload_initial = initial.get("payload") or {}
-    payload_above = above.get("payload") or {}
-    payload_below = below.get("payload") or {}
+    p_initial = initial.get("payload") or {}
+    p_above = above.get("payload") or {}
+    p_below = below.get("payload") or {}
+    p_avm = avm.get("payload") or {}
 
-    # Light summary on top, full payloads attached for downstream queries.
-    main = payload_above.get("mainHouseInfo") or {}
-    public_records = payload_below.get("publicRecordsInfo") or {}
-    history_events = ((payload_below.get("propertyHistoryInfo") or {}).get("events")) or []
+    asi = p_above.get("addressSectionInfo") or {}
+    history_events = ((p_below.get("propertyHistoryInfo") or {}).get("events")) or []
+    public_records = p_below.get("publicRecordsInfo") or {}
 
-    return {
+    out = {
         "source": "redfin",
         "url": url_or_path,
-        "property_id": payload_initial.get("propertyId"),
-        "listing_id": payload_initial.get("listingId"),
-        "address": main.get("addressInfo"),
-        "price": main.get("priceInfo"),
-        "beds": main.get("beds"),
-        "baths": main.get("baths"),
-        "sqft": main.get("sqFt"),
-        "year_built": main.get("yearBuilt"),
-        "lot_size": main.get("lotSize"),
-        "status": main.get("listingStatus"),
-        "description": main.get("marketingRemarks"),
+        "property_id": p_initial.get("propertyId"),
+        "listing_id": p_initial.get("listingId"),
+        "status": (asi.get("status") or {}).get("displayValue"),
+        "address": (asi.get("streetAddress") or {}).get("assembledAddress"),
+        "city": asi.get("city"),
+        "state": asi.get("state"),
+        "zip": asi.get("zip"),
+        "lat_long": asi.get("latLong"),
+        "price": (asi.get("priceInfo") or {}).get("amount"),
+        "price_per_sqft": asi.get("pricePerSqFt"),
+        "beds": asi.get("beds"),
+        "baths": asi.get("baths"),
+        "sqft": (asi.get("sqFt") or {}).get("value"),
+        "year_built": asi.get("yearBuilt"),
+        "lot_size": asi.get("lotSize"),
+        "property_type_code": asi.get("propertyType"),
+        "redfin_estimate": p_avm.get("predictedValue") or (p_avm.get("predictedPrice") or {}).get("amount"),
+        "rent_estimate": (rental.get("payload") or {}).get("predictedValue"),
         "history": history_events,
         "public_records": public_records,
-        "raw": {"initial": payload_initial, "above": payload_above, "below": payload_below},
+        "schools": (schools.get("payload") or {}).get("schools") or [],
+        "risk_factors": (risk.get("payload") or {}),
+        "comps": _summarize_comps(similars),
+        "amenities": p_below.get("amenitiesInfo") or {},
     }
+    if include_raw:
+        out["raw"] = {
+            "initial": p_initial, "above": p_above, "below": p_below,
+            "avm": p_avm, "similars": similars,
+        }
+    return out
+
+
+def _summarize_comps(similars: dict) -> list[dict]:
+    homes = ((similars.get("payload") or {}).get("homes")) or []
+    return [_summarize_home(h) for h in homes][:20]
 
 
 def price_history(url_or_path: str) -> list[dict]:
     return property_details(url_or_path).get("history") or []
+
+
+def comps(url_or_path: str) -> list[dict]:
+    return property_details(url_or_path).get("comps") or []
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +440,9 @@ def main(argv=None):
     sp = sub.add_parser("history", help="price/listing history for a property")
     sp.add_argument("url")
 
+    sp = sub.add_parser("comps", help="comparable / similar listings for a property")
+    sp.add_argument("url")
+
     args = ap.parse_args(argv)
 
     if args.cmd == "resolve":
@@ -426,6 +463,8 @@ def main(argv=None):
         _print(property_details(args.url))
     elif args.cmd == "history":
         _print(price_history(args.url))
+    elif args.cmd == "comps":
+        _print(comps(args.url))
 
 
 if __name__ == "__main__":
