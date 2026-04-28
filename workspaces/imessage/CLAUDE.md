@@ -32,7 +32,7 @@ The launchd job fires `/bin/bash` to run the ingest. macOS TCC blocks any launch
 - **Handles are also stored raw** (phone in E.164, Apple ID email). Both raw + resolved travel together so Graphify can link by either.
 - **Group chats:** included. Each message records the full handle list and the resolved-name list. Apple's group-chat title (when set) lands in `chat_display_name`.
 - **Attachments:** text only. Image / video / audio bodies are skipped; a `has_attachment: true` flag is set so the conversation flow stays readable.
-- **Cadence:** every 12 hours via `~/Library/LaunchAgents/com.shakstzy.quantum-imessage.plist` (`StartInterval = 43200`). Logs at `~/Library/Logs/quantum-imessage.{stdout,stderr}.log`.
+- **Cadence:** every 30 minutes via `~/Library/LaunchAgents/com.shakstzy.quantum-imessage.plist` (`StartInterval = 1800`). Logs at `~/Library/Logs/quantum-imessage.{stdout,stderr}.log`.
 
 ## Per-message schema
 
