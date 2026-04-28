@@ -145,34 +145,55 @@ def search(
     min_baths: float | None = None,
     page: int = 1,
 ) -> dict:
-    """Search by free-text city/zip. Filters are applied via URL fragment.
+    """Search Zillow by free-text region.
 
-    Zillow's filter URL pattern is `/<region>/<page>_p/<filter-blob>_rb/`.
-    Doing it via querystring (`searchQueryState=`) is also supported but
-    requires a JSON-encoded URL-safe state. We use the simpler
-    `?searchQueryState=` approach with a minimal blob.
+    Filtering goes through `searchQueryState` querystring, which Zillow's
+    frontend builds. Critical detail: if `searchQueryState` lacks
+    `mapBounds` + `regionSelection`, Zillow ignores the URL slug and falls
+    back to a default region (often Austin in the US). So we do two GETs:
+
+      1. Fetch the unfiltered city URL to discover the region's mapBounds
+         and regionSelection from the rendered queryState.
+      2. Re-fetch with the full state (bounds + region + filters).
     """
     url = _city_url(query)
+    base_html = _fetch_html(url)
+    base_data = _next_data(base_html)
+    base_sps = (((base_data.get("props") or {}).get("pageProps") or {})
+                .get("searchPageState") or {})
+    base_qs = base_sps.get("queryState") or {}
+    map_bounds = base_qs.get("mapBounds")
+    region_selection = base_qs.get("regionSelection")
+    if not map_bounds or not region_selection:
+        # Region didn't resolve; return the unfiltered listings as-is so the
+        # caller still gets something useful.
+        listings = (base_sps.get("cat1") or {}).get("searchResults", {}).get("listResults") or []
+        return _wrap_search(query, url, listings, base_sps)
+
     sqs = {
         "pagination": {"currentPage": page} if page > 1 else {},
+        "mapBounds": map_bounds,
+        "regionSelection": region_selection,
         "filterState": _filter_state(max_price, min_price, min_beds, min_baths),
         "isListVisible": True,
+        "mapZoom": base_qs.get("mapZoom") or 11,
     }
     sep = "&" if "?" in url else "?"
     full_url = url + sep + "searchQueryState=" + quote(json.dumps(sqs, separators=(",", ":")))
-
     html = _fetch_html(full_url)
     data = _next_data(html)
-    pp = ((data.get("props") or {}).get("pageProps") or {})
-    sps = pp.get("searchPageState") or {}
-    cat1 = (sps.get("cat1") or {}).get("searchResults") or {}
-    listings = cat1.get("listResults") or cat1.get("mapResults") or []
+    sps = ((data.get("props") or {}).get("pageProps") or {}).get("searchPageState") or {}
+    listings = (sps.get("cat1") or {}).get("searchResults", {}).get("listResults") or []
+    return _wrap_search(query, full_url, listings, sps)
+
+
+def _wrap_search(query: str, url: str, listings: list, sps: dict) -> dict:
     homes = [_summarize_home(h) for h in listings]
     total = ((sps.get("cat1") or {}).get("totalResultCount")) or len(homes)
     return {
         "source": "zillow",
         "query": query,
-        "url": full_url,
+        "url": url,
         "total_in_region": total,
         "count": len(homes),
         "homes": homes,
