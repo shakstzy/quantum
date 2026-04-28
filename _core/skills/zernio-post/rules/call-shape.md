@@ -15,7 +15,7 @@ The skill refuses to run if any required field is missing. This is the function 
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `scheduled_at_utc` | ISO-8601 string in UTC | Caller is responsible for converting from local timezone. SHAKOS default is CST; skill does not auto-convert. |
+| `scheduled_at_utc` | ISO-8601 string in UTC | Caller is responsible for converting from local timezone. QUANTUM default is CST; skill does not auto-convert. |
 
 ## Required only when platform is `instagram`
 

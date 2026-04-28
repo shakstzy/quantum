@@ -52,4 +52,3 @@ _core/skills/firecrawl/scrape.sh "https://example.com/index" links
 
 - API endpoint: `https://api.firecrawl.dev/v1/scrape`.
 - Auth header is `Authorization: Bearer ...`.
-- For full research flows (search → shortlist → scrape → save), see SHAKOS `system/_core/playbooks/web-research/PLAYBOOK.md` — same shape, just substitute these CLIs for the MCP calls.

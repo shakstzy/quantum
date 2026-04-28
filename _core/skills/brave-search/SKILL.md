@@ -55,4 +55,3 @@ _core/skills/brave-search/search.sh "rust async runtime comparison 2026" 5
 
 - The API endpoint is `https://api.search.brave.com/res/v1/web/search`.
 - The header is `X-Subscription-Token`, not a bearer token.
-- For source-quality control patterns (goggles, scrape policy), the same rules from SHAKOS `system/_core/playbooks/web-research/rules/` apply — copy them in if you start running multi-source research from QUANTUM.
