@@ -36,6 +36,9 @@ async function waitForJobPostResponse(context, slug, { timeoutMs = 30000 } = {})
         const req = resp.request();
         if (req.method() !== 'POST') return;
         const u = new URL(resp.url());
+        if (process.env.HF_DEBUG === '1' && /higgsfield\.ai/.test(u.hostname)) {
+          console.error(`[ui-submit] seq=${seq} POST ${u.hostname}${u.pathname} status=${resp.status()}`);
+        }
         if (u.hostname !== 'fnf.higgsfield.ai') return;
         if (!slugRe.test(u.pathname)) {
           if (process.env.HF_DEBUG === '1' && /\/jobs\//.test(u.pathname)) {
