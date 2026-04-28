@@ -356,6 +356,19 @@ export async function runVideo(argv) {
         target = c;
         if (r === 'already_selected' || r === 'selected') break;
       }
+      if (r !== 'already_selected' && r !== 'selected') {
+        // Probe what duration options THIS model actually supports so the error is actionable.
+        const opts = await ctx.page.evaluate(() => {
+          const out = new Set();
+          document.querySelectorAll('button, [role="button"], [role="option"], [role="menuitem"], li, span, div').forEach(el => {
+            if (el.children.length > 1) return;
+            const t = (el.innerText || '').trim();
+            if (/^\d+\.?\d*\s*s$/i.test(t)) out.add(t);
+          });
+          return Array.from(out);
+        });
+        throw new Error(`Could not select duration "${argv.duration}" (tried ${candidates.join(', ')}). Model "${slug}" supports: ${opts.join(', ') || '(none detected)'}`);
+      }
       console.log(`[higgsfield] duration ${target}: ${r}`);
       params_for_state.duration = target;
     }
