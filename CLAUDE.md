@@ -15,7 +15,10 @@ QUANTUM/
 ├── _core/                       (ICM conventions and templates, source of truth)
 │   ├── CONVENTIONS.md
 │   ├── placeholder-syntax.md
-│   └── templates/
+│   ├── templates/               (workspace template; auto-applied via Pattern 17)
+│   ├── playbooks/
+│   │   └── icm-audit/           (read-only structural audit; runs every 15 min)
+│   └── skills/                  (project-specific skills; stateless callables)
 ├── raw/                         (gitignored content; structure committed)
 │   ├── slack/
 │   ├── gdrive/
@@ -82,10 +85,11 @@ Generative tools that PRODUCE media (vs. ingest personal data) live under `_core
 
 | Keyword | Action |
 |---------|--------|
-| `setup` | Run onboarding questionnaire in current workspace |
+| `setup` | Run onboarding questionnaire in current workspace. Auto-runs on workspace creation per CONVENTIONS Pattern 17. |
 | `status` | Show pipeline state for current workspace |
 | `pull` | Workspace fetches fresh data from its external source into `raw/<workspace>/` |
 | `digest` | Roll up recent activity across all workspaces (default last 7 days) |
+| `icm audit` / "run the icm audit" / "scan quantum for drift" | Read `_core/playbooks/icm-audit/PLAYBOOK.md`; run `python3 _core/playbooks/icm-audit/scripts/audit.py`. Auto-runs every 15 min via launchd `com.shakstzy.quantum-icm-audit`. Outputs at `~/.quantum/audit/latest/`. |
 | "post to IG" / "publish this reel" / "drop this on TikTok" / "upload to YouTube" / "cross-post this" | Read `_core/skills/zernio-post/SKILL.md`. Cross-platform ORGANIC publish via Zernio direct REST. `PUBLISH` gate required. `ZERNIO_API_KEY` lives in `.claude/settings.local.json`. Do NOT use for ads  -  use `zernio-ads` instead. |
 | "boost this post" / "promote this post" / "turn this into a paid ad" / "launch an ad on (Meta\|LinkedIn\|TikTok\|Pinterest\|X\|Google)" / "create a Click-to-WhatsApp ad" / "list my ad accounts" / "show my ad spend" / "ad analytics for X" / "show my campaign tree" / "pause this campaign" / "resume this campaign" / "cancel this ad" / "delete this campaign" / "duplicate this campaign" / "update my ad budget" / "connect my (Meta\|LinkedIn\|TikTok\|Pinterest\|X\|Google) ads" / "sync this customer list to a Meta audience" / "create a custom audience" / "create a lookalike audience" / "send this conversion to Meta" / "fire a CAPI event" / "log this purchase to Google Ads" | Read `_core/skills/zernio-ads/SKILL.md`. Paid ads across all six Zernio ad platforms (`metaads`, `googleads`, `linkedinads`, `tiktokads`, `pinterestads`, `xads`) via direct REST. Reads (ad accounts, analytics, tree, list audiences) are unrestricted. Every write path (boost, create, update budget, audience PII sync, conversion events, campaign delete) requires the `LAUNCH-AD` token gate (NOT `PUBLISH`). Same `ZERNIO_API_KEY` as `zernio-post`. Requires the Zernio Ads add-on enabled in billing; the skill surfaces the 403 if it is not. |
 | "send slack" / "slack <name>" / "dm <name> on slack" / "post to #<channel>" / "read #<channel>" / "search slack for X" / "who is <name> on slack" | Read `_core/skills/slack/SKILL.md`. Send/read Slack as Adithya via xoxp user token. Token in macOS Keychain `service=quantum-slack`. |
@@ -135,6 +139,8 @@ Memory tells you HOW to work with Adithya. The graph tells you WHAT Adithya is d
 ## Ground Rules
 
 - Follow ICM conventions strictly. The source of truth is `_core/CONVENTIONS.md`. Do not invent new patterns; if a new pattern is needed, propose it and update `_core/CONVENTIONS.md` first.
+- **Auto-run setup on workspace creation (Pattern 17).** Building a new workspace means: run `_core/templates/workspace/setup/questionnaire.md` interactively FIRST, collect answers, scaffold from template, substitute every `{{PLACEHOLDER}}`, verify zero `{{` remain, register in this Workspace Index, then run `python3 _core/playbooks/icm-audit/scripts/audit.py` to confirm clean. Never scaffold-then-ask.
+- **Workspaces vs skills.** Workspaces are stateful and live under `workspaces/`. Skills are stateless callables and live under `_core/skills/<name>/SKILL.md`. If a "workspace" idea has no state, it is a skill.
 - Never modify files in `raw/` after they land. Raw is immutable. (Exception: append-only entity files documented in their workspace CLAUDE.md, e.g. tinder per-person markdown.)
 - Never hand-edit `graphify-out/`. Graphify owns it. Re-run `/graphify` instead.
 - No em dashes anywhere in this repo.
@@ -211,6 +217,7 @@ Three layers keep the graph fresh once it exists. All run via launchd or git.
 | 1. Auto-sync | launchd, every 60s (`scripts/sync.sh`, plist `com.shakstzy.quantum-sync`) | stage, secret-scan, commit, pull-rebase, push | free |
 | 2. Git hooks | post-commit and post-checkout (installed by `graphify hook install`) | `graphify update` (AST refresh on code only) | free |
 | 3. Lint timer | launchd, every 2h (`scripts/graphify-lint.sh`, plist `com.shakstzy.quantum-graphify`) | `cluster-only` + `update` against the bootstrapped scope; if `check-update` flags pending semantic work, drives `/graphify` via headless `claude -p` plus a wiki-lint pass writing to `graphify-out/lint-log.md` | bundled in Claude Max (capped at $5/run) |
+| 4. ICM audit | launchd, every 15 min (`_core/playbooks/icm-audit/scripts/audit.py`, plist `com.shakstzy.quantum-icm-audit`) | read-only structural audit of workspaces and routing layers; diff-only writes to `~/.quantum/audit/runs/<ts>/`. Flags missing CLAUDE.md, missing `raw/<ws>/`, leftover `{{` placeholders (Pattern 17), em dashes, ceiling violations, registry drift. | free |
 
 Logs land in `~/Library/Logs/quantum-graphify.{log,stdout,stderr}` and `~/Library/Logs/quantum-sync.log`.
 
