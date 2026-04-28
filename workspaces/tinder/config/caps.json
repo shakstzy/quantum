@@ -1,0 +1,25 @@
+{
+  "swipes": {
+    "per_day": 100,
+    "per_session_min": 18,
+    "per_session_max": 35,
+    "right_swipe_ratio_max": 0.5,
+    "between_swipes_ms": [800, 2400],
+    "global_min_gap_ms": 950
+  },
+  "messages": {
+    "per_hour": 20,
+    "between_messages_ms": [30000, 300000],
+    "typing_ms_per_char": [60, 130]
+  },
+  "scrape": {
+    "matches_per_day": 6,
+    "thread_opens_per_session_max": 25,
+    "between_thread_opens_ms": [600, 1500]
+  },
+  "global": {
+    "skip_day_probability": 0.18,
+    "halt_state_path": "~/.quantum/tinder/.halt",
+    "rate_state_path": "~/.quantum/tinder/.rate-state.json"
+  }
+}

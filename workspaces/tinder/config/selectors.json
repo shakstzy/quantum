@@ -1,0 +1,83 @@
+{
+  "_comment": "DOM selectors for tinder.com web. Run scripts/selector-check.mjs interactively to verify after any layout drift. Each entry has selector + last_verified date + alt fallbacks.",
+  "rec_card": {
+    "selector": "[class*='recCard']",
+    "alt": ["main [role='button'][aria-label*='Profile']"],
+    "last_verified": null
+  },
+  "rec_card_name": {
+    "selector": "h1[itemprop='name'], [class*='Name']",
+    "alt": [],
+    "last_verified": null
+  },
+  "rec_card_age": {
+    "selector": "span[itemprop='age']",
+    "alt": [],
+    "last_verified": null
+  },
+  "rec_card_distance": {
+    "selector": "[class*='distance']",
+    "alt": [],
+    "last_verified": null
+  },
+  "rec_card_bio": {
+    "selector": "div[class*='Bio'] > div",
+    "alt": [],
+    "last_verified": null
+  },
+  "like_button": {
+    "selector": "button[aria-label='Like']",
+    "alt": ["button:has(svg[d*='M16'])"],
+    "last_verified": null
+  },
+  "nope_button": {
+    "selector": "button[aria-label='Nope']",
+    "alt": [],
+    "last_verified": null
+  },
+  "matches_tab": {
+    "selector": "a[href='/app/matches']",
+    "alt": ["nav a[aria-label*='Matches']"],
+    "last_verified": null
+  },
+  "matches_list_item": {
+    "selector": "a[href^='/app/messages/']",
+    "alt": [],
+    "last_verified": null
+  },
+  "thread_messages": {
+    "selector": "[class*='msg']",
+    "alt": ["main [role='log'] [data-testid*='message']"],
+    "last_verified": null
+  },
+  "thread_input": {
+    "selector": "textarea[placeholder*='Type a message']",
+    "alt": ["textarea#chatTextArea"],
+    "last_verified": null
+  },
+  "thread_send": {
+    "selector": "button[type='submit']:has-text('Send')",
+    "alt": ["button[aria-label='Send message']"],
+    "last_verified": null
+  },
+  "arkose_iframe": {
+    "selector": "iframe[title*='verification'], iframe[src*='arkoselabs'], iframe[src*='funcaptcha']",
+    "alt": [],
+    "last_verified": null
+  },
+  "face_check_prompt": {
+    "selector": "[class*='FaceCheck'], [data-testid*='selfie']",
+    "alt": [],
+    "last_verified": null
+  },
+  "rate_limit_banner": {
+    "selector": "[class*='rateLimit'], [class*='cooldown']",
+    "alt": [],
+    "last_verified": null
+  },
+  "login_wall": {
+    "selector": "button:has-text('Log in'), [data-testid='login']",
+    "alt": [],
+    "last_verified": null
+  }
+}

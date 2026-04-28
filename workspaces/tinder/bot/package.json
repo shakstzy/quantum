@@ -1,0 +1,22 @@
+{
+  "name": "quantum-tinder-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Patchright-driven Tinder automation for QUANTUM. Human-paced, ban-aversion priority. No api.gotinder.com.",
+  "scripts": {
+    "postinstall": "patchright install chromium",
+    "swipe": "node scripts/swipe.mjs",
+    "pull": "node scripts/pull.mjs",
+    "decide": "node scripts/decide.mjs",
+    "send": "node scripts/send.mjs",
+    "status": "node scripts/status.mjs",
+    "selector-check": "node scripts/selector-check.mjs",
+    "self-check": "node scripts/self-check.mjs"
+  },
+  "dependencies": {
+    "patchright": "^1.59.1",
+    "ghost-cursor-playwright": "^0.1.7",
+    "@anthropic-ai/sdk": "^0.40.0"
+  }
+}
