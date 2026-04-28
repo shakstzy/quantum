@@ -29,6 +29,16 @@ if [[ -n "$PROPS_JSON" ]]; then
   fi
   CMD+=(--props "$PROPS_JSON")
 fi
+# Optional: REMOTION_PUBLIC_DIR points the renderer at a directory whose files
+# should be addressable via staticFile(). Used when the source mp4 lives outside
+# the default project public/ directory.
+if [[ -n "${REMOTION_PUBLIC_DIR:-}" ]]; then
+  if [[ ! -d "$REMOTION_PUBLIC_DIR" ]]; then
+    echo "REMOTION_PUBLIC_DIR not a directory: $REMOTION_PUBLIC_DIR" >&2
+    exit 2
+  fi
+  CMD+=(--public-dir "$REMOTION_PUBLIC_DIR")
+fi
 
 cd "$PROJECT_DIR"
 "${CMD[@]}"

@@ -86,7 +86,14 @@ export const ClipComposition: React.FC<ClipProps> = ({
             transformOrigin: 'center center',
           }}
         >
-          <OffthreadVideo src={videoSrc.startsWith('/') ? `file://${videoSrc}` : videoSrc} muted={false} />
+          <OffthreadVideo
+            src={
+              videoSrc.startsWith('http://') || videoSrc.startsWith('https://')
+                ? videoSrc
+                : staticFile(videoSrc)
+            }
+            muted={false}
+          />
         </div>
       </AbsoluteFill>
 
