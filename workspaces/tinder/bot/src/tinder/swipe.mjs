@@ -54,8 +54,11 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     const profile = await readVisibleProfile(page);
     if (process.env.QUANTUM_TINDER_DEBUG === "1") {
       const cardCount = await page.$$eval("[class*='recCard__img'][role='img'][aria-label]", els => els.length);
-      const allAriaCards = await page.$$eval("[class*='recCard__img'][role='img'][aria-label]", els => els.slice(0, 3).map(e => e.getAttribute("aria-label")));
-      console.log(`debug: profile=${JSON.stringify(profile)} cards_found=${cardCount} sample_arias=${JSON.stringify(allAriaCards)} url=${page.url()}`);
+      const recCardCount = await page.$$eval("[class*='recCard']", els => els.length);
+      const ariaImgCount = await page.$$eval("[role='img'][aria-label]", els => els.length);
+      const likeBtn = await page.$$eval("button.gamepad-button[class*='sparks-like']", els => els.length);
+      const visibleHeadings = await page.$$eval("h1, h2, h3, button", els => els.slice(0, 8).map(e => e.textContent?.trim()).filter(Boolean));
+      console.log(`debug: cards=${cardCount} recCards=${recCardCount} ariaImgs=${ariaImgCount} likeBtn=${likeBtn} headings=${JSON.stringify(visibleHeadings)}`);
     }
     if (!profile.name && !profile.age) {
       await sleep(jitter(800, 1600));
