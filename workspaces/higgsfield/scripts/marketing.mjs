@@ -5,7 +5,7 @@
 import { launchContext } from './browser.mjs';
 import { browsePhase, pauseJitter } from './behavior.mjs';
 import { initState, slugFromPrompt, timestampForRunId, transition } from './state.mjs';
-import { downloadAll, finalize, preflight, getWallet } from './job.mjs';
+import { downloadAll, finalize, preflight, getWallet, parseCostCap, walletTotal } from './job.mjs';
 import { submitViaUI, openHistoryPanel, scrapeUserAssets, waitForNewAssets, userIdFromJwtCapture, bestDownloadUrl, enableUnlimitedToggle, uploadReferenceImages } from './ui-submit.mjs';
 import { waitForCapturedJwt } from './jwt.mjs';
 import { collectRefs } from './image.mjs';
@@ -102,7 +102,7 @@ export async function runMarketing(argv) {
     if (!wait.ok) throw new Error(`No Clerk JWT observed: ${wait.reason}`);
 
     await browsePhase(ctx.page);
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: EXPECTED_COST, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: EXPECTED_COST, jwtCapture: ctx.jwtCapture, costCap: parseCostCap(argv) });
 
     if (argv.preset) {
       const ok = await selectPresetByName(ctx.page, argv.preset);
@@ -140,8 +140,8 @@ export async function runMarketing(argv) {
     const records = await downloadAll(runDir, fresh.map(bestDownloadUrl));
     const walletAfter = await getWallet(ctx.page, ctx.jwtCapture);
     const meta = await finalize(runDir, {
-      wallet_before: walletBefore.subscription_credits,
-      wallet_after: walletAfter?.subscription_credits ?? null,
+      wallet_before: walletTotal(walletBefore),
+      wallet_after: walletTotal(walletAfter),
       job_uuid: submission.job_uuid, job: null, records,
       cmd: 'marketing', model_frontend: 'marketing-studio', model_backend: SLUG,
       prompt: argv.prompt, params: { preset: argv.preset || null, project_id: argv.projectId || null }

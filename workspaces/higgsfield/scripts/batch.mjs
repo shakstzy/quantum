@@ -25,7 +25,7 @@
 import { launchContext } from './browser.mjs';
 import { browsePhase, pause, pauseJitter } from './behavior.mjs';
 import { initState, slugFromPrompt, timestampForRunId, transition } from './state.mjs';
-import { downloadAll, finalize, preflight, getWallet } from './job.mjs';
+import { downloadAll, finalize, preflight, getWallet, parseCostCap, walletTotal } from './job.mjs';
 import {
   submitViaUI, openHistoryPanel, scrapeUserAssets, waitForNewAssets,
   userIdFromJwtCapture, bestDownloadUrl, selectPicker, enableUnlimitedToggle,
@@ -488,7 +488,7 @@ export async function runBatch(argv) {
       await preflight(ctx.page, null, {
         expectedCost: totalExpectedCost,
         jwtCapture: ctx.jwtCapture,
-        costCap: argv.costCap ? Number(argv.costCap) : 100
+        costCap: parseCostCap(argv)
       });
     } catch (e) {
       console.error(`[higgsfield-batch] preflight FAILED: ${e.message}`);

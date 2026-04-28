@@ -5,7 +5,7 @@
 import { launchContext } from './browser.mjs';
 import { browsePhase, pauseJitter } from './behavior.mjs';
 import { initState, slugFromPrompt, timestampForRunId } from './state.mjs';
-import { downloadAll, finalize, preflight, getWallet } from './job.mjs';
+import { downloadAll, finalize, preflight, getWallet, parseCostCap, walletTotal } from './job.mjs';
 import { submitViaUI, openHistoryPanel, scrapeUserAssets, waitForNewAssets, userIdFromJwtCapture, bestDownloadUrl, enableUnlimitedToggle, selectPicker, uploadReferenceImages, clearReferenceImages, clearPersistedAttachments } from './ui-submit.mjs';
 import { waitForCapturedJwt } from './jwt.mjs';
 import { transition } from './state.mjs';
@@ -315,7 +315,7 @@ export async function runVideo(argv) {
     if (cleared.changed.length) console.log(`[higgsfield] cleared persisted attachments in ${cleared.changed.length} localStorage key(s)`);
 
     await browsePhase(ctx.page);
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.cost, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.cost, jwtCapture: ctx.jwtCapture, costCap: parseCostCap(argv) });
 
     // Select the requested model in the UI (required: video page has no model selected by default).
     const picked = await selectVideoModel(ctx.page, cat.frontend_label);
@@ -414,8 +414,8 @@ export async function runVideo(argv) {
 
     const walletAfter = await getWallet(ctx.page, ctx.jwtCapture);
     const meta = await finalize(runDir, {
-      wallet_before: walletBefore.subscription_credits,
-      wallet_after: walletAfter?.subscription_credits ?? null,
+      wallet_before: walletTotal(walletBefore),
+      wallet_after: walletTotal(walletAfter),
       job_uuid: submission.job_uuid,
       job: null,
       records,

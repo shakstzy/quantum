@@ -23,6 +23,22 @@ const IMAGE_POLL_MAX_MS = 5 * 60 * 1000;
 const VIDEO_POLL_MAX_MS = 30 * 60 * 1000;
 const POLL_INTERVAL_MS = 2000;
 
+// Total spendable balance: subscription + package credits (unlim is handled separately).
+// All credit-accounting paths (preflight safety floor, finalize cost delta) must use this
+// or numbers drift apart when package_credits move.
+export function walletTotal(w) {
+  if (!w) return null;
+  return (w.subscription_credits || 0) + (w.package_credits || 0);
+}
+
+// Parse --cost-cap flag from argv. Returns a finite number or null (= use preflight default).
+export function parseCostCap(argv) {
+  const v = argv?.costCap;
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function getWallet(page, jwtCapture) {
   let t;
   try { t = await getFreshJwt(page, jwtCapture); } catch (_) { return null; }
@@ -76,7 +92,7 @@ export async function preflight(page, runDir, { expectedCost, jwtCapture, costCa
     err.code = 'SESSION_EXPIRED';
     throw err;
   }
-  const totalCredits = (wallet.subscription_credits || 0) + (wallet.package_credits || 0);
+  const totalCredits = walletTotal(wallet);
   const safety = expectedCost * 2;
   if (totalCredits < safety && !wallet.has_unlim) {
     await maybeTransition(runDir, 'aborted_precheck', { error: `insufficient credits: total ${totalCredits} (sub=${wallet.subscription_credits}, pack=${wallet.package_credits || 0}), safety floor ${safety}` });

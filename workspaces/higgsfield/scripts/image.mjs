@@ -4,7 +4,7 @@
 import { launchContext } from './browser.mjs';
 import { browsePhase, humanClick, typeHuman, pauseJitter } from './behavior.mjs';
 import { initState, readState, slugFromPrompt, timestampForRunId } from './state.mjs';
-import { downloadAll, finalize, preflight, getWallet } from './job.mjs';
+import { downloadAll, finalize, preflight, getWallet, parseCostCap, walletTotal } from './job.mjs';
 import { submitViaUI, openHistoryPanel, scrapeUserAssets, waitForNewAssets, userIdFromJwtCapture, bestDownloadUrl, enableUnlimitedToggle, selectPicker, uploadReferenceImages, clearReferenceImages, clearPersistedAttachments } from './ui-submit.mjs';
 import { transition } from './state.mjs';
 import { verifyUaChConsistency } from './fingerprint.mjs';
@@ -189,7 +189,7 @@ export async function runImage(argv) {
     await browsePhase(ctx.page);
 
     // Pre-flight: wallet check + captcha surface check
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.expected_cost, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.expected_cost, jwtCapture: ctx.jwtCapture, costCap: parseCostCap(argv) });
 
     // Before clicking Generate: open History panel and snapshot pre-existing user images.
     // Our new image(s) will appear as "fresh" entries that weren't in this baseline.
@@ -291,8 +291,8 @@ export async function runImage(argv) {
     // Finalize (metadata + wallet delta)
     const walletAfter = await getWallet(ctx.page, ctx.jwtCapture);
     const meta = await finalize(runDir, {
-      wallet_before: walletBefore.subscription_credits,
-      wallet_after: walletAfter?.subscription_credits ?? null,
+      wallet_before: walletTotal(walletBefore),
+      wallet_after: walletTotal(walletAfter),
       job_uuid: submission.job_uuid,
       job: null,
       records,
