@@ -207,17 +207,23 @@ def search(
     region_type: int | None = None,
 ) -> dict:
     if region_id is not None and region_type is not None:
-        # Manual override path: skip Brave; build the canonical URL ourselves.
-        # This is the documented escape hatch when brave-search is unauthed.
+        # Manual override: skip Brave + the HTML-parse path. We don't know the
+        # state/city slug to build the canonical URL, so go straight to the
+        # gis-csv endpoint (which only needs the numeric IDs).
         region = {
             "region_id": int(region_id),
             "region_type": int(region_type),
-            "kind": {6: "city", 2: "zip", 1: "neighborhood"}.get(int(region_type), "region"),
-            "url": f"{BASE}/city/{int(region_id)}/" if int(region_type) == 6
-                   else f"{BASE}/zipcode/{int(region_id)}",
+            "kind": {6: "city", 2: "zip", 1: "neighborhood",
+                     5: "county", 4: "state"}.get(int(region_type), "region"),
+            "url": None,
         }
-    else:
-        region = resolve_region(query)
+        return _search_via_gis(
+            region, num_homes=num_homes,
+            max_price=max_price, min_price=min_price,
+            min_beds=min_beds, min_baths=min_baths,
+            min_sqft=min_sqft, home_types=home_types,
+        )
+    region = resolve_region(query)
     filter_seg = _build_filter_segment(
         max_price=max_price, min_price=min_price, min_beds=min_beds,
         min_baths=min_baths, min_sqft=min_sqft, home_types=home_types,
