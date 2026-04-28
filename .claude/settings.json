@@ -10,6 +10,26 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/shakstzy/QUANTUM/scripts/hooks/learnings-inject.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/shakstzy/QUANTUM/scripts/hooks/learnings-session-start.sh"
+          }
+        ]
+      }
     ]
   }
 }

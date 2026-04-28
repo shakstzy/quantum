@@ -26,7 +26,8 @@ QUANTUM/
 │   ├── finance/
 │   ├── health/
 │   ├── people/
-│   └── library/
+│   ├── library/
+│   └── learnings/               (Claude-written observations; auto-injected via hook)
 ├── graphify-out/                (committed; Graphify owns this, do not hand-edit)
 ├── workspaces/                  (one ICM workspace per life domain)
 │   ├── slack/
@@ -126,6 +127,22 @@ Memory tells you HOW to work with Adithya. The graph tells you WHAT Adithya is d
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`.
 - `raw/` content is gitignored (structure tracked via `.gitkeep`). `graphify-out/` is committed so phone/web sessions can read the graph.
 - Treat all content as sensitive. This is a personal life-OS.
+
+## Learnings (self-improvement loop)
+
+Claude writes non-obvious observations to `raw/learnings/<YYYY-MM-DD>-<slug>.md`. One file per insight. Immutable after write. Format is simple markdown; no required frontmatter for v1.
+
+What qualifies (default is SKIP):
+- A failed expectation (something didn't work the way I assumed it would).
+- A pattern observed 2+ times across sessions.
+- An explicit "remember this" from Adithya.
+- A generalized cross-project pattern (redact proprietary code details).
+
+Auto-injection back into sessions is handled by two hooks wired in `.claude/settings.json`:
+- `scripts/hooks/learnings-session-start.sh` runs at session open. Lists the inventory.
+- `scripts/hooks/learnings-inject.sh` runs on every user prompt. If the store has 5 or fewer files, dumps all. Otherwise ripgreps for keywords from the prompt and injects up to 3 most-relevant files. Capped at 4000 bytes.
+
+Graphify also picks up `raw/learnings/` on the next 2h lint pass, so learnings become queryable via `/graphify query` and get cross-linked to other entities automatically.
 
 ## When You Are Stuck
 
