@@ -75,6 +75,7 @@ QUANTUM/
 | library | Manual / browser captures | Books, articles, papers, watchlists |
 | tinder | tinder.com via patchright (browser automation) | Swipes, matches, threads, outbound drafting + send. Ban-aversion is priority #1; see workspace CLAUDE.md for hard rules. |
 | contacts | macOS Contacts via JXA / osascript | Daily 4am ingest. Per-entry markdown at `raw/contacts/<slug>.md`. Auto-classified `person` / `business` / `noise`. |
+| discord | Discord DMs + group DMs (via `_core/skills/discord`) | Every 48h pull, Gemma-gated for significance, monthly shards at `raw/discord/YYYY-MM.ndjson`. Selfbot-conscious pacing. |
 
 Each workspace is self-contained per ICM. Once you cd into a workspace, that workspace's CLAUDE.md takes operational precedence over this root file.
 
