@@ -40,7 +40,8 @@ QUANTUM/
 │   ├── finance/
 │   ├── health/
 │   ├── people/
-│   └── library/
+│   ├── library/
+│   └── tinder/                  (patchright bot, no api.gotinder.com)
 └── scripts/                     (sync helpers; quantum-sync runs via launchd)
 ```
 
@@ -68,6 +69,7 @@ QUANTUM/
 | health | Apple Health exports / manual | Workouts, vitals, habits |
 | people | Manual / contacts | Friends, family, colleagues, network |
 | library | Manual / browser captures | Books, articles, papers, watchlists |
+| tinder | tinder.com via patchright (browser automation) | Swipes, matches, threads, outbound drafting + send. Ban-aversion is priority #1; see workspace CLAUDE.md for hard rules. |
 
 Each workspace is self-contained per ICM. Once you cd into a workspace, that workspace's CLAUDE.md takes operational precedence over this root file.
 

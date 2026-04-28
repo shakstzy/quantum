@@ -22,16 +22,16 @@ function passesFilter(profile, f) {
   return true;
 }
 
-export async function swipeSession(page, { sessionDurationMin, sessionDurationMax } = {}) {
+export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
   const caps = await loadCaps();
   const filter = await loadFilter();
   const cursor = await makeCursor(page);
   const sels = await selectors();
 
-  const sessionMs = jitter(
-    (sessionDurationMin ?? caps.swipes.per_session_min) * 60 * 1000 / caps.swipes.per_session_max,
-    (sessionDurationMax ?? caps.swipes.per_session_max) * 60 * 1000 / caps.swipes.per_session_min,
-  );
+  // wall-clock guard: estimate from per-session swipe count * average gap, plus 50% headroom for idle pauses
+  const avgGap = (caps.swipes.between_swipes_ms[0] + caps.swipes.between_swipes_ms[1]) / 2;
+  const estMs = caps.swipes.per_session_max * avgGap * 1.5;
+  const sessionMs = sessionMinutesMax ? sessionMinutesMax * 60 * 1000 : estMs;
   const sessionEnd = Date.now() + sessionMs;
   const sessionMaxSwipes = jitter(caps.swipes.per_session_min, caps.swipes.per_session_max + 1);
 
