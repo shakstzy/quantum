@@ -203,8 +203,21 @@ def search(
     min_sqft: int | None = None,
     home_types: list[str] | None = None,
     num_homes: int = 50,
+    region_id: int | None = None,
+    region_type: int | None = None,
 ) -> dict:
-    region = resolve_region(query)
+    if region_id is not None and region_type is not None:
+        # Manual override path: skip Brave; build the canonical URL ourselves.
+        # This is the documented escape hatch when brave-search is unauthed.
+        region = {
+            "region_id": int(region_id),
+            "region_type": int(region_type),
+            "kind": {6: "city", 2: "zip", 1: "neighborhood"}.get(int(region_type), "region"),
+            "url": f"{BASE}/city/{int(region_id)}/" if int(region_type) == 6
+                   else f"{BASE}/zipcode/{int(region_id)}",
+        }
+    else:
+        region = resolve_region(query)
     filter_seg = _build_filter_segment(
         max_price=max_price, min_price=min_price, min_beds=min_beds,
         min_baths=min_baths, min_sqft=min_sqft, home_types=home_types,
@@ -230,6 +243,13 @@ def search(
     }
 
 
+_HT_NAME_TO_UIPT = {
+    "house": "1", "condo": "2", "townhouse": "3",
+    "multi-family": "4", "multi": "4", "land": "5",
+    "other": "6", "mobile": "7", "coop": "8",
+}
+
+
 def _search_via_gis(region: dict, **kw) -> dict:
     """Fallback path: /stingray/api/gis-csv.
 
@@ -238,12 +258,16 @@ def _search_via_gis(region: dict, **kw) -> dict:
     hardcoding a city, which used to cause cross-city contamination.
     """
     s = _get_session()
+    raw_types = kw.get("home_types") or []
+    uipts = [_HT_NAME_TO_UIPT.get(t, t) for t in raw_types]
+    if not uipts:
+        uipts = ["1", "2", "3", "4", "5", "6", "7", "8"]
     params = {
         "al": 1, "num_homes": min(kw.get("num_homes", 50), 450),
         "ord": "redfin-recommended-asc", "page_number": 1,
         "region_id": region["region_id"], "region_type": region["region_type"],
         "sf": "1,2,3,5,6,7", "status": 9,
-        "uipt": ",".join(kw.get("home_types") or ["1", "2", "3", "4", "5", "6", "7", "8"]),
+        "uipt": ",".join(uipts),
         "v": 8,
     }
     if kw.get("max_price") is not None:
@@ -442,11 +466,14 @@ def main(argv=None):
     sp.add_argument("--min-beds", type=int)
     sp.add_argument("--min-baths", type=float)
     sp.add_argument("--min-sqft", type=int)
-    sp.add_argument("--home-types", help="comma-separated: house,condo,townhouse,multi,land,mobile")
+    sp.add_argument("--home-types", help="comma-separated: house,condo,townhouse,multi-family,land,mobile,coop")
     sp.add_argument("--num-homes", type=int, default=50)
+    sp.add_argument("--region-id", type=int, help="manual override; pair with --region-type")
+    sp.add_argument("--region-type", type=int, help="6=city, 2=zip, 1=neighborhood, 5=county, 4=state")
 
     sp = sub.add_parser("property", help="full details for a single listing")
     sp.add_argument("url")
+    sp.add_argument("--include-raw", action="store_true", help="include the full nested API payloads")
 
     sp = sub.add_parser("history", help="price/listing history for a property")
     sp.add_argument("url")
@@ -459,19 +486,20 @@ def main(argv=None):
     if args.cmd == "resolve":
         _print(resolve_region(args.query))
     elif args.cmd == "search":
-        ht_map = {"house": "1", "condo": "2", "townhouse": "3", "multi": "4",
-                  "land": "5", "mobile": "7", "coop": "8"}
+        # Public-URL filter slugs that Redfin's /city/.../filter/ path expects.
+        # `_search_via_gis` translates these to numeric `uipt` IDs internally.
         ht = None
         if args.home_types:
-            ht = [ht_map.get(t, t) for t in args.home_types.split(",") if t]
+            ht = [t.strip() for t in args.home_types.split(",") if t.strip()]
         _print(search(
             args.query,
             max_price=args.max_price, min_price=args.min_price,
             min_beds=args.min_beds, min_baths=args.min_baths,
             min_sqft=args.min_sqft, home_types=ht, num_homes=args.num_homes,
+            region_id=args.region_id, region_type=args.region_type,
         ))
     elif args.cmd == "property":
-        _print(property_details(args.url))
+        _print(property_details(args.url, include_raw=args.include_raw))
     elif args.cmd == "history":
         _print(price_history(args.url))
     elif args.cmd == "comps":

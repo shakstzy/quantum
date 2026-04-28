@@ -344,6 +344,7 @@ def main(argv=None):
 
     sp = sub.add_parser("property")
     sp.add_argument("url")
+    sp.add_argument("--include-raw", action="store_true", help="include the full property payload")
 
     args = ap.parse_args(argv)
     if args.cmd == "search":
@@ -352,7 +353,7 @@ def main(argv=None):
             min_beds=args.min_beds, min_baths=args.min_baths, page=args.page,
         ))
     elif args.cmd == "property":
-        _print(property_details(args.url))
+        _print(property_details(args.url, include_raw=args.include_raw))
 
 
 if __name__ == "__main__":
