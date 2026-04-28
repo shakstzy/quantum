@@ -126,13 +126,14 @@ export async function selectCinemaMode(page, mode) {
     const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
     return tabs.map((t, i) => {
       const r = t.getBoundingClientRect();
+      const visible = window.getComputedStyle(t).visibility !== 'hidden';
       return {
         idx: i,
         line1: (t.innerText || '').trim().split('\n')[0].trim(),
         aria: t.getAttribute('aria-selected'),
-        x: r.x, y: r.y, w: r.width, h: r.height
+        x: r.x, y: r.y, w: r.width, h: r.height, visible
       };
-    }).filter(x => x.line1.toLowerCase() === lblLower && x.x >= 300 && x.w > 0 && x.h > 0);
+    }).filter(x => x.line1.toLowerCase() === lblLower && x.x >= 300 && x.w >= 20 && x.h >= 20 && x.visible);
   }, label);
   for (const cand of allCandidates) {
     const handle = await page.evaluateHandle(({ idx }) => {

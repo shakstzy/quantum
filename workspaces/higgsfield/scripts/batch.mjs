@@ -502,14 +502,9 @@ export async function runBatch(argv) {
     const preBaseline = await scrapeUserAssets(ctx.page, userSubstr);
     const baselineCdns = new Set(preBaseline.map(x => x.cdn));
     // History panel is lazy-loaded: scrapeUserAssets only sees what's currently
-    // mounted (~20-30 items). Older assets that scroll into view later will leak
-    // through the !baselineCdns filter and get misattributed. Anchor on a UTC
-    // timestamp instead: only assets created at-or-after the batch start are
-    // candidates. Format matches asset filenames: YYYYMMDDHHMMSS.
-    const batchStartTs = (() => {
-      const d = new Date(); const p = n => String(n).padStart(2, '0');
-      return d.getUTCFullYear().toString() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds());
-    })();
+    // mounted. Asset filenames embed UTC YYYYMMDDHHMMSS — gate fresh assets on
+    // batchStartTs so older items that scroll into view later don't leak through.
+    const batchStartTs = timestampForRunId().replace('-', ''); // strip the '-' between date+time
     console.log(`[higgsfield-batch] baseline: ${baselineCdns.size} pre-existing user assets; gating fresh assets at ts >= ${batchStartTs}`);
 
     const unlimState = await enableUnlimitedToggle(ctx.page);
@@ -632,7 +627,7 @@ export async function runBatch(argv) {
         const walletAfter = await getWallet(ctx.page, ctx.jwtCapture).catch(() => null);
         const meta = await finalize(entry.runDir, {
           wallet_before: entry.wallet_before,
-          wallet_after: walletAfter?.subscription_credits ?? null,
+          wallet_after: walletTotal(walletAfter),
           job_uuid: uuid,
           job: null,
           records,
