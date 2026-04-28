@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # quantum-graphify — periodic graphify refresh + conditional Claude lint
 # Runs via launchd every 2h.
-# - First run (no graph yet): full bootstrap build with --wiki --obsidian.
-# - Subsequent runs: free cluster-only + check-update; full rebuild + lint only if check-update flags pending work.
+#
+# Architecture note: `graphify` is BOTH a CLI (free ops: cluster-only, check-update,
+# update, query, path, explain) AND a Claude skill (`/graphify`) that drives the
+# full LLM-backed semantic build. The full build is NOT a CLI command — it must
+# be invoked through Claude. So:
+#   - Free CLI ops (cluster-only, check-update, update) run directly.
+#   - Full builds (bootstrap + semantic re-extract) shell out to `claude -p "/graphify ..."`.
 set -uo pipefail
 
 REPO="/Users/shakstzy/QUANTUM"
 LOG="${HOME}/Library/Logs/quantum-graphify.log"
 LOCK_DIR="/tmp/quantum-graphify.lock.d"
 OBSIDIAN_DIR="graphify-out/obsidian"
+CLAUDE_TOOLS="Read,Edit,Write,Glob,Grep,Bash"
 
 mkdir -p "$(dirname "$LOG")"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
@@ -29,14 +35,16 @@ if [[ -z "$(find raw -type f ! -name '.gitkeep' ! -path 'raw/.ingest-log/*' 2>/d
   exit 0
 fi
 
-# Note: `graphify update` (AST refresh) is handled by the post-commit hook
-# and the auto-sync committer (~60s cadence), so we skip it here to avoid duplication.
-# This timer's job is the things git hooks DON'T cover: re-clustering, semantic re-extract, lint, and the first build.
-
 # --- Bootstrap path: graphify-out/graph.json doesn't exist yet ---
+# Drive the /graphify skill via headless Claude so it runs the full LLM pipeline
+# and emits wiki/ + obsidian/ vault.
 if [[ ! -f graphify-out/graph.json ]]; then
-  log "no existing graph.json — running first full build with --wiki --obsidian"
-  if graphify . --wiki --obsidian --obsidian-dir "$OBSIDIAN_DIR" >> "$LOG" 2>&1; then
+  log "no existing graph.json — bootstrapping via 'claude -p /graphify . --wiki --obsidian'"
+  if claude -p \
+       --add-dir "$REPO" \
+       --allowedTools "$CLAUDE_TOOLS" \
+       "/graphify . --wiki --obsidian --obsidian-dir $OBSIDIAN_DIR" \
+       >> "$LOG" 2>&1; then
     log "bootstrap build OK"
   else
     log "bootstrap build FAILED — see log; will retry next tick"
@@ -47,14 +55,24 @@ if [[ ! -f graphify-out/graph.json ]]; then
 fi
 
 # --- Steady-state path ---
+
+# Free re-cluster on the existing graph.
 graphify cluster-only . >> "$LOG" 2>&1 || log "graphify cluster-only failed (non-fatal)"
 
+# Free AST refresh for any code changes since last tick (idempotent).
+graphify update . >> "$LOG" 2>&1 || log "graphify update failed (non-fatal)"
+
+# Decide whether semantic re-extract is needed.
 PENDING="$(graphify check-update . 2>&1 || true)"
 log "check-update: $PENDING"
 
 if echo "$PENDING" | grep -qiE "pending|needs.?update|stale|out.?of.?date"; then
-  log "semantic re-extract flagged — running full graphify . --wiki --obsidian (Max-bundled)"
-  graphify . --wiki --obsidian --obsidian-dir "$OBSIDIAN_DIR" >> "$LOG" 2>&1 || log "full graphify failed (non-fatal)"
+  log "semantic re-extract flagged — invoking '/graphify . --wiki --obsidian' via claude -p"
+  claude -p \
+    --add-dir "$REPO" \
+    --allowedTools "$CLAUDE_TOOLS" \
+    "/graphify . --wiki --obsidian --obsidian-dir $OBSIDIAN_DIR" \
+    >> "$LOG" 2>&1 || log "full graphify (via claude) failed (non-fatal)"
 
   log "running claude lint"
   claude -p \
