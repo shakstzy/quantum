@@ -1,6 +1,6 @@
 ---
 name: instagram-summary
-description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Final synthesis runs through the local Gemma server. Trigger when Adithya pastes an instagram.com/p/, /reel/, /reels/, or /tv/ URL and asks to summarize, explain, or extract takeaways.
+description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Final multimodal synthesis is delegated to the `local-llm` skill (persistent local Gemma daemon). Trigger when Adithya pastes an instagram.com/p/, /reel/, /reels/, or /tv/ URL and asks to summarize, explain, or extract takeaways.
 allowed-tools: Bash
 ---
 
