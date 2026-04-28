@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "render": "remotion render src/index.ts Demo out/demo.mp4",
-    "studio": "remotion studio src/index.ts"
+    "studio": "remotion studio src/index.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@babel/parser": "7.28.5",
@@ -14,5 +15,10 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "remotion": "4.0.454"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.7.3"
   }
 }
