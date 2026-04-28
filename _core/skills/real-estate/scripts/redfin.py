@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from typing import Any
@@ -103,8 +102,14 @@ def _cache_entry(ctx: dict, path_prefix: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _brave_search_first_redfin_url(query: str) -> str | None:
-    """Use the brave-search skill to find the Redfin URL for a query."""
-    brave = "/Users/shakstzy/QUANTUM/_core/skills/brave-search/search.sh"
+    """Use the brave-search skill to find the Redfin URL for a query.
+
+    Resolves the brave-search shell script relative to this skill's location
+    (../../brave-search/search.sh under _core/skills/) so the path stays
+    valid even if the QUANTUM repo is moved or the user changes.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    brave = os.path.normpath(os.path.join(here, "..", "..", "brave-search", "search.sh"))
     if not os.path.exists(brave):
         return None
     q = f"site:redfin.com {query}"
@@ -226,10 +231,15 @@ def search(
 
 
 def _search_via_gis(region: dict, **kw) -> dict:
-    """Fallback path: /stingray/api/gis-csv."""
+    """Fallback path: /stingray/api/gis-csv.
+
+    The `market` param is informational only when `region_id` + `region_type`
+    are supplied; results scope to the region. We omit it rather than
+    hardcoding a city, which used to cause cross-city contamination.
+    """
     s = _get_session()
     params = {
-        "al": 1, "market": "austin", "num_homes": min(kw.get("num_homes", 50), 450),
+        "al": 1, "num_homes": min(kw.get("num_homes", 50), 450),
         "ord": "redfin-recommended-asc", "page_number": 1,
         "region_id": region["region_id"], "region_type": region["region_type"],
         "sf": "1,2,3,5,6,7", "status": 9,
