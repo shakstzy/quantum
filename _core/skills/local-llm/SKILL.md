@@ -40,7 +40,8 @@ Do NOT fire for:
 - **Cold start:** ~30s on first request after boot. Warm thereafter.
 - **Latency (warm):** text 1-3s; vision 1-4 images 5-15s.
 - **Context limit:** ~32k combined input+output. Vision images count.
-- **Resident memory:** ~22GB unified once warm.
+- **Resident memory:** ~22GB unified once warm (16GB RSS as reported by `ps`).
+- **Idle cost:** 0% CPU when no request is in flight (process sleeps in `accept()`). No measurable battery drain idle. Don't stop the daemon for "battery" reasons — stopping only saves RAM, not power.
 
 ## Persistence model
 
