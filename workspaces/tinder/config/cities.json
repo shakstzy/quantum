@@ -1,0 +1,11 @@
+{
+  "_comment": "City buckets for raw entity slugs. Tinder shows a profile's distance from Adithya's current location (Austin). Phone area codes resolve to cities when known. SD rolls into LA per geographic SoCal grouping.",
+  "home": "austin",
+  "buckets": {
+    "austin": { "label": "Austin", "tx_distance_max_mi": 100, "area_codes": ["512", "737", "210", "830", "254"] },
+    "sf":     { "label": "SF",     "area_codes": ["415", "628", "510", "925", "650", "408", "669"] },
+    "la":     { "label": "LA",     "area_codes": ["213", "310", "323", "424", "562", "626", "661", "747", "818", "858", "619", "760", "442", "657", "714", "949", "909", "951"] },
+    "nyc":    { "label": "NYC",    "area_codes": ["212", "332", "646", "718", "917", "347", "929"] }
+  },
+  "_renaming_rule": "On scrape, recompute city. If it changed, rename the file (slug = first-source-city) and add the old slug to previous_slugs[] in frontmatter so wiki links stay resolvable."
+}
