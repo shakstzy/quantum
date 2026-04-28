@@ -130,13 +130,27 @@ Memory tells you HOW to work with Adithya. The graph tells you WHAT Adithya is d
 ## Ground Rules
 
 - Follow ICM conventions strictly. The source of truth is `_core/CONVENTIONS.md`. Do not invent new patterns; if a new pattern is needed, propose it and update `_core/CONVENTIONS.md` first.
-- Never modify files in `raw/` after they land. Raw is immutable.
+- Never modify files in `raw/` after they land. Raw is immutable. (Exception: append-only entity files documented in their workspace CLAUDE.md, e.g. tinder per-person markdown.)
 - Never hand-edit `graphify-out/`. Graphify owns it. Re-run `/graphify` instead.
 - No em dashes anywhere in this repo.
 - Folders and files: `lowercase-with-hyphens`. Stage folders use zero-padded numbers: `01-pull`, `02-summarize`, etc.
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`.
 - `raw/` content is gitignored (structure tracked via `.gitkeep`). `graphify-out/` is committed so phone/web sessions can read the graph.
 - Treat all content as sensitive. This is a personal life-OS.
+
+### Raw deposits MUST be graph-linkable
+
+Anything written into `raw/<workspace>/` must be ingestible by Graphify as a node with discoverable edges. Random shards are not allowed.
+
+Required for every raw file:
+
+1. **Stable, semantic slug in the filename.** Examples: `caroline-tinder-austin.md`, `2026-04-28-investor-call.md`, `chase-checking.md`. Never UUIDs alone, never random hashes alone, never opaque IDs.
+2. **Frontmatter with foreign keys.** YAML at top of every markdown raw file. Include the natural identifiers other workspaces could cross-reference: `phone` (links to `imessage`), `email` (links to `email`), `match_id` / `person_id` (system IDs), `slug`, `source`, `city`, etc.
+3. **Cross-workspace links go in frontmatter.** Use `links: ["<slug>"]` or wikilinks `[[<slug>]]` in body to reference other entities. If a tinder match has a phone, that phone IS the link to her iMessage thread. Make it discoverable.
+4. **Renamings preserve provenance.** If a slug changes (e.g. city re-bucketing), add the old slug to `previous_slugs: [...]` in frontmatter so backlinks resolve.
+5. **One entity per file when the data is per-entity.** Don't shard people across NDJSON months — one person, one file, append over time. Use NDJSON only for high-volume per-event logs that don't have a per-entity owner (e.g. swipe sweeps, page views).
+
+If a raw deposit can't satisfy these, it doesn't belong in `raw/`. Stash it in the workspace's own state dir or in `~/.quantum/<workspace>/` instead.
 
 ## Learnings (self-improvement loop)
 
