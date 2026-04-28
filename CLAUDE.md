@@ -77,6 +77,7 @@ Each workspace is self-contained per ICM. Once you cd into a workspace, that wor
 | `status` | Show pipeline state for current workspace |
 | `pull` | Workspace fetches fresh data from its external source into `raw/<workspace>/` |
 | `digest` | Roll up recent activity across all workspaces (default last 7 days) |
+| "post to IG" / "publish this reel" / "drop this on TikTok" / "upload to YouTube" / "cross-post this" | Read `~/SHAKOS/system/_core/playbooks/zernio-post/PLAYBOOK.md`. Cross-platform publish via Zernio direct REST. `PUBLISH` gate required. Requires `ZERNIO_API_KEY` in env. |
 | `/graphify raw/ --update` | Refresh the knowledge graph from new raw deposits |
 | `/graphify query "..."` | Query the graph by question |
 | `/graphify path "A" "B"` | Trace shortest path between two concepts |
