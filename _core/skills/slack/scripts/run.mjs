@@ -6,9 +6,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import readline from "node:readline";
 
-const KEYCHAIN_SERVICE = "shakos-slack";
+const KEYCHAIN_SERVICE = "quantum-slack";
 const ACCOUNT = process.env.SLACK_ACCOUNT || "eclipse-labs";
-const REQUIRE_CONFIRM = process.env.SHAKOS_SLACK_REQUIRE_CONFIRM === "1";
+const REQUIRE_CONFIRM = process.env.QUANTUM_SLACK_REQUIRE_CONFIRM === "1";
 const API = "https://slack.com/api";
 
 function getToken() {
@@ -252,7 +252,7 @@ Verbs:
 
 Env:
   SLACK_ACCOUNT                    keychain account name (default: eclipse-labs)
-  SHAKOS_SLACK_REQUIRE_CONFIRM=1   prompt for CONFIRM before send (default: off)`);
+  QUANTUM_SLACK_REQUIRE_CONFIRM=1   prompt for CONFIRM before send (default: off)`);
   process.exit(verb ? 2 : 0);
 }
 

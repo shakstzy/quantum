@@ -56,7 +56,7 @@ int main(int argc, const char *argv[]) {
       ? [NSString stringWithFormat:@"mailto:%@", input]
       : [NSString stringWithFormat:@"tel:%@", input];
     NSString *service = @"com.apple.madrid";
-    NSString *listenerID = @"com.shakos.ids-query";
+    NSString *listenerID = @"com.quantum.ids-query";
 
     id controller = [clazz sharedInstance];
     if ([controller respondsToSelector:@selector(addListenerID:forService:)]) {

@@ -37,8 +37,8 @@ If any required field is missing, stop and ask.
 ## Procedure
 
 1. **Verify auth.** Run `node scripts/run.mjs whoami`. Confirm `ok: true` and the expected user/team. If the token is invalid, rotate it (see `references/scopes.md` and `rules/rotate.md` once added).
-2. **Pick account.** Default is `eclipse-labs`. Override with `SLACK_ACCOUNT=<name>` env var. Token resolves from Keychain `service=shakos-slack, account=<name>`.
-3. **Preview writes.** For `send`, print the target and body to stderr before the API call. Default is send-immediately (mirrors iMessage, see `rules/send-gate.md`). Opt-in `SHAKOS_SLACK_REQUIRE_CONFIRM=1` gates on the literal `CONFIRM` token.
+2. **Pick account.** Default is `eclipse-labs`. Override with `SLACK_ACCOUNT=<name>` env var. Token resolves from Keychain `service=quantum-slack, account=<name>`.
+3. **Preview writes.** For `send`, print the target and body to stderr before the API call. Default is send-immediately (mirrors iMessage, see `rules/send-gate.md`). Opt-in `QUANTUM_SLACK_REQUIRE_CONFIRM=1` gates on the literal `CONFIRM` token.
 4. **Execute.** Run the verb. Responses are JSON on stdout; errors on stderr with non-zero exit.
 5. **Audit.** Run the Audit table below.
 
@@ -64,7 +64,7 @@ Slack Web API is the authoritative surface for edge cases. Do not re-document en
 | Token scope sufficient | The verb's required scope is in `auth.test` response headers (see `references/scopes.md`) |
 | Target unambiguous | Target resolved to exactly one channel/user, not a prefix-collision hit |
 | Body preserved | Newlines and code blocks survived round-trip (fenced ``` blocks untouched) |
-| Send gate honored | If `SHAKOS_SLACK_REQUIRE_CONFIRM=1`, user typed literal `CONFIRM` |
+| Send gate honored | If `QUANTUM_SLACK_REQUIRE_CONFIRM=1`, user typed literal `CONFIRM` |
 | No token leak | Token never printed to stdout, stderr, or logs |
 | Error surfaced | Non-`ok` responses raised; Slack `error` field included in the failure message |
 
@@ -84,8 +84,8 @@ Slack Web API is the authoritative surface for edge cases. Do not re-document en
 ## Security notes
 
 - Token is `xoxp-*`, a USER token. It acts as Adithya everywhere. Treat like a password.
-- Storage: macOS Keychain `service=shakos-slack, account=<workspace-slug>`. Never write the token to files, env exports in shell history, or shell aliases. The script reads Keychain at call time.
-- Rotation: at `api.slack.com/apps/<app-id>/oauth`, revoke and regenerate. Update Keychain via `security add-generic-password -s shakos-slack -a <workspace> -w "xoxp-..." -U`. No other file touches required.
+- Storage: macOS Keychain `service=quantum-slack, account=<workspace-slug>`. Never write the token to files, env exports in shell history, or shell aliases. The script reads Keychain at call time.
+- Rotation: at `api.slack.com/apps/<app-id>/oauth`, revoke and regenerate. Update Keychain via `security add-generic-password -s quantum-slack -a <workspace> -w "xoxp-..." -U`. No other file touches required.
 - If a token appears in chat, logs, or a commit, rotate immediately. Slack's token leak detector may also revoke it automatically.
 
 ## Known limitations

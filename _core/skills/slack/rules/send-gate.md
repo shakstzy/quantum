@@ -18,7 +18,7 @@ If the agent is wrong about target or body, Adithya sees the preview flash by an
 
 ## When to enable the gate
 
-Set `SHAKOS_SLACK_REQUIRE_CONFIRM=1` in the environment when:
+Set `QUANTUM_SLACK_REQUIRE_CONFIRM=1` in the environment when:
 
 - **Unattended cron or scheduled agent.** No human at the keyboard. The gate becomes a stop-check: if the agent hit `send` during an automation, the run will block on stdin and eventually time out rather than blasting a channel.
 - **Ambiguous identity.** The agent is about to post to a channel it cannot positively identify (name collision between `#eng-general` and `#eng-general-2`, or username shared between two Adithyas).
@@ -41,7 +41,7 @@ With the gate on, the script reads one line from stdin. Anything other than the 
 1. Pass the body as argv instead when gating is required.
 2. Use a heredoc with a visible body, then confirm interactively:
    ```
-   SHAKOS_SLACK_REQUIRE_CONFIRM=1 node scripts/run.mjs send "#channel" "hello team"
+   QUANTUM_SLACK_REQUIRE_CONFIRM=1 node scripts/run.mjs send "#channel" "hello team"
    # script prints preview, waits on stdin, types CONFIRM
    ```
 
