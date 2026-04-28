@@ -2,7 +2,8 @@ import { selectors } from "../runtime/detection.mjs";
 import { openThread } from "./page.mjs";
 import { humanClick, humanType, makeCursor, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { scanForHalts } from "../runtime/detection.mjs";
-import { logSent } from "../runtime/logger.mjs";
+import { logSession } from "../runtime/logger.mjs";
+import { findEntityByMatchId, appendOutboundEvent, appendMessages } from "../runtime/entity-store.mjs";
 import { checkAndIncrement, loadCaps } from "../runtime/caps.mjs";
 
 async function pickFirst(page, sel) {
@@ -44,6 +45,19 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   }
 
   await sleep(jitter(800, 1800));
-  await logSent({ match_id: matchId, text, mode, draft_id: draftId, lint_score: lintScore });
+
+  const entity = await findEntityByMatchId(matchId);
+  if (entity) {
+    await appendOutboundEvent(entity.slug, {
+      event: "sent",
+      mode,
+      intent: "auto-or-hitl",
+      draftId,
+      text,
+      lintPass: lintScore === 1,
+    });
+    await appendMessages(entity.slug, [{ direction: "out", text, ts: new Date().toISOString() }]);
+  }
+  await logSession({ event: "send", match_id: matchId, mode, draft_id: draftId, slug: entity?.slug || null });
   return { sent: true };
 }

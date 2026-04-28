@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Pre-flight: env, deps, profile dir, halt state. Does NOT launch a browser.
+// Pre-flight: deps, profile dir, halt state, claude CLI presence. Does NOT launch a browser.
 import { access, stat } from "node:fs/promises";
-import { PROFILE_DIR, CAPS_FILE, SELECTORS_FILE, FILTER_FILE, VOICE_DIR } from "../src/runtime/paths.mjs";
+import { execFile as _execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { PROFILE_DIR, CAPS_FILE, SELECTORS_FILE, FILTER_FILE, VOICE_DIR, CONFIG_DIR } from "../src/runtime/paths.mjs";
+import { resolve as resolvePath } from "node:path";
 import { isHalted, readHaltReason } from "../src/runtime/halt.mjs";
 
+const execFile = promisify(_execFile);
 const checks = [];
 function ok(name) { checks.push({ name, status: "ok" }); }
 function fail(name, why) { checks.push({ name, status: "FAIL", why }); }
@@ -11,13 +15,14 @@ function warn(name, why) { checks.push({ name, status: "warn", why }); }
 
 async function exists(p) { try { await access(p); return true; } catch { return false; } }
 
-if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY.length > 30) ok("ANTHROPIC_API_KEY");
-else fail("ANTHROPIC_API_KEY", "missing or too short");
+try { await execFile("claude", ["--version"], { timeout: 5000 }); ok("claude CLI"); }
+catch { fail("claude CLI", "not on PATH; needed for drafting (no API key approach)"); }
 
 if (process.env.QUANTUM_SELF_PHONE) ok("QUANTUM_SELF_PHONE");
 else warn("QUANTUM_SELF_PHONE", "not set; HITL notifications disabled");
 
-for (const [name, p] of [["caps.json", CAPS_FILE], ["selectors.json", SELECTORS_FILE], ["filter.json", FILTER_FILE]]) {
+const citiesFile = resolvePath(CONFIG_DIR, "cities.json");
+for (const [name, p] of [["caps.json", CAPS_FILE], ["selectors.json", SELECTORS_FILE], ["filter.json", FILTER_FILE], ["cities.json", citiesFile]]) {
   if (await exists(p)) ok(name); else fail(name, `missing: ${p}`);
 }
 
@@ -41,9 +46,6 @@ let cursorOk = true;
 try { await import("ghost-cursor-playwright"); } catch { cursorOk = false; }
 if (cursorOk) ok("ghost-cursor-playwright"); else fail("ghost-cursor-playwright", "not installed");
 
-let sdkOk = true;
-try { await import("@anthropic-ai/sdk"); } catch { sdkOk = false; }
-if (sdkOk) ok("@anthropic-ai/sdk"); else fail("@anthropic-ai/sdk", "not installed");
 
 const anyFail = checks.some(c => c.status === "FAIL");
 for (const c of checks) console.log(`${c.status.padEnd(4)} ${c.name}${c.why ? ` — ${c.why}` : ""}`);

@@ -15,8 +15,7 @@
     "self-check": "node scripts/self-check.mjs"
   },
   "dependencies": {
-    "patchright": "^1.59.4",
     "ghost-cursor-playwright": "^2.1.0",
-    "@anthropic-ai/sdk": "^0.91.1"
+    "patchright": "^1.59.4"
   }
 }

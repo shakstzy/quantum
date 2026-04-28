@@ -48,15 +48,40 @@ export async function scrapeMatches(page) {
     matches.push({ matchId, href });
   }
 
-  await logMatch({ event: "list_snapshot", count: matches.length, ids: matches.map(m => m.matchId) });
+  await logSession({ event: "matches_list_snapshot", count: matches.length, ids: matches.map(m => m.matchId) });
   return matches;
 }
 
-export async function scrapeThread(page, matchId, { maxThreads } = {}) {
+// Upsert a match's profile snapshot into its entity file. If we don't yet know
+// the person's name we can't slug them, so we skip — the next pass that opens
+// their thread will discover the name from the header.
+export async function upsertMatchProfile({ matchId, personId, name, profile, phone = null }) {
+  if (!name) return null;
+  return await upsertMatch({ matchId, personId, name, source: "tinder", profile, phone });
+}
+
+export async function scrapeThread(page, matchId, { name = null, profile = {} } = {}) {
   const sels = await selectors();
   const caps = await loadCaps();
   await openThread(page, matchId);
   await scanForHalts(page);
+
+  // Try to read the displayed name from the thread header if not provided.
+  let displayName = name;
+  if (!displayName) {
+    const headerCandidates = ["h1", "header h1", "[class*='matchName']", "[class*='name']"];
+    for (const sel of headerCandidates) {
+      try {
+        const t = (await page.textContent(sel))?.trim();
+        if (t && t.length < 60 && !/messages?$/i.test(t)) { displayName = t; break; }
+      } catch { /* skip */ }
+    }
+  }
+
+  let entityResult = null;
+  if (displayName) {
+    entityResult = await upsertMatch({ matchId, personId: null, name: displayName, source: "tinder", profile });
+  }
 
   const { els } = await pickAll(page, sels.thread_messages);
   const messages = [];
@@ -65,13 +90,15 @@ export async function scrapeThread(page, matchId, { maxThreads } = {}) {
     if (!text) continue;
     const cls = await el.getAttribute("class") || "";
     const direction = /out|sent|from-me|self/i.test(cls) ? "out" : "in";
-    messages.push({ direction, text });
+    messages.push({ direction, text, ts: null });
   }
 
-  for (const m of messages) {
-    await logThreadMessage({ match_id: matchId, ...m });
+  let added = 0;
+  if (entityResult?.slug && messages.length) {
+    const result = await appendMessages(entityResult.slug, messages);
+    added = result.added;
   }
 
   await idlePause({ min: caps.scrape.between_thread_opens_ms[0], max: caps.scrape.between_thread_opens_ms[1] });
-  return { matchId, messages };
+  return { matchId, slug: entityResult?.slug || null, messages_total: messages.length, messages_new: added };
 }
