@@ -19,9 +19,9 @@ Output ONLY a JSON object. No prose, no markdown fences, no explanation. The sch
 If a field cannot be determined from the content, set it to null. Do not guess celebrity-rate hype numbers; if the page only claims "up to $50/1K" with no paid-out evidence, set rate to the conservative end (whatever has paid-out evidence).
 
 Reject hard:
-- Anything matching `bet365|draftkings|stake\.com|sportsbook|casino|pump|moon|altcoin shill|presale memecoin|onlyfans|escort|red pill|vaccines? cause` — set niche to the matching `*-banned` value.
-- Anything advertising a rate above $10/1K — keep the rate as stated but set notes to "impossible_cpm: <value>".
+- Anything matching `bet365|draftkings|stake\.com|sportsbook|casino|pump|moon|altcoin shill|presale memecoin|onlyfans|escort|red pill|vaccines? cause`: set niche to the matching `*-banned` value.
+- Anything advertising a rate above $10/1K: keep the rate as stated but set notes to "impossible_cpm: <value>".
 
 INPUT BEGINS:
 
-{{INPUT}}
+__INPUT__

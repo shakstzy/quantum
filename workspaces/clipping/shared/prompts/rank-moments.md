@@ -13,8 +13,8 @@ Reject:
 - Moments that only work if you saw the previous 10 minutes (no self-contained hook).
 - Anything matching gambling, sportsbook, casino, pump-and-dump crypto, OnlyFans, conspiracy, "guaranteed returns", or get-rich-quick claims.
 
-Window: {{WINDOW_START}}s to {{WINDOW_END}}s of the source.
-Pick up to {{TOP_N}} moments from this window.
+Window: __WINDOW_START__s to __WINDOW_END__s of the source.
+Pick up to __TOP_N__ moments from this window.
 
 Return ONLY a JSON array. No prose, no markdown fences. Schema:
 
@@ -38,4 +38,4 @@ Constraints:
 
 TRANSCRIPT WINDOW:
 
-{{TRANSCRIPT_WINDOW}}
+__TRANSCRIPT_WINDOW__

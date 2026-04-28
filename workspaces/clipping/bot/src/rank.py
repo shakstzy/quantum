@@ -52,10 +52,10 @@ def rank_source(source_id: int, top: int = 5, model: str = "sonnet") -> list[dic
     prompt_template = load_prompt("rank-moments")
     out: list[dict] = []
     for win_start, win_end, text in chunk_segments(segments):
-        prompt = prompt_template.replace("{{WINDOW_START}}", f"{win_start:.1f}") \
-                                .replace("{{WINDOW_END}}", f"{win_end:.1f}") \
-                                .replace("{{TRANSCRIPT_WINDOW}}", text) \
-                                .replace("{{TOP_N}}", str(top))
+        prompt = prompt_template.replace("__WINDOW_START__", f"{win_start:.1f}") \
+                                .replace("__WINDOW_END__", f"{win_end:.1f}") \
+                                .replace("__TRANSCRIPT_WINDOW__", text) \
+                                .replace("__TOP_N__", str(top))
         try:
             cands = claude_json(prompt, model=model, timeout_s=180)
         except Exception as e:

@@ -1,4 +1,4 @@
-# clipping — Top-Level Task Routing
+# clipping  -  Top-Level Task Routing
 
 Pattern 6: routing only. Definitions live elsewhere.
 

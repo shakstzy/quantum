@@ -52,8 +52,8 @@ State paths:
 - Logs: `~/.quantum/clipping/logs/`
 
 Raw deposits (immutable, ingested by Graphify):
-- `raw/clipping/campaigns/<slug>.md` — one per verified campaign with frontmatter
-- `raw/clipping/2026-MM-DD-<clip-slug>.md` — one per published clip with cross-links
+- `raw/clipping/campaigns/<slug>.md` is one per verified campaign with frontmatter
+- `raw/clipping/2026-MM-DD-<clip-slug>.md` is one per published clip with cross-links
 
 ## Hard Rules
 

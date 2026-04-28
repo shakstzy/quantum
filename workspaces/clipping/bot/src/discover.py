@@ -86,7 +86,7 @@ def slugify(payer: str, niche: str, source: str) -> str:
 
 
 def discover(text: str, source: str, url: str | None = None) -> int | None:
-    prompt = load_prompt("extract-campaign").replace("{{INPUT}}", text[:30000])
+    prompt = load_prompt("extract-campaign").replace("__INPUT__", text[:30000])
     extracted = claude_json(prompt)
     if not isinstance(extracted, dict):
         print("extractor returned non-dict; skipping", file=sys.stderr)
