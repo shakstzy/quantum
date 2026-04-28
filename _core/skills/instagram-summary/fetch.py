@@ -149,7 +149,7 @@ LOCAL_LLM_URL = "http://127.0.0.1:8765/v1/chat/completions"
 def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str = "") -> str:
     """Vision+text synthesis via the shared local-llm server (mlx_vlm.server, Gemma 4 26B-A4B).
 
-    Server contract: system/_core/playbooks/local-llm/SKILL.md.
+    Server contract: _core/skills/local-llm/SKILL.md.
     No in-process MLX load; the daemon stays warm across calls.
     """
     import base64
@@ -196,9 +196,9 @@ def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str 
         sys.exit(
             f"local-llm server unreachable at {LOCAL_LLM_URL}: {e}\n"
             f"Ensure the shared local-llm skill is installed and running:\n"
-            f"  bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/status.sh\n"
+            f"  bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/status.sh\n"
             f"If not installed:\n"
-            f"  bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/install.sh"
+            f"  bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/install.sh"
         )
     return data["choices"][0]["message"]["content"]
 
