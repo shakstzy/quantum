@@ -33,11 +33,12 @@ PACE_SEC = 0.1  # Drive quota is roomier (12k/min/user); 10/sec safe
 MAX_RETRIES = 6
 HEAVY_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
 
-# Native Google formats -> export format.
+# Native Google formats -> (export-format, output-ext, post-process: 'none'|'markitdown')
+# Slides export to .md is rejected by gog (use pdf|pptx); we go pptx -> markitdown.
 NATIVE_EXPORTS = {
-    "application/vnd.google-apps.document": ("md", "md"),
-    "application/vnd.google-apps.presentation": ("md", "md"),
-    "application/vnd.google-apps.spreadsheet": ("csv", "csv"),
+    "application/vnd.google-apps.document":     ("md",   "md",   "none"),
+    "application/vnd.google-apps.spreadsheet":  ("csv",  "csv",  "none"),
+    "application/vnd.google-apps.presentation": ("pptx", "pptx", "markitdown"),
 }
 
 # Office / web formats -> download, then markitdown.
@@ -205,14 +206,37 @@ def main() -> int:
 
             try:
                 if decision == "native":
-                    fmt, ext = NATIVE_EXPORTS[mime]
-                    out_path = md_dir / f"{fid}.{ext}"
-                    subprocess.run(
-                        ["gog", "-a", account, "drive", "download", fid,
-                         "--format", fmt, "--out", str(out_path)],
-                        check=True, capture_output=True, text=True, timeout=120,
-                    )
-                    counts["native"] += 1
+                    fmt, ext, post = NATIVE_EXPORTS[mime]
+                    if post == "markitdown":
+                        raw_path = files_dir / f"{fid}.{ext}"
+                        md_path = md_dir / f"{fid}.md"
+                        subprocess.run(
+                            ["gog", "-a", account, "drive", "download", fid,
+                             "--format", fmt, "--out", str(raw_path)],
+                            check=True, capture_output=True, text=True, timeout=300,
+                        )
+                        md_proc = subprocess.run(
+                            ["markitdown", str(raw_path), "-o", str(md_path)],
+                            check=False, capture_output=True, text=True, timeout=300,
+                        )
+                        if md_proc.returncode == 0 and md_path.exists() and md_path.stat().st_size > 0:
+                            try:
+                                raw_path.unlink()
+                            except OSError:
+                                pass
+                            counts["native"] += 1
+                        else:
+                            err_fh.write(f"{fid}\tmarkitdown(slides) failed: {md_proc.stderr.strip()[:300]}\n")
+                            err_fh.flush()
+                            counts["fail"] += 1
+                    else:
+                        out_path = md_dir / f"{fid}.{ext}"
+                        subprocess.run(
+                            ["gog", "-a", account, "drive", "download", fid,
+                             "--format", fmt, "--out", str(out_path)],
+                            check=True, capture_output=True, text=True, timeout=120,
+                        )
+                        counts["native"] += 1
                 elif decision == "plaintext":
                     ext = safe_ext(f, "txt")
                     out_path = files_dir / f"{fid}.{ext}"
