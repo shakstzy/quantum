@@ -1,6 +1,6 @@
 // City resolver. Buckets a Tinder profile into a city slug for graph linking.
 // Strategy: if phone known + area code maps -> use that. Else use Tinder distance from home (Austin).
-// SHAKOS-imported and current-day data both default to "austin" when distance < 100mi.
+// Default to "austin" when distance < 100mi.
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";

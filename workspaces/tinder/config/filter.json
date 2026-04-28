@@ -1,5 +1,5 @@
 {
-  "_comment": "Right-swipe rule. Mirrors SHAKOS swipe-filter.md. Update there if the philosophy changes; this file is the machine-readable cap.",
+  "_comment": "Right-swipe rule. Mirrors config/voice/swipe-filter.md. Update there if the philosophy changes; this file is the machine-readable cap.",
   "age_min": 19,
   "age_max": 26,
   "max_distance_mi": 70,

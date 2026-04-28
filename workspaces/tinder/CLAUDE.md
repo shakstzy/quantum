@@ -38,7 +38,7 @@ Drafts come from `claude -p`, which uses Adithya's Claude Code subscription — 
 
 ```
 config/
-  voice/                    # ported from SHAKOS shared/, drafting reads these
+  voice/                    # drafting reads these voice/style references
     messaging-voice.md
     opener-skill.md
     escalation-skill.md
