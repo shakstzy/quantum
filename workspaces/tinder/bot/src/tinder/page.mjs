@@ -35,18 +35,13 @@ export async function openThread(page, matchId) {
 }
 
 export async function readVisibleProfile(page) {
-  const sels = await selectors();
-  const get = async (key) => {
-    const sel = sels[key];
-    const s = await pickFirst(page, sel);
-    if (!s) return null;
-    try { return (await page.textContent(s))?.trim() || null; } catch { return null; }
-  };
-  const name = await get("rec_card_name");
-  const ageText = await get("rec_card_age");
-  const distanceText = await get("rec_card_distance");
-  const bio = await get("rec_card_bio");
-  const age = ageText ? parseInt(ageText.replace(/\D/g, ""), 10) : null;
-  const distance_mi = distanceText ? parseInt(distanceText.replace(/\D/g, ""), 10) : null;
-  return { name, age, distance_mi, bio };
+  // Card-stack DOM exposes only the visible card's name (via aria-label on its photo
+  // container). Age / distance / bio render only after card expansion, which we skip
+  // in v1 — account-level Tinder filter already enforces 19-26 + <=70mi.
+  let name = null;
+  try {
+    const card = await page.$("[class*='recCard__img'][role='img'][aria-label]");
+    if (card) name = await card.getAttribute("aria-label");
+  } catch { /* skip */ }
+  return { name, age: null, distance_mi: null, bio: null };
 }

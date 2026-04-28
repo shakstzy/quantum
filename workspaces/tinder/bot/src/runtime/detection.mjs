@@ -15,7 +15,7 @@ const HALT_KINDS = ["arkose_iframe", "face_check_prompt", "rate_limit_banner", "
 
 async function present(page, sel) {
   if (!sel) return false;
-  const candidates = [sel.selector, ...(sel.alt || [])];
+  const candidates = [sel.selector, ...(sel.alt || [])].filter(s => s != null);
   for (const s of candidates) {
     try {
       const el = await page.$(s);

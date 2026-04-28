@@ -15,10 +15,12 @@ async function loadFilter() {
 }
 
 function passesFilter(profile, f) {
-  if (profile.age == null) return false;
-  if (profile.age < f.age_min || profile.age > f.age_max) return false;
+  // v1: rely on account-level Tinder filter for age/distance (Tinder doesn't show
+  // profiles outside it). DOM no longer exposes age/distance/bio at card-stack level.
+  if (profile.age != null) {
+    if (profile.age < f.age_min || profile.age > f.age_max) return false;
+  }
   if (profile.distance_mi != null && profile.distance_mi > f.max_distance_mi) return false;
-  if (f.auto_pass_if_no_bio_and_no_prompts && !profile.bio) return false;
   return true;
 }
 
