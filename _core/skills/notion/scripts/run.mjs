@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// notion playbook CLI. Native fetch, no deps. Token from macOS Keychain.
+// notion skill CLI. Native fetch, no deps. Token from macOS Keychain.
 // Usage: node run.mjs <verb> [args...]
 // Verbs: whoami, search, page-get, page-create, block-append, db-query, db-get
 

@@ -7,7 +7,7 @@ How to interpret Zernio Ads API error responses and decide retry vs surface vs a
 If a write call returns 403 with `add_on_required` (or any wording mentioning the Ads add-on):
 - DO NOT retry.
 - Surface to the user: "The Zernio Ads add-on is not enabled on your account. Enable it at zernio.com/settings/billing (Build $10/mo, Accelerate $50/unit, Unlimited $1,000/mo) and try again."
-- Stop the playbook.
+- Stop the skill.
 
 ## Auth (401)
 

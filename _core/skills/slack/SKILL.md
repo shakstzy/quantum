@@ -7,7 +7,7 @@ description: Send and read Slack messages as Adithya (not a bot) via a user OAut
 
 Slack Web API primitives for sending and reading messages AS Adithya on `eclipse-labs.slack.com`. Thin wrapper over Slack's REST endpoints using native Node fetch. Token lives in macOS Keychain, never on disk, never in the repo.
 
-Deliberately NOT using MCP. Rationale: a Slack MCP adds a persistent tool surface in every session for a playbook that is rarely invoked; a 250-line Node CLI reading one keychain entry is strictly less bloat and leaves no global state.
+Deliberately NOT using MCP. Rationale: a Slack MCP adds a persistent tool surface in every session for a skill that is rarely invoked; a 250-line Node CLI reading one keychain entry is strictly less bloat and leaves no global state.
 
 Deliberately NOT using the official `slack` CLI either: that tool is scoped to app development (manifests, local dev servers, deploys), not to "send a message as me". Wrong tool.
 

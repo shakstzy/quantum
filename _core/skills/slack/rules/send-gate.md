@@ -4,7 +4,7 @@ Policy for when the `send` verb pauses for human confirmation before hitting `ch
 
 ## Default: no gate
 
-Mirrors the iMessage playbook. Adithya is driving the terminal in real time. The agent PREVIEWS the target and body to stderr, then sends immediately. The preview IS the gate.
+Mirrors the iMessage skill. Adithya is driving the terminal in real time. The agent PREVIEWS the target and body to stderr, then sends immediately. The preview IS the gate.
 
 Preview format:
 ```

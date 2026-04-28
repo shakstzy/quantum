@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// slack playbook CLI. Native fetch, no deps. Token from macOS Keychain.
+// slack skill CLI. Native fetch, no deps. Token from macOS Keychain.
 // Usage: node run.mjs <verb> [args...]   Verbs: whoami, send, read, search, users, channels, dm-open
 
 import { execFileSync } from "node:child_process";

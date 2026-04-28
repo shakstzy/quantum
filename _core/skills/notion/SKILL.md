@@ -7,9 +7,9 @@ description: Read and write Notion pages, databases, and blocks via the official
 
 Notion API primitives for reading and writing Adithya's Notion workspace (`RENAISSANCE`). Thin wrapper over Notion's REST v1 using native Node fetch. Token lives in macOS Keychain, never on disk, never in the repo.
 
-Deliberately NOT using MCP. Rationale: a Notion MCP adds a persistent 15+ tool surface in every session for a playbook that is usually invoked ad-hoc; a single-file Node CLI reading one Keychain entry is strictly less bloat and loads only when a trigger fires.
+Deliberately NOT using MCP. Rationale: a Notion MCP adds a persistent 15+ tool surface in every session for a skill that is usually invoked ad-hoc; a single-file Node CLI reading one Keychain entry is strictly less bloat and loads only when a trigger fires.
 
-Deliberately NOT using a browser automation playbook. The official API is stable, auth is a long-lived token, and everything Adithya needs today (search, page read/write, db query) is covered by REST.
+Deliberately NOT using a browser automation skill. The official API is stable, auth is a long-lived token, and everything Adithya needs today (search, page read/write, db query) is covered by REST.
 
 ## When this fires
 

@@ -16,7 +16,7 @@ Trigger phrases: "post to IG", "publish this reel", "drop this on TikTok", "uplo
 Do NOT fire for:
 - Reading DMs, replying to comments, or analytics lookups (not covered; use Zernio dashboard).
 - Platforms other than IG, YT, TikTok (future references/ files can extend; do not improvise).
-- Paid ads, audience sync, conversion events (CAPI / Google `ingestEvents`), ad-level analytics. Those live in the sibling `_core/skills/zernio-ads/` playbook (covers all six Zernio ad platforms: `metaads`, `googleads`, `linkedinads`, `tiktokads`, `pinterestads`, `xads`). Trigger phrases route there, not here. Same `ZERNIO_API_KEY`, but a tighter `LAUNCH-AD` gate replaces `PUBLISH` because every write path moves real money or sends PII to a paid platform. See `references/ads-api.md` for the cross-link.
+- Paid ads, audience sync, conversion events (CAPI / Google `ingestEvents`), ad-level analytics. Those live in the sibling `_core/skills/zernio-ads/` skill (covers all six Zernio ad platforms: `metaads`, `googleads`, `linkedinads`, `tiktokads`, `pinterestads`, `xads`). Trigger phrases route there, not here. Same `ZERNIO_API_KEY`, but a tighter `LAUNCH-AD` gate replaces `PUBLISH` because every write path moves real money or sends PII to a paid platform. See `references/ads-api.md` for the cross-link.
 - Content that has not yet been approved by the caller. The skill publishes; it does not draft.
 
 ## Required caller inputs
@@ -74,5 +74,5 @@ Run after step 9, before declaring done:
 - `references/instagram.md` — `platformSpecificData` shape for feed/carousel/story/reel
 - `references/youtube.md` — title/category/visibility/madeForKids/Shorts auto-detection
 - `references/tiktok.md` — creator-info precheck, privacy_level enum, consent flags
-- `references/ads-api.md`: forward reference for Zernio's unified Ads API. Out of scope for this playbook; consumed when the future `zernio-ads` sibling is built.
+- `references/ads-api.md`: forward reference for Zernio's unified Ads API. Out of scope for this skill; consumed when the future `zernio-ads` sibling is built.
 - `scripts/zernio.sh` — single-entry curl wrapper (accounts, creator-info, preflight, presign, upload, post, status)

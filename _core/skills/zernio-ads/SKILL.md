@@ -5,7 +5,7 @@ description: Manage paid ads across Meta (Facebook/Instagram), Google Ads, Linke
 
 # Zernio Ads
 
-Direct-REST playbook for Zernio's Ads API. Sibling to `zernio-post`. Same bearer token, same base URL, but a separate skill so the write-path money-mover sits behind a tighter confirmation gate than organic publishing.
+Direct-REST skill for Zernio's Ads API. Sibling to `zernio-post`. Same bearer token, same base URL, but a separate skill so the write-path money-mover sits behind a tighter confirmation gate than organic publishing.
 
 Deliberately NOT an MCP wrapper. Zernio's hosted MCP exposes 280+ tools that ambient-load into every session and pollute context. This skill calls REST directly via `scripts/zernio-ads.sh` (curl + jq) so nothing loads until it fires.
 
