@@ -1,16 +1,12 @@
 ---
 name: local-llm
-description: Hit Adithya's persistent local Gemma daemon (Gemma 4 26B-A4B MoE, MLX, 4-bit) over HTTP at http://127.0.0.1:8765. OpenAI-compatible chat/completions, vision-capable. Daemon is launchd-managed by SHAKOS (`com.shakos.local-llm`). Use for inference without cloud cost or cold-load tax. Also covers lifecycle control (start/stop/restart/status) when Adithya wants to free RAM. Do NOT use for embeddings, fine-tuning, contexts >32k, or hot-swapping models without restart.
+description: Hit Adithya's persistent local Gemma daemon (Gemma 4 26B-A4B MoE, MLX, 4-bit) over HTTP at http://127.0.0.1:8765. OpenAI-compatible chat/completions, vision-capable. Daemon is launchd-managed (`com.quantum.local-llm`). Use for inference without cloud cost or cold-load tax. Also covers lifecycle control (start/stop/restart/status) when Adithya wants to free RAM. Do NOT use for embeddings, fine-tuning, contexts >32k, or hot-swapping models without restart.
 allowed-tools: Bash
 ---
 
-# local-llm (QUANTUM stub)
+# local-llm
 
-QUANTUM-side trigger doc for the persistent local Gemma server. The daemon, install scripts, plist, and contract reference all live in SHAKOS at `/Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/`. This stub exists so:
-
-1. Other QUANTUM skills (currently `instagram-summary`, future workspaces) have a single canonical pointer to the contract.
-2. Adithya can ad-hoc invoke the daemon by phrase from inside QUANTUM ("ask gemma X", "describe this image with gemma").
-3. Lifecycle commands are reachable without remembering SHAKOS paths ("stop gemma to free ram", "is gemma running").
+Canonical contract for the persistent local Gemma server. The daemon, install scripts, plist, and reference docs all live here under `/Users/shakstzy/QUANTUM/_core/skills/local-llm/`. Other QUANTUM skills (currently `instagram-summary`, future workspaces) point at this skill instead of duplicating the curl boilerplate.
 
 ## When this fires
 
@@ -18,7 +14,7 @@ QUANTUM-side trigger doc for the persistent local Gemma server. The daemon, inst
 - "ask gemma X" / "ask the local llm X" / "run this through gemma"
 - "describe this image with gemma" / "what's in this image, use gemma"
 - "summarize this with the local model" / "no cloud, use local"
-- Any time another QUANTUM skill needs vision or text inference and explicitly cites this PLAYBOOK in its Inputs.
+- Any time another QUANTUM skill needs vision or text inference and explicitly cites this skill in its Inputs.
 
 **Lifecycle triggers** (Adithya managing the daemon itself):
 - "is gemma running" / "status of local llm" / "is the local model up"
@@ -48,7 +44,7 @@ Do NOT fire for:
 
 ## Persistence model
 
-`com.shakos.local-llm` is a **LaunchAgent** at `~/Library/LaunchAgents/com.shakos.local-llm.plist` with:
+`com.quantum.local-llm` is a **LaunchAgent** at `~/Library/LaunchAgents/com.quantum.local-llm.plist` with:
 
 - `RunAtLoad: true` — starts at every login.
 - `KeepAlive` only on `Crashed` (NOT on `SuccessfulExit`) — a clean stop sticks until next login.
@@ -58,7 +54,7 @@ So:
 
 - **Reboot:** daemon restarts at next login. Always available.
 - **Manual stop (`stop.sh`):** stays stopped until you log out / log back in OR re-run `start.sh`.
-- **Disable across logins entirely:** `launchctl unload -w ~/Library/LaunchAgents/com.shakos.local-llm.plist`. To re-enable: `launchctl load -w ...`.
+- **Disable across logins entirely:** `launchctl unload -w ~/Library/LaunchAgents/com.quantum.local-llm.plist`. To re-enable: `launchctl load -w ...`.
 
 Idle auto-eviction (unload weights after N min idle, reload on next request) is NOT built. Would require a wrapper around `mlx_vlm.server`. Open question, not blocking.
 
@@ -79,15 +75,15 @@ Healthy response:
 Or:
 
 ```
-bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/status.sh
+bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/status.sh
 ```
 
 ### Lifecycle
 
 ```
-bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/start.sh
-bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/stop.sh
-bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/restart.sh
+bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/start.sh
+bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/stop.sh
+bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/restart.sh
 ```
 
 Stopping the daemon frees ~22GB unified memory. Restarting pays the ~30s cold-load tax on the next call.
@@ -104,21 +100,21 @@ curl -sS http://127.0.0.1:8765/v1/chat/completions \
   }'
 ```
 
-Or use the SHAKOS wrapper:
+Or use the wrapper:
 
 ```
-bash /Users/shakstzy/SHAKOS/system/_core/playbooks/local-llm/scripts/chat.sh "<your prompt>"
+bash /Users/shakstzy/QUANTUM/_core/skills/local-llm/scripts/chat.sh "<your prompt>"
 ```
 
 Parse `choices[0].message.content`. Token counts are in `usage`.
 
 ### Ad-hoc inference (vision)
 
-Pass images as data URIs in `image_url` content blocks. Concrete shape lives in `references/api.md` of the SHAKOS playbook. Default timeout 120s for vision requests.
+Pass images as data URIs in `image_url` content blocks. Concrete shape lives in `references/api.md`. Default timeout 120s for vision requests.
 
 ### Audit
 
-If response is empty or contains `[Error:` prefix, log the full response and surface the failure to Adithya. Do not retry blindly. Server log at `~/.shakos/local-llm/server.log`.
+If response is empty or contains `[Error:` prefix, log the full response and surface the failure to Adithya. Do not retry blindly. Server log at `~/.quantum/local-llm/server.log`.
 
 ## QUANTUM consumers
 
@@ -127,6 +123,5 @@ If response is empty or contains `[Error:` prefix, log the full response and sur
 
 ## Notes
 
-- Single source of truth for the daemon contract is the SHAKOS playbook. If contract drift happens, fix it there and have this stub re-link.
 - Model swap is a deliberate change (edit plist, restart). Not a per-call option.
 - Bigger / different vision models are an open design question (see Adithya's design notes; not yet acted on).
