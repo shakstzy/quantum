@@ -12,8 +12,12 @@
   "type": "commonjs",
   "dependencies": {
     "@remotion/bundler": "^4.0.454",
+    "@remotion/captions": "4.0.454",
     "@remotion/cli": "^4.0.454",
+    "@remotion/google-fonts": "4.0.454",
+    "@remotion/install-whisper-cpp": "4.0.454",
     "@remotion/renderer": "^4.0.454",
+    "@remotion/transitions": "4.0.454",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.5",
