@@ -1,13 +1,14 @@
 {
   "_comment": "DOM selectors for tinder.com web. Verified 2026-04-28 via .dev-fixtures/. Re-run scripts/dump-dom.mjs (1 live hit) + scripts/analyze-fixture.mjs (offline) when these drift.",
   "rec_card": {
-    "selector": "[class*='recCard__img'][role='img'][aria-label]",
+    "_note": "recCard__img is the wrapper; role='img' aria-label child is the inner photo div with the name.",
+    "selector": "[class*='recCard__img'] [role='img'][aria-label]",
     "alt": ["[class*='recCard']"],
     "last_verified": "2026-04-28"
   },
   "rec_card_name": {
-    "_note": "Name is on the aria-label of the card photo container; not a text-leaf element. Read via getAttribute('aria-label'), not textContent.",
-    "selector": "[class*='recCard__img'][role='img'][aria-label]",
+    "_note": "Read via getAttribute('aria-label'), not textContent.",
+    "selector": "[class*='recCard__img'] [role='img'][aria-label]",
     "alt": [],
     "last_verified": "2026-04-28"
   },
