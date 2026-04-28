@@ -41,8 +41,8 @@ Drafts come from `claude -p`, which uses Adithya's Claude Code subscription — 
 config/
   voice/                    # ported from SHAKOS shared/, drafting reads these
     messaging-voice.md
-    opener-playbook.md
-    escalation-playbook.md
+    opener-skill.md
+    escalation-skill.md
     sms-voice.md
     swipe-filter.md
     funnel-rules.md
@@ -143,7 +143,7 @@ Session-level events (swipe sweeps, halts, selector drift, send actions) go to `
 
 | Type | Mode | Why |
 |------|------|-----|
-| First-message opener on new match | auto | Templated per `opener-playbook.md`, low taste required |
+| First-message opener on new match | auto | Templated per `opener-skill.md`, low taste required |
 | Re-engagement nudge after iMessage silence (5+ days) | auto | Short, one-shot, low-stakes |
 | Reply where she sent something substantive | HITL | Taste call, escalation, escalation timing |
 | Anything matching `voice-lint.mjs` failure | HITL | Forces human review of voice-rule violations |

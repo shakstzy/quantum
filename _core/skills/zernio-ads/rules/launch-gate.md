@@ -41,7 +41,7 @@ PUBLISH is intentionally NOT accepted here. Organic posting and paid ads are two
 
 ## ZERNIO_NO_CONFIRM escape hatch
 
-If the env var `ZERNIO_NO_CONFIRM=1` is set in the calling shell, skip the LAUNCH-AD gate and log that it was skipped. This is for scripted contexts (e.g. an upstream playbook that already gated the user). Never set this var inside this skill. Never suggest the user set it as a workaround for a confusing payload.
+If the env var `ZERNIO_NO_CONFIRM=1` is set in the calling shell, skip the LAUNCH-AD gate and log that it was skipped. This is for scripted contexts (e.g. an upstream skill that already gated the user). Never set this var inside this skill. Never suggest the user set it as a workaround for a confusing payload.
 
 ## After the gate
 

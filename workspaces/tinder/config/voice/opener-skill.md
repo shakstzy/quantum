@@ -1,8 +1,8 @@
-# Opener Playbook
+# Opener Skill
 
 Guidelines for drafting openers on a brand-new Tinder match. Read by stage 03 when thread state is `opener-needed`.
 
-Canonical patterns synthesized from `wiki/raw/research/tinder-opener-playbook.md` (Reddit 2024-2026 consensus + OkCupid, Hinge Labs, Zhang & Yasseri, Dai & Robbins, Irrational Labs). Keep this file under 200 lines; defer raw evidence to the source doc.
+Canonical patterns synthesized from `wiki/raw/research/tinder-opener-skill.md` (Reddit 2024-2026 consensus + OkCupid, Hinge Labs, Zhang & Yasseri, Dai & Robbins, Irrational Labs). Keep this file under 200 lines; defer raw evidence to the source doc.
 
 ---
 

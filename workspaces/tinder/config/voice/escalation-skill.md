@@ -1,8 +1,8 @@
-# Escalation Playbook
+# Escalation Skill
 
 Canonical funnel patterns for moving a Tinder match to a locked first date. Read by stages 03 (Layer A), 04 (Layers B and C), and 05 (Layer D).
 
-Synthesized from `wiki/raw/research/tinder-escalation-playbook.md` (Reddit 2024-2026 consensus + Hinge Labs, Zhang & Yasseri). Keep this file under 200 lines; defer raw evidence to the source doc.
+Synthesized from `wiki/raw/research/tinder-escalation-skill.md` (Reddit 2024-2026 consensus + Hinge Labs, Zhang & Yasseri). Keep this file under 200 lines; defer raw evidence to the source doc.
 
 **Core thesis.** Move faster than feels natural, be more specific than feels polite, do not pen-pal.
 
