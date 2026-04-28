@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import pathlib
 import re
@@ -32,6 +33,9 @@ CHAT_CLASS_FILE = LOG / "imessage.chat-class.json"
 REVIEW_FILE = RAW / "_review-list.ndjson"
 
 CHAT_DB = pathlib.Path.home() / "Library" / "Messages" / "chat.db"
+ADDRESSBOOK_GLOB = str(
+    pathlib.Path.home() / "Library" / "Application Support" / "AddressBook" / "Sources" / "*" / "AddressBook-v22.abcddb"
+)
 
 # Apple epoch: nanoseconds since 2001-01-01 UTC.
 APPLE_EPOCH_OFFSET = 978307200  # seconds between 1970-01-01 and 2001-01-01
@@ -103,6 +107,80 @@ def parse_attributed_body(blob: bytes | None) -> str | None:
         return blob[pos : pos + length].decode("utf-8", errors="replace")
     except Exception:
         return None
+
+
+def normalize_phone(raw: str) -> str:
+    """Normalize a phone string to E.164-ish form. Default region: US (+1)."""
+    if not raw:
+        return ""
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return ""
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    return f"+{digits}"
+
+
+def load_contacts_index() -> dict[str, str]:
+    """Build a map of normalized phone / lowercased email -> display name from all
+    AddressBook source DBs. Returns {} if Contacts not readable (no FDA, etc.)."""
+    index: dict[str, str] = {}
+    sources = glob.glob(ADDRESSBOOK_GLOB)
+    if not sources:
+        return index
+    for db_path in sources:
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.OperationalError:
+            continue
+        try:
+            rows = conn.execute(
+                "SELECT r.Z_PK AS pk, r.ZFIRSTNAME AS first, r.ZLASTNAME AS last, "
+                "r.ZNICKNAME AS nick, r.ZORGANIZATION AS org "
+                "FROM ZABCDRECORD r"
+            ).fetchall()
+            for r in rows:
+                pk = r["pk"]
+                parts = [r["first"], r["last"]]
+                name = " ".join(p for p in parts if p).strip()
+                if not name:
+                    name = (r["nick"] or r["org"] or "").strip()
+                if not name:
+                    continue
+                phones = conn.execute(
+                    "SELECT ZFULLNUMBER FROM ZABCDPHONENUMBER WHERE ZOWNER = ?", (pk,)
+                ).fetchall()
+                for p in phones:
+                    n = normalize_phone(p["ZFULLNUMBER"] or "")
+                    if n:
+                        index.setdefault(n, name)
+                emails = conn.execute(
+                    "SELECT ZADDRESS FROM ZABCDEMAILADDRESS WHERE ZOWNER = ?", (pk,)
+                ).fetchall()
+                for e in emails:
+                    addr = (e["ZADDRESS"] or "").strip().lower()
+                    if addr:
+                        index.setdefault(addr, name)
+        finally:
+            conn.close()
+    return index
+
+
+def resolve_handle(handle: str | None, contacts: dict[str, str]) -> str | None:
+    """Look up a chat.db handle in the Contacts index. Returns name or None."""
+    if not handle:
+        return None
+    h = handle.strip()
+    # Strip suffixes like (smsft), (smsfp) that Apple appends to fallback handles.
+    h = re.sub(r"\([a-z]+\)$", "", h)
+    if "@" in h:
+        return contacts.get(h.lower())
+    if h.startswith("+") or h.isdigit():
+        return contacts.get(normalize_phone(h))
+    return None
 
 
 def load_watermark() -> int:
@@ -180,6 +258,19 @@ def fetch_chat_handles(conn: sqlite3.Connection, chat_rowid: int) -> list[str]:
     return [r["handle"] for r in rows if r["handle"]]
 
 
+def fetch_chat_meta(conn: sqlite3.Connection, chat_rowid: int) -> tuple[str, str | None]:
+    """Return (chat_guid, display_name). display_name is Apple's group-chat title or None."""
+    row = conn.execute(
+        "SELECT guid, display_name FROM chat WHERE ROWID = ?", (chat_rowid,)
+    ).fetchone()
+    if not row:
+        return ("", None)
+    name = row["display_name"]
+    if name is not None and not name.strip():
+        name = None
+    return (row["guid"], name)
+
+
 def fetch_chat_sample(conn: sqlite3.Connection, chat_rowid: int, limit: int = 30) -> list[tuple[str | None, int]]:
     rows = conn.execute(
         "SELECT m.text, m.attributedBody, m.is_from_me "
@@ -211,9 +302,13 @@ def main() -> int:
     watermark = 0 if args.full else load_watermark()
     chat_class = {} if args.full else load_chat_class()
 
+    contacts = load_contacts_index()
     conn, tmp_dir = open_chat_db_readonly()
     started = time.time()
-    print(f"watermark={watermark} chat_class_cached={len(chat_class)}", file=sys.stderr)
+    print(
+        f"watermark={watermark} chat_class_cached={len(chat_class)} contacts_indexed={len(contacts)}",
+        file=sys.stderr,
+    )
 
     try:
         # Open per-month shard handles lazily.
