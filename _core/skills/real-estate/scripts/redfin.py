@@ -207,14 +207,14 @@ def search(
     url = region["url"] + (filter_seg or "")
     html = _fetch_html(url)
     ctx = _initial_context(html)
-    region_resp = _cache_entry(ctx, "/stingray/api/region")
-    if not region_resp:
-        # Fallback: hit gis-csv directly (still works through WAF).
+    # Listings live in the cached /stingray/api/gis response, not /api/region.
+    gis_resp = _cache_entry(ctx, "/stingray/api/gis?")
+    if not gis_resp:
         return _search_via_gis(region, num_homes=num_homes,
                                max_price=max_price, min_price=min_price,
                                min_beds=min_beds, min_baths=min_baths,
                                min_sqft=min_sqft, home_types=home_types)
-    homes = ((region_resp.get("payload") or {}).get("homes")) or []
+    homes = ((gis_resp.get("payload") or {}).get("homes")) or []
     return {
         "source": "redfin",
         "query": query,
