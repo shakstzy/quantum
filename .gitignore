@@ -13,3 +13,7 @@ build/
 .vscode/
 references/
 graphify-out/
+
+# raw is cron-fed personal data; keep folder structure, never commit content
+raw/*/*
+!raw/*/.gitkeep
