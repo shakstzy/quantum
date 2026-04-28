@@ -1,6 +1,6 @@
 ---
 name: zernio-ads
-description: Manage paid ads across Meta (Facebook/Instagram), Google Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, and X Ads via the Zernio unified Ads REST API (`/v1/ads/*`). Covers ad-account discovery, OAuth-style ads connections, boost-post, standalone-ad creation, campaign and ad-set management, custom audience CRUD with PII hashing, conversion events (Meta CAPI / Google ingestEvents), and analytics. Read paths (list ad accounts, list ads, get analytics, get tree) are safe; every write path moves real money and is gated on a LAUNCH-AD confirmation token. Sibling to `zernio-post` (organic publishing). Do NOT use for organic posting, DMs, comments, or reading inbox - those are separate skills or live in the Zernio dashboard.
+description: Manage paid ads across Meta (Facebook/Instagram), Google Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, and X Ads via the Zernio unified Ads REST API (`/v1/ads/*`). Covers ad-account discovery, OAuth-style ads connections, boost-post, standalone-ad creation, campaign and ad-set management, custom audience CRUD with PII hashing, conversion events (Meta CAPI / Google ingestEvents), and analytics. The entire surface (reads AND writes) requires the Zernio Ads add-on enabled in billing, the script surfaces the 403 cleanly. Every write path moves real money and is gated on a LAUNCH-AD confirmation token. Sibling to `zernio-post` (organic publishing). Do NOT use for organic posting, DMs, comments, or reading inbox - those are separate skills or live in the Zernio dashboard.
 ---
 
 # Zernio Ads
@@ -41,6 +41,21 @@ Do NOT fire for:
 - DMs, comments, inbox reads - those live in the Zernio dashboard or future skills.
 - Reading or replying to ad comments outside the `ad-comments` read path - moderation lives in the Zernio dashboard for now.
 - Any action against an ad platform that is NOT one of the six Zernio supports (e.g. Snapchat ads, Reddit ads). Surface the gap instead.
+
+## Add-on precheck (do this first)
+
+The Zernio Ads add-on gates the ENTIRE `/v1/ads/*` surface, including read paths. Before any ads call, check the organic accounts response, which carries an `adsStatus` field per platform:
+
+```
+_core/skills/zernio-post/scripts/zernio.sh accounts | jq '.accounts[] | {platform, adsStatus, displayName}'
+```
+
+Values:
+- `connected` - the platform's ads side is wired up; reads and writes will work as long as the add-on is enabled.
+- `not_connected` - the platform supports Zernio ads but Adithya hasn't run `connect-ads` yet. Offer to run it.
+- `not_available` - the platform is NOT supported by Zernio's Ads API (e.g. YouTube). Don't try.
+
+If a `/v1/ads/*` call returns `403 {"error":"Ads add-on required"}` or `add_on_required`, the script surfaces a clean message and exits. Do NOT retry. Tell Adithya to enable the add-on at zernio.com/settings/billing (Build $10/mo, Accelerate $50/unit, Unlimited $1k/mo). Reads are also gated, so don't claim "I'll just list accounts" before the add-on is on.
 
 ## Required caller inputs
 

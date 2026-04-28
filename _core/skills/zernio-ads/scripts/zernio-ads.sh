@@ -69,17 +69,30 @@ connect_platform_ok() {
 
 api() {
   local method="$1" path="$2" body="${3:-}"
+  local tmp http resp
+  tmp=$(mktemp)
   if [[ -n "$body" ]]; then
-    curl -sS -f -X "$method" \
+    http=$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" \
       -H "Authorization: Bearer ${ZERNIO_API_KEY}" \
       -H "Content-Type: application/json" \
       --data "$body" \
-      "${BASE_URL}${path}"
+      "${BASE_URL}${path}")
   else
-    curl -sS -f -X "$method" \
+    http=$(curl -sS -o "$tmp" -w "%{http_code}" -X "$method" \
       -H "Authorization: Bearer ${ZERNIO_API_KEY}" \
-      "${BASE_URL}${path}"
+      "${BASE_URL}${path}")
   fi
+  resp=$(cat "$tmp"); rm -f "$tmp"
+  if [[ "$http" -ge 200 && "$http" -lt 300 ]]; then
+    printf '%s' "$resp"
+    return 0
+  fi
+  # Surface the actual API error body. Special-case the add-on paywall so the
+  # caller can route to billing instead of treating it as a generic auth error.
+  if echo "$resp" | grep -qi "Ads add-on required"; then
+    die "HTTP ${http} from ${path}: Ads add-on not enabled. Enable at zernio.com/settings/billing (Build \$10/mo, Accelerate \$50/unit, Unlimited \$1k/mo)."
+  fi
+  die "HTTP ${http} from ${path}: ${resp}"
 }
 
 # Build a query string from key=value pairs, skipping empty values.
