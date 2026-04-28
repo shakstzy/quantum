@@ -68,6 +68,14 @@ Raw deposits (immutable, ingested by Graphify):
 9. FTC disclosure required for compensated bounty posts: `#ad` or platform-native paid-partnership tag per `shared/policy/ftc-disclosure.md`.
 10. `publish` defaults to dry-run. Live posting requires `LIVE=1` env var AND zernio-post `PUBLISH` token.
 
+## Failure modes (architectural)
+
+Captured from a Gemma second-opinion review. Full notes in `raw/learnings/2026-04-28-clip-distribution-failure-modes.md`. Distribution is a multi-day adversarial game with the platform classifier; file-level dedupe is necessary but not sufficient.
+
+1. **Template-layer fingerprinting.** TikTok/IG cluster the *style* of output, not just the file. Same Remotion template + caption tone + metadata pattern across N accounts reads as automated/low-effort and gets shadow-banned at the style level. Mitigation: rotate render templates per account, vary fonts/colors/layouts, do not standardize.
+2. **Rights-status drift via DMCA.** A creator with `rights_status = authorized` can still strike a clip account and trigger reputation hits across all our accounts. Authorization is legal; enforcement is behavioral. Mitigation: monitor for DMCA notifications and pause that creator's source across ALL accounts, not just the struck one.
+3. **Feedback-loop latency.** Static virality heuristics in the moment-ranker drift out of sync with the platform's 24-72h algorithmic shifts. Without dampening, the ranker keeps shipping clips the algorithm is actively suppressing this week. Mitigation: track per-clip view-velocity in the first 6 hours and feed it back into the ranker as a "platform agreement" signal.
+
 ## North-Star Metric
 
 `paid_views_per_approved_publish = sum(payable_views) / count(publish_attempts where qa_status=approved)`

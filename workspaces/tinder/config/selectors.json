@@ -2,8 +2,10 @@
   "_comment": "DOM selectors for tinder.com web. Run scripts/selector-check.mjs interactively to verify after any layout drift. Each entry has selector + last_verified date + alt fallbacks.",
   "rec_card": {
     "selector": "[class*='recCard']",
-    "alt": ["main [role='button'][aria-label*='Profile']"],
-    "last_verified": null
+    "alt": [
+      "main [role='button'][aria-label*='Profile']"
+    ],
+    "last_verified": "2026-04-28"
   },
   "rec_card_name": {
     "selector": "h1[itemprop='name'], [class*='Name']",
@@ -27,7 +29,9 @@
   },
   "like_button": {
     "selector": "button[aria-label='Like']",
-    "alt": ["button:has(svg[d*='M16'])"],
+    "alt": [
+      "button:has(svg[d*='M16'])"
+    ],
     "last_verified": null
   },
   "nope_button": {
@@ -37,28 +41,36 @@
   },
   "matches_tab": {
     "selector": "a[href='/app/matches']",
-    "alt": ["nav a[aria-label*='Matches']"],
+    "alt": [
+      "nav a[aria-label*='Matches']"
+    ],
     "last_verified": null
   },
   "matches_list_item": {
     "selector": "a[href^='/app/messages/']",
     "alt": [],
-    "last_verified": null
+    "last_verified": "2026-04-28"
   },
   "thread_messages": {
     "selector": "[class*='msg']",
-    "alt": ["main [role='log'] [data-testid*='message']"],
+    "alt": [
+      "main [role='log'] [data-testid*='message']"
+    ],
     "last_verified": null
   },
   "thread_input": {
     "selector": "textarea[placeholder*='Type a message']",
-    "alt": ["textarea#chatTextArea"],
-    "last_verified": null
+    "alt": [
+      "textarea#chatTextArea"
+    ],
+    "last_verified": "2026-04-28"
   },
   "thread_send": {
     "selector": "button[type='submit']:has-text('Send')",
-    "alt": ["button[aria-label='Send message']"],
-    "last_verified": null
+    "alt": [
+      "button[aria-label='Send message']"
+    ],
+    "last_verified": "2026-04-28"
   },
   "arkose_iframe": {
     "selector": "iframe[title*='verification'], iframe[src*='arkoselabs'], iframe[src*='funcaptcha']",

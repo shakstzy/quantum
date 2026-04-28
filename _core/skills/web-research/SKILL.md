@@ -74,7 +74,7 @@ Hard rules:
 - No hedging, no caveats, no apologies
 EOF
 ```
-Parse the JSON. If Codex returned prose anyway, salvage what you can; don't loop.
+Parse the JSON. If Codex returned prose anyway, do NOT retry and do NOT block: emit one stderr line `[web-research] Codex red-team returned non-JSON; skipping backfill` and continue to step 6 with the shortlist from step 3. Same fallback if Codex times out or rate-limits.
 
 ### 5. Backfill on follow-up queries
 Run brave-search on each `followup_queries[]` entry in parallel. Pick the strongest 1-2 candidates per gap query (same scoring as step 3). Add them to the final scrape list.
