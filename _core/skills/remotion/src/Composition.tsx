@@ -27,7 +27,7 @@ export const DemoComposition = () => {
           fontWeight: 700,
         }}
       >
-        Remotion CLI OK
+        Edit cycle works
       </div>
     </AbsoluteFill>
   );
