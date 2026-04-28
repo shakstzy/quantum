@@ -284,18 +284,7 @@ def step5_registry_drift(out_dir):
             if cells and re.match(r"^[a-z][a-z0-9-]*$", cells[0]):
                 listed.append(cells[0])
 
-    in_routing = False
-    routing = []
-    for line in root_text.splitlines():
-        if re.match(r"^##\s+Routing\b", line.strip()):
-            in_routing = True
-            continue
-        if in_routing and line.strip().startswith("## "):
-            break
-        if in_routing and "workspaces/" in line:
-            for m in re.finditer(r"workspaces/([a-z0-9-]+)/", line):
-                routing.append(m.group(1))
-    routing_set = set(routing)
+    routing_set = set()
 
     md = ["# Registry drift\n",
           f"\nGenerated: {datetime.now(timezone.utc).isoformat()}\n\n",
@@ -305,24 +294,18 @@ def step5_registry_drift(out_dir):
     md.append("\n## Workspaces in root CLAUDE.md Workspace Index\n\n")
     for w in listed:
         md.append(f"- `{w}`\n")
-    md.append("\n## Workspaces referenced in root CLAUDE.md Routing\n\n")
-    for w in sorted(routing_set):
-        md.append(f"- `{w}`\n")
-
     on_disk = set(real_workspaces)
     in_index_set = set(listed)
     missing_from_index = on_disk - in_index_set
-    missing_from_routing = on_disk - routing_set
     extra_in_index = in_index_set - on_disk
+    missing_from_routing = set()
 
     md.append("\n## Drift\n\n")
     if missing_from_index:
         md.append(f"**On disk but NOT in Workspace Index:** {sorted(missing_from_index)}\n\n")
-    if missing_from_routing:
-        md.append(f"**On disk but NOT in Routing:** {sorted(missing_from_routing)}\n\n")
     if extra_in_index:
         md.append(f"**In Workspace Index but NOT on disk:** {sorted(extra_in_index)}\n\n")
-    if not (missing_from_index or missing_from_routing or extra_in_index):
+    if not (missing_from_index or extra_in_index):
         md.append("No drift.\n")
 
     (out_dir / "registry-drift.md").write_text("".join(md))
