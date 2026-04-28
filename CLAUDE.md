@@ -27,7 +27,7 @@ QUANTUM/
 │   ├── health/
 │   ├── people/
 │   └── library/
-├── graphify-out/                (gitignored; Graphify owns this)
+├── graphify-out/                (committed; Graphify owns this, do not hand-edit)
 ├── workspaces/                  (one ICM workspace per life domain)
 │   ├── slack/
 │   ├── gdrive/
@@ -115,7 +115,7 @@ Memory tells you HOW to work with Adithya. The graph tells you WHAT Adithya is d
 - No em dashes anywhere in this repo.
 - Folders and files: `lowercase-with-hyphens`. Stage folders use zero-padded numbers: `01-pull`, `02-summarize`, etc.
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`.
-- `raw/` content is gitignored (structure tracked via `.gitkeep`). `graphify-out/` is gitignored.
+- `raw/` content is gitignored (structure tracked via `.gitkeep`). `graphify-out/` is committed so phone/web sessions can read the graph.
 - Treat all content as sensitive. This is a personal life-OS.
 
 ## When You Are Stuck
