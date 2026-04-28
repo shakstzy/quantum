@@ -1,58 +1,327 @@
 # QUANTUM Conventions (ICM)
 
-Source of truth for the Inverted Context Model used across QUANTUM. Other files reference this. Do not invent new patterns; if something is missing, propose a change here first.
+Source of truth for the **Inverted Context Model** used across QUANTUM. Every workspace follows these patterns. Other files reference this file. Do not invent new patterns; if something is missing, propose a change here first.
 
-## Layering
+Re-read this file fresh before any operation that touches `workspaces/`, `_core/`, or root `CLAUDE.md`. Pattern recall is unreliable. The file is authoritative. Patterns 1 through 15 are adapted from the Interpreted-Context-Methodology reference at `references/Interpreted-Context-Methdology-main 3/_core/CONVENTIONS.md`. Patterns 16 and 17 are QUANTUM-specific.
+
+---
+
+## Three-Store Model
 
 Three distinct stores. They do not share data, only references.
 
-- **Memory** (`~/.claude/projects/-Users-shakstzy-QUANTUM/memory/`) — Adithya's preferences and current state. Claude maintains it.
-- **Graph** (`graphify-out/`) — durable knowledge derived from `raw/`. Graphify owns it. Never hand-edit.
-- **Workspaces** (`workspaces/<name>/`) — pipelines that pull external data and deposit into `raw/<name>/`. Co-edited.
+- **Memory** (`~/.claude/projects/-Users-shakstzy-QUANTUM/memory/`): Adithya's preferences and current state. Claude maintains it.
+- **Graph** (`graphify-out/`): durable knowledge derived from `raw/`. Graphify owns it. Never hand-edit.
+- **Workspaces** (`workspaces/<name>/`): pipelines that produce outputs and feed `raw/`. Adithya and Claude co-edit via ICM.
 
-Memory tells you HOW to work with Adithya. Graph tells you WHAT Adithya is doing or has done. Workspaces are the machinery that keeps both fresh.
+Memory tells Claude HOW to work with Adithya. The graph tells Claude WHAT Adithya is doing or has done. Workspaces are the machinery that keeps both fresh.
 
-## Folder + file naming
+---
 
-- `lowercase-with-hyphens` for files and folders.
-- Pipeline stage folders are zero-padded: `01-pull`, `02-summarize`, `03-classify`.
-- No spaces. No underscores in user-facing paths (Python module files exempt).
-- No em dashes anywhere in this repo.
+## Two Workspace Types
 
-## Workspace structure
+A workspace is a *stateful* container. There are exactly two flavors.
 
-Each workspace at `workspaces/<name>/` has:
+| Type | Purpose | Direction | `raw/<ws>/` folder | Stages | Examples |
+|------|---------|-----------|---------------------|--------|----------|
+| **Ingest** | Pull data from an external system into `raw/<ws>/` for graphify | external -> repo | required | optional (usually none) | slack, email, calendar, gdrive, imessage, journal, finance, health, people, library |
+| **Workflow** | Multi-stage pipeline that operates on existing data and produces durable artifacts | internal | optional | typically yes | digest, weekly-review (none built yet) |
+
+There is no third type. **Action-only callables are skills, not workspaces.** Sending Slack DMs, posting Gmail, generating Higgsfield media all live in `_core/skills/<name>/SKILL.md`. A workspace may invoke a skill from inside its workflow, but the skill itself is never a workspace.
+
+The promotion rule: only promote something to a workspace when it has stateful operations. If it is a one-shot stateless callable, it is a skill.
+
+---
+
+## Five-Layer Routing Architecture
+
+Agents read down the layers. They stop as soon as they have what they need.
+
+```
+Layer 0: root CLAUDE.md          -> "Where am I in QUANTUM?"   (always loaded)
+Layer 1: workspace CLAUDE.md     -> "Where do I go in this workspace?" (loaded on cd)
+Layer 2: stage CONTEXT.md        -> "What do I do?"            (read per-task; workflow workspaces only)
+Layer 3: reference material      -> "What rules apply?"        (loaded selectively)
+Layer 4: working artifacts       -> "What am I working with?"  (raw/, output/, loaded selectively)
+```
+
+For ingest workspaces, Layer 2 is usually skipped. The workspace CLAUDE.md routes directly to a single `pull` script and the ingest schema. Layers 3 and 4 are usually empty or minimal.
+
+For workflow workspaces, all five layers are in play.
+
+Every token of irrelevant context is a token of diluted attention. Workspace CLAUDE.md files map each task to its minimal required files. Loading more does not make output better. It makes it worse.
+
+---
+
+## Workspace Structure
+
+### Ingest workspace (mandatory layout)
 
 ```
 workspaces/<name>/
-├── CLAUDE.md           operating doc for this workspace
-├── scripts/            pull, transform, classify, post-process
-└── (optional stages)   01-pull/, 02-summarize/, etc. when the pipeline is multi-stage
+├── CLAUDE.md              (Layer 1: required)
+├── setup/
+│   └── questionnaire.md   (filled on first build; placeholders resolved)
+├── scripts/
+│   └── pull.sh            (or pull.py / pull.mjs; one canonical entry)
+└── (rules/, references/ optional)
 ```
 
-`CLAUDE.md` for a workspace MUST cover:
-1. **Purpose** — one paragraph: source, what lands in `raw/`, why.
-2. **Triggers** — what `pull`, `digest`, `setup`, etc. map to in this workspace.
-3. **Layout** — quick map of `scripts/` and any stage folders.
-4. **Conventions** — file naming for raw deposits, watermark/cache locations, dedupe keys.
-5. **Cadence** — launchd plist path and frequency, log paths.
+Plus the corresponding `raw/<name>/` directory at the repo root, gitignored except for `.gitkeep`.
 
-## Raw deposits
+### Workflow workspace (mandatory layout)
 
-- Files land at `raw/<workspace>/YYYY-MM-DD-<slug>.<ext>` OR a documented sharded scheme (e.g. iMessage uses `YYYY-MM.ndjson`).
-- `raw/` is **immutable** after deposit. Workspaces never rewrite a file once written.
-- `raw/` content is gitignored (`raw/*/*` plus `!raw/*/.gitkeep`). Folder structure is committed.
-- Operational state (watermarks, classification caches, error logs) goes under `raw/.ingest-log/`. That path is listed in `.graphifyignore`, so the contents stay out of the graph.
+```
+workspaces/<name>/
+├── CLAUDE.md              (Layer 1: required)
+├── CONTEXT.md             (Layer 1: top-level task routing)
+├── setup/
+│   └── questionnaire.md
+├── stages/
+│   ├── 01-<name>/
+│   │   ├── CONTEXT.md     (Layer 2)
+│   │   ├── references/    (Layer 3)
+│   │   └── output/        (Layer 4)
+│   ├── 02-<name>/
+│   └── 03-<name>/
+├── shared/                (cross-stage Layer 3)
+└── skills/                (bundled skills, optional, see Pattern 9)
+```
 
-## Graphify integration
+### Workspace CLAUDE.md required sections
 
-- The first full graph build is **manual**. Adithya runs `/graphify <subfolder> --wiki --obsidian --obsidian-dir graphify-out/obsidian` against a chosen subfolder of `raw/` in an interactive Claude window. The cron does not auto-bootstrap — `raw/` is over `/graphify`'s 200-files / 2M-words confirmation threshold, so it cannot run unattended on the whole corpus.
-- After the bootstrap, `scripts/graphify-lint.sh` (launchd, every 2h) handles steady-state: free `cluster-only` and `update` against the existing graph, and only triggers a semantic re-extract via headless `claude -p` when `graphify check-update` flags pending work.
-- The bootstrapped scope is recorded in `graphify-out/.scope` (one line, e.g. `raw/journal`); the cron reuses that scope for all later refreshes.
-- Workspaces never write to `graphify-out/`. Run `/graphify` (or wait for the cron) instead.
-- AST-only refreshes for code happen via the `post-commit` git hook (idempotent, no LLM cost).
+Every workspace's `CLAUDE.md` MUST include:
 
-## Wiki consultation (for agents)
+1. **Purpose**: one paragraph. Source, what lands in `raw/<ws>/` (ingest) or what artifact the pipeline produces (workflow), why.
+2. **Triggers**: table mapping `setup`, `status`, `pull` (and any extras) to concrete commands.
+3. **Layout**: tree of `scripts/`, `stages/`, etc.
+4. **Ingest schema** (ingest workspaces only): see Ingest Schema section below.
+5. **Conventions**: dedupe keys, watermark file path, error-log path, anything workspace-specific.
+6. **Cadence** (if automated): launchd plist label, frequency, log paths.
+7. **Skill pointer** (if applicable): link to `_core/skills/<name>/SKILL.md` for any external mutations the operator may want to perform on this domain.
+
+---
+
+## Pattern 1: Stage Contracts (workflow workspaces)
+
+Every stage CONTEXT.md follows the same three-section shape:
+
+```markdown
+## Inputs
+
+| Source | File/Location | Section/Scope | Why |
+
+## Process
+
+1. Step one
+2. Step two
+
+## Outputs
+
+| Artifact | Location | Format |
+```
+
+Simple enough that a non-technical user can read it. Structured enough that an agent can follow it. No exceptions.
+
+---
+
+## Pattern 2: Stage Handoffs via Output Folders
+
+Stage N produces `stages/0N-name/output/<slug>-<artifact>.md`. Stage N+1's CONTEXT.md says "read `../0N-name/output/<slug>-<artifact>.md` as your input." A human can edit the output file between stages and the next stage picks up the edit.
+
+---
+
+## Pattern 3: One-Way Cross-References
+
+Every folder points outward to what it needs. No folder points back. This prevents reference growth from going N-squared.
+
+---
+
+## Pattern 4: Selective Section Routing
+
+CONTEXT.md Inputs tables specify which section of a file to load, not the whole file. When the full file is needed, write "Full file" in the Section/Scope column.
+
+---
+
+## Pattern 5: Canonical Sources
+
+Every piece of information has ONE home. Other files point there. They do not duplicate it. If you find the same information in two files, one of them should be a pointer.
+
+---
+
+## Pattern 6: CONTEXT.md = Routing, Not Content
+
+CONTEXT.md files answer three questions: what is this folder, what do I load, what is the process. No definitions. No rules. No extended examples. If you find yourself writing more than a one-sentence description, that content belongs in a separate file.
+
+---
+
+## Pattern 7: Tool Prerequisites
+
+Stages that require external tools (Node, Python, ffmpeg) get setup guides in `references/<tool>-setup.md`. If the tool is needed by multiple stages, it lives in `shared/`.
+
+---
+
+## Pattern 8: Questionnaire Design
+
+Onboarding questionnaires configure the production system, not a specific run.
+
+1. Flat structure. No category groupings.
+2. All at once. Every question appears in one pass.
+3. System-level only. Per-run details are collected at the start of each run.
+4. Derive, do not ask. If a field can be inferred, the agent fills it.
+5. Sensible defaults so the user can skip what they do not care about.
+6. Ask once, never again. Answers are baked into workspace files permanently.
+7. Examples over descriptions for voice/style questions.
+
+The template lives at `_core/templates/workspace/setup/questionnaire.md`.
+
+---
+
+## Pattern 9: Bundled Skills
+
+Workflow workspaces can bundle skills from `_core/skills/` into a local `skills/` folder. Stage CONTEXT.md files reference them in their Inputs table. Ingest workspaces should NOT bundle; they reference `_core/skills/<name>/SKILL.md` directly from their CLAUDE.md if they invoke any.
+
+---
+
+## Pattern 10: Specs Are Contracts (workflow workspaces only)
+
+Specification stages define WHAT and WHEN, not HOW. The build stage has creative freedom within the quality floor.
+
+---
+
+## Pattern 11: Checkpoints (workflow workspaces only)
+
+Creative stages should include at least one checkpoint where the agent pauses and the human steers. Linear stages (extract, render, validate) often run straight through.
+
+---
+
+## Pattern 12: Stage Audits (workflow workspaces only)
+
+Creative and build stages should include an Audit section: a checklist the agent runs after the process but before writing to output/.
+
+---
+
+## Pattern 13: Value Validation (workflow workspaces only)
+
+Content-producing stages should define what types of value their output can deliver and agree on the target value type at a checkpoint before the main work begins.
+
+---
+
+## Pattern 14: Docs Over Outputs
+
+Reference docs are the authoritative source for how to build. Previous stage outputs are artifacts, not templates. Agents should not read other outputs to learn patterns.
+
+---
+
+## Pattern 15: Shared Constants (workflow workspaces that produce code)
+
+Configurable values (colors, fonts, timing) live in shared files that all build outputs import from. The questionnaire populates these once during onboarding.
+
+---
+
+## Pattern 16: Skills Are Skills, Workspaces Are Workspaces
+
+Skills live in `_core/skills/<name>/SKILL.md`. They are stateless callables. Read via the Read tool when their triggers fire; invoke via the Skill tool when listed in the user-invocable skills list.
+
+Workspaces are stateful. They live in `workspaces/<name>/` and follow this CONVENTIONS.md.
+
+Forbidden moves:
+- Putting domain procedures (PLAYBOOK.md, SKILL.md) in `.claude/skills/`. That path is for Claude Code's harness-level skills only.
+- Creating a "workspace" for something that has no state. If it is a one-shot callable, write it as a skill.
+- Symlinking workspace files into `_core/skills/` to wire them up. Skills and workspaces have different lifecycles.
+
+---
+
+## Pattern 17: Auto-Run Setup on Workspace Creation
+
+When building a new workspace, the agent MUST run the setup questionnaire interactively BEFORE scaffolding from template. The order is:
+
+1. Ask questionnaire questions (from `_core/templates/workspace/setup/questionnaire.md`).
+2. Collect answers.
+3. Copy template into `workspaces/<name>/`.
+4. String-substitute every `{{PLACEHOLDER}}` with the collected answer.
+5. Verify zero `{{` patterns remain.
+6. Add row to root `CLAUDE.md` Workspace Index and Routing tables.
+7. Create `raw/<name>/.gitkeep` if ingest workspace.
+8. Run `_core/playbooks/icm-audit/scripts/audit.py` to confirm clean.
+
+Do NOT scaffold first and then ask. Do NOT skip the questionnaire because the operator is "obvious." The questionnaire output is the workspace's permanent configuration; treat it like a contract.
+
+The icm-audit playbook flags any workspace with leftover `{{` placeholders as a critical finding.
+
+---
+
+## Trigger Keywords
+
+Every workspace recognizes:
+
+- `setup`: run onboarding questionnaire (also auto-runs on workspace creation per Pattern 17).
+- `status`: show pipeline state. For ingest workspaces: latest deposit timestamp + file count in `raw/<ws>/`. For workflow workspaces: ASCII pipeline diagram of stage completion.
+- `pull`: ingest workspaces only. Fetch fresh data from the external source into `raw/<ws>/`.
+
+Workflow workspaces may define additional triggers. Ingest workspaces should not.
+
+Root QUANTUM CLAUDE.md additionally recognizes:
+- `digest`: cross-workspace activity rollup.
+- `icm audit`: run the icm-audit playbook on demand (also runs every 15 minutes via launchd).
+
+---
+
+## Ingest Schema
+
+Every ingest workspace declares its file nomenclature in a `## Ingest` section in its CLAUDE.md:
+
+```markdown
+## Ingest
+
+- **Source:** [Gmail / Slack / Apple Health / manual / ...]
+- **Trigger:** `pull` -> `bash scripts/pull.sh [args]`
+- **Automation:** [launchd plist label / cron line / "manual only"]
+- **Output path:** `raw/<ws>/YYYY-MM-DD-<slug>.<ext>`
+- **Slug rule:** [account local-part / channel name / ISO date / ...]
+- **Format:** [JSON / NDJSON / Markdown / ...]
+- **Mutations:** [skill at `_core/skills/<name>/SKILL.md` / "none, read-only"]
+```
+
+`raw/` is immutable. Re-run `pull` to refresh; never hand-edit. Operational state (watermarks, classification caches, error logs) goes under `raw/.ingest-log/`. That path is in `.graphifyignore`, so contents stay out of the graph.
+
+---
+
+## Naming Conventions
+
+- Folders and files: `lowercase-with-hyphens`
+- Stage folders: zero-padded numbers prefix: `01-`, `02-`, `03-`
+- Placeholders: `{{SCREAMING_SNAKE_CASE}}` (see `_core/placeholder-syntax.md`)
+- Output artifacts: `<topic-slug>-<artifact-type>.md`
+- Raw deposits: `YYYY-MM-DD-<slug>.<ext>` OR a documented sharded scheme (e.g. iMessage `YYYY-MM.ndjson`)
+- No spaces in file or folder names
+- No em dashes anywhere
+
+---
+
+## Quality Guardrails
+
+- CONTEXT.md files: under 80 lines
+- Reference files: under 200 lines (split if longer)
+- Workspace CLAUDE.md: under 120 lines (target)
+- Plain English. Avoid jargon. If a term needs explaining, it is too specialized.
+- No em dashes anywhere in the repo
+- Every folder that should persist but starts empty gets a `.gitkeep`
+- Every markdown file should be readable by someone with markdown + git basics, not deep engineering background
+
+---
+
+## Graphify Integration
+
+The first full graph build is **manual**. Adithya runs `/graphify <subfolder> --wiki --obsidian --obsidian-dir graphify-out/obsidian` against a chosen subfolder of `raw/` in an interactive Claude window. The cron does not auto-bootstrap because `raw/` is over `/graphify`'s 200-files / 2M-words confirmation threshold and cannot run unattended on the whole corpus.
+
+After the bootstrap, `scripts/graphify-lint.sh` (launchd, every 2h) handles steady-state: free `cluster-only` and `update` against the existing graph, and only triggers a semantic re-extract via headless `claude -p` when `graphify check-update` flags pending work. The bootstrapped scope is recorded in `graphify-out/.scope` (one line, e.g. `raw/journal`); the cron reuses that scope for all later refreshes.
+
+Workspaces never write to `graphify-out/`. AST-only refreshes for code happen via the `post-commit` git hook.
+
+---
+
+## Wiki Consultation (for agents)
 
 Before answering any question about Adithya's life, projects, people, decisions, or recurring topics:
 
@@ -62,22 +331,41 @@ Before answering any question about Adithya's life, projects, people, decisions,
 4. If the graph cites raw files, read them to confirm.
 5. If the graph has nothing useful, say so. Do not invent.
 
-## Skills
-
-- Project-specific skills live at `_core/skills/<name>/SKILL.md`. Adithya invokes them per workspace.
-- Global skills (`obsidian-markdown`, `obsidian-bases`, `obsidian-cli`, `json-canvas`, `defuddle`, `graphify`) live under `~/.claude/skills/`. They auto-trigger on filetypes and keywords.
-- Editing files inside `graphify-out/obsidian/` triggers the kepano Obsidian skills automatically. Editing `raw/` does not — `raw/` is immutable.
+---
 
 ## Commits
 
 - Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`.
-- Auto-sync (`scripts/sync.sh`) commits every ~60s with `chore(auto-sync): <timestamp>`. Anything you stage manually before the next tick will be folded in under that auto-sync message — make a manual commit first if you want a meaningful subject.
+- Auto-sync (`scripts/sync.sh`) commits every ~60s with `chore(auto-sync): <timestamp>`. Stage manually before the next tick to fold in a meaningful subject; otherwise it gets the auto-sync message.
 - Never commit secrets. The auto-sync committer scans for known key patterns and aborts if it sees one.
 
-## Hard rules
+---
+
+## Enforcement: icm-audit
+
+`_core/playbooks/icm-audit/scripts/audit.py` runs every 15 minutes via launchd (`com.shakstzy.quantum-icm-audit.plist`). Read-only against the QUANTUM repo; writes only to `~/.quantum/audit/`. Diff-only writes mean idle periods do not create churn.
+
+It checks:
+- Every `workspaces/*/` has a `CLAUDE.md`.
+- Every workspace declared as ingest has a corresponding `raw/<name>/` folder.
+- Every workspace on disk is registered in root `CLAUDE.md` Workspace Index and Routing tables.
+- No `{{` placeholders remain in any workspace file (Pattern 17).
+- No em dashes anywhere.
+- CONTEXT.md ceiling (80 lines), reference ceiling (200 lines).
+- Byte-identical 20-line spans across CLAUDE.md files (canonical-source enforcement).
+- Filenames are lowercase-with-hyphens.
+
+Findings hash to a deterministic JSON; only writes a new run dir when findings change. Last 30 distinct-findings runs retained at `~/.quantum/audit/runs/`.
+
+Run on demand: `python3 _core/playbooks/icm-audit/scripts/audit.py`.
+
+---
+
+## Hard Rules
 
 - Never modify files in `raw/` after they land.
 - Never hand-edit `graphify-out/`. Re-run `/graphify`.
-- Never invent a new top-level directory or workspace mid-task. Propose it, wait for greenlight, then scaffold from `_core/templates/` (when populated).
-- Never commit content under `raw/`, `graphify-out/`, `workspaces/tinder/.profile/`, or any `04-outbound/{drafts,pending,approved,sent,expired,auto-sent}/` folder.
+- Never invent a new top-level directory or workspace mid-task. Propose it, wait for greenlight, then run the questionnaire (Pattern 17), then scaffold from `_core/templates/workspace/`.
+- Never commit content under `raw/`, `graphify-out/`, or any per-run output folder.
+- If a "workspace" idea has no state, it is a skill. Write it under `_core/skills/<name>/SKILL.md` instead.
 - Treat all repo content as sensitive. This is a personal life-OS.
