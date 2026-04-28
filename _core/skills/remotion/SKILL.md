@@ -37,18 +37,18 @@ Do NOT fire for:
 
 ## Files
 
-- `references/quick-start.md` — Remotion 4.x project layout, registerRoot pattern, calculateMetadata
-- `references/composition-patterns.md` — vertical 9:16 with face-track crop, word-by-word captions, hook overlay
-- `scripts/render.sh` — single-entry CLI wrapper
+- `references/quick-start.md` - Remotion 4.x project layout, registerRoot pattern, calculateMetadata
+- `references/composition-patterns.md` - vertical 9:16 with face-track crop, word-by-word captions, hook overlay
+- `scripts/render.sh` - single-entry CLI wrapper
 
 ## Available add-on packages (already installed at workspaces/clipping/remotion/)
 
 Lean set installed; reach for these in compositions without re-installing:
 
-- `@remotion/captions` — caption data structures (word-level timings, `Caption[]`)
-- `@remotion/install-whisper-cpp` — local Whisper transcription. One-time: `npx --no-install @remotion/install-whisper-cpp install` then `npx --no-install @remotion/install-whisper-cpp install-model --model=medium.en`. Then in code: `import {transcribe} from '@remotion/install-whisper-cpp'`.
-- `@remotion/transitions` — `<TransitionSeries>` with `fade`, `slide`, `wipe`, `flip`, `clock-wipe`, `cube`, `none` presentations
-- `@remotion/google-fonts` — bundles Google Fonts. ALWAYS prefer this over hardcoded font stacks for any composition that might render off-macOS (Lambda, Linux CI). Example: `import {loadFont} from '@remotion/google-fonts/Inter'`.
+- `@remotion/captions` - caption data structures (word-level timings, `Caption[]`)
+- `@remotion/install-whisper-cpp` - local Whisper transcription. One-time: `npx --no-install @remotion/install-whisper-cpp install` then `npx --no-install @remotion/install-whisper-cpp install-model --model=medium.en`. Then in code: `import {transcribe} from '@remotion/install-whisper-cpp'`.
+- `@remotion/transitions` - `<TransitionSeries>` with `fade`, `slide`, `wipe`, `flip`, `clock-wipe`, `cube`, `none` presentations
+- `@remotion/google-fonts` - bundles Google Fonts. ALWAYS prefer this over hardcoded font stacks for any composition that might render off-macOS (Lambda, Linux CI). Example: `import {loadFont} from '@remotion/google-fonts/Inter'`.
 
 NOT installed (add only when a use case actually appears):
 - `@remotion/lambda`, `@remotion/cloudrun` (cloud rendering)
@@ -69,7 +69,7 @@ When a new workspace genuinely needs its own composition project (not just to us
 6. Write `remotion.config.ts` with `Config.setVideoImageFormat('jpeg')` and `Config.setOverwriteOutput(true)`.
 7. Set `"type": "module"` in package.json.
 8. Write `src/index.ts` -> `registerRoot(RemotionRoot)`, `src/Root.tsx` with `<Composition id=... />`, `src/Composition.tsx` with the React component.
-9. Render: `./node_modules/.bin/remotion render src/index.ts <CompositionID> out/<name>.mp4`. First render of a session downloads Chrome Headless Shell (~150MB) — cached after.
+9. Render: `./node_modules/.bin/remotion render src/index.ts <CompositionID> out/<name>.mp4`. First render of a session downloads Chrome Headless Shell (~150MB) - cached after.
 10. Add to `.gitignore`: `node_modules/`, `out/`, `.remotion/`, `.cache/`, `.DS_Store`.
 
 If `npm install` is incremental and you see `Cannot find native binding ... rspack.darwin-arm64.node`, the optional binding got truncated. Fix: `rm -rf node_modules package-lock.json && npm install`.
