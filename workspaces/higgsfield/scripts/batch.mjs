@@ -481,9 +481,19 @@ export async function runBatch(argv) {
       const unit = mode.resolveCost(j);
       return s + unit * (parseInt(j.batch || '1', 10) || 1);
     }, 0);
-    await preflight(ctx.page, OUTPUT_ROOT, { expectedCost: totalExpectedCost, jwtCapture: ctx.jwtCapture }).catch(e => {
-      console.warn(`[higgsfield-batch] preflight warning: ${e.message}`);
-    });
+    // Batch-level preflight has no per-run state.json. Pass null runDir so
+    // preflight skips state transitions; failures should ABORT (not warn) since
+    // we've validated wallet, captcha, and the per-batch cost cap.
+    try {
+      await preflight(ctx.page, null, {
+        expectedCost: totalExpectedCost,
+        jwtCapture: ctx.jwtCapture,
+        costCap: argv.costCap ? Number(argv.costCap) : 100
+      });
+    } catch (e) {
+      console.error(`[higgsfield-batch] preflight FAILED: ${e.message}`);
+      throw e;
+    }
 
     const userSub = userIdFromJwtCapture(ctx.jwtCapture);
     if (!userSub) throw new Error('Could not extract user_id from captured JWT.');

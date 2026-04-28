@@ -315,7 +315,7 @@ export async function runVideo(argv) {
     if (cleared.changed.length) console.log(`[higgsfield] cleared persisted attachments in ${cleared.changed.length} localStorage key(s)`);
 
     await browsePhase(ctx.page);
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.cost, jwtCapture: ctx.jwtCapture });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.cost, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
 
     // Select the requested model in the UI (required: video page has no model selected by default).
     const picked = await selectVideoModel(ctx.page, cat.frontend_label);

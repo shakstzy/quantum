@@ -189,7 +189,7 @@ export async function runImage(argv) {
     await browsePhase(ctx.page);
 
     // Pre-flight: wallet check + captcha surface check
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.expected_cost, jwtCapture: ctx.jwtCapture });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cat.expected_cost, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
 
     // Before clicking Generate: open History panel and snapshot pre-existing user images.
     // Our new image(s) will appear as "fresh" entries that weren't in this baseline.

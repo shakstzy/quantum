@@ -351,7 +351,7 @@ export async function runCinema(argv) {
     if (!wait.ok) throw new Error(`No Clerk JWT observed: ${wait.reason}`);
 
     await browsePhase(ctx.page);
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cfg.cost, jwtCapture: ctx.jwtCapture });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: cfg.cost, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
 
     // Select mode tab. Cinema-studio's DOM has two overlapping tab sets; clickModeTab
     // scopes to the config-bar band and scrolls the chosen panel into view so

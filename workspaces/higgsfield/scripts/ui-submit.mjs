@@ -74,7 +74,16 @@ async function waitForJobPostResponse(context, slug, { timeoutMs = 30000 } = {})
         if (!body) return;
         let j = null;
         try { j = JSON.parse(body); } catch (_) { return; }
-        if (process.env.HF_DEBUG === '1') console.error(`[ui-submit] seq=${seq} response body keys=${Object.keys(j || {}).join(',')} body=${JSON.stringify(j).slice(0, 400)}`);
+        if (process.env.HF_DEBUG === '1') {
+          // Redact CDN URLs and any token-shaped fields so HF_DEBUG logs cannot leak signed URLs / cookies.
+          const redacted = JSON.stringify(j, (k, v) => {
+            if (typeof v !== 'string') return v;
+            if (/^https?:\/\//i.test(v)) return '<URL>';
+            if (/^(eyJ|sess_|tok_|bearer\s)/i.test(v)) return '<TOKEN>';
+            return v;
+          }).slice(0, 400);
+          console.error(`[ui-submit] seq=${seq} response body keys=${Object.keys(j || {}).join(',')} body=${redacted}`);
+        }
         // Higgsfield's POST /jobs/<slug> response is:
         //   { id: <project_id (stable per session)>, job_sets: [{ id: <per-submit job id> }], ... }
         // The per-submit id lives in job_sets[0].id, NOT the outer id. Outer id is

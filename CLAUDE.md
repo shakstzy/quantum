@@ -80,6 +80,7 @@ Each workspace is self-contained per ICM. Once you cd into a workspace, that wor
 | "post to IG" / "publish this reel" / "drop this on TikTok" / "upload to YouTube" / "cross-post this" | Read `_core/skills/zernio-post/SKILL.md`. Cross-platform publish via Zernio direct REST. `PUBLISH` gate required. `ZERNIO_API_KEY` lives in `.claude/settings.local.json`. |
 | "send slack" / "slack <name>" / "dm <name> on slack" / "post to #<channel>" / "read #<channel>" / "search slack for X" / "who is <name> on slack" | Read `_core/skills/slack/SKILL.md`. Send/read Slack as Adithya via xoxp user token. Token in macOS Keychain `service=quantum-slack`. |
 | "text <name>" / "imessage <name>" / "send a text to <name>" / "look up <name> in my contacts" / "what did <name> last text me" / "pull my iMessage history with <name>" | Read `_core/skills/macos-contacts-imessage/SKILL.md`. Native macOS Contacts + iMessage/SMS/RCS via osascript and chat.db. No gate by default. |
+| "search notion" / "find in notion" / "create notion page" / "append to notion page" / "query notion db" | Read `_core/skills/notion/SKILL.md`. Notion REST primitives (search, page-get, page-create, block-append, db-query). Token in macOS Keychain `service=quantum-notion`. |
 | `/graphify raw/ --update` | Refresh the knowledge graph from new raw deposits |
 | `/graphify query "..."` | Query the graph by question |
 | `/graphify path "A" "B"` | Trace shortest path between two concepts |

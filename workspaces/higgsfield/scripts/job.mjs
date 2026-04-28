@@ -39,25 +39,47 @@ export async function getWallet(page, jwtCapture) {
   } catch (_) { return null; }
 }
 
-export async function preflight(page, runDir, { expectedCost, jwtCapture, forceBreaker = false }) {
+// runDir may be null for batch-level preflight (no per-run state.json yet).
+async function maybeTransition(runDir, status, patch) {
+  if (!runDir) return;
+  try { await transition(runDir, status, patch); } catch (_) {}
+}
+
+export async function preflight(page, runDir, { expectedCost, jwtCapture, costCap = null, forceBreaker = false }) {
+  // Validate cost is sane up-front. Catalogs that drift to 0/NaN must fail closed.
+  if (!Number.isFinite(expectedCost) || expectedCost <= 0) {
+    await maybeTransition(runDir, 'aborted_precheck', { error: `invalid expected cost: ${expectedCost}` });
+    const err = new Error(`Invalid expected cost ${expectedCost}; refuse to submit.`);
+    err.code = 'INVALID_COST';
+    throw err;
+  }
+  // Enforce --cost-cap (default 100). expectedCost > cap -> abort before any browser work.
+  const cap = Number.isFinite(costCap) ? costCap : 100;
+  if (expectedCost > cap) {
+    await maybeTransition(runDir, 'aborted_precheck', { error: `expectedCost ${expectedCost} exceeds cost-cap ${cap}` });
+    const err = new Error(`Expected cost ${expectedCost} exceeds --cost-cap ${cap}. Pass --cost-cap ${expectedCost} to allow.`);
+    err.code = 'COST_CAP_EXCEEDED';
+    throw err;
+  }
   const captcha = await hasCaptchaInDom(page);
   if (captcha) {
-    await transition(runDir, 'datadome_flagged', { error: 'captcha visible pre-submit' });
+    await maybeTransition(runDir, 'datadome_flagged', { error: 'captcha visible pre-submit' });
     const err = new Error('Captcha visible in DOM before submit. Halting.');
     err.code = 'DATADOME_VISIBLE';
     throw err;
   }
   const wallet = await getWallet(page, jwtCapture);
   if (!wallet) {
-    await transition(runDir, 'aborted_precheck', { error: 'wallet unreachable; session may be expired' });
+    await maybeTransition(runDir, 'aborted_precheck', { error: 'wallet unreachable; session may be expired' });
     const err = new Error('Could not read wallet; session may be expired. Run login.');
     err.code = 'SESSION_EXPIRED';
     throw err;
   }
+  const totalCredits = (wallet.subscription_credits || 0) + (wallet.package_credits || 0);
   const safety = expectedCost * 2;
-  if (wallet.subscription_credits < safety && !wallet.has_unlim) {
-    await transition(runDir, 'aborted_precheck', { error: `insufficient credits: have ${wallet.subscription_credits}, safety floor ${safety}` });
-    const err = new Error(`Wallet balance ${wallet.subscription_credits} below 2x safety floor for expected cost ${expectedCost}.`);
+  if (totalCredits < safety && !wallet.has_unlim) {
+    await maybeTransition(runDir, 'aborted_precheck', { error: `insufficient credits: total ${totalCredits} (sub=${wallet.subscription_credits}, pack=${wallet.package_credits || 0}), safety floor ${safety}` });
+    const err = new Error(`Wallet total ${totalCredits} below 2x safety floor for expected cost ${expectedCost}.`);
     err.code = 'INSUFFICIENT_CREDITS';
     throw err;
   }
@@ -210,7 +232,9 @@ export async function downloadAll(runDir, urls) {
 }
 
 export async function finalize(runDir, { wallet_before, wallet_after, job_uuid, job, records, cmd, model_frontend, model_backend, prompt, params }) {
-  const costActual = wallet_before && wallet_after ? Math.max(0, wallet_before - wallet_after) : null;
+  const costActual = (Number.isFinite(wallet_before) && Number.isFinite(wallet_after))
+    ? (wallet_before - wallet_after)  // can be 0 (free gen / unlim) or negative (refund); preserve sign.
+    : null;
   const isVideo = records.some(r => (r.content_type || '').startsWith('video/'));
   const first = records[0] || {};
   const metadata = {

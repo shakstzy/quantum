@@ -102,7 +102,7 @@ export async function runMarketing(argv) {
     if (!wait.ok) throw new Error(`No Clerk JWT observed: ${wait.reason}`);
 
     await browsePhase(ctx.page);
-    walletBefore = await preflight(ctx.page, runDir, { expectedCost: EXPECTED_COST, jwtCapture: ctx.jwtCapture });
+    walletBefore = await preflight(ctx.page, runDir, { expectedCost: EXPECTED_COST, jwtCapture: ctx.jwtCapture, costCap: argv.costCap ? Number(argv.costCap) : null });
 
     if (argv.preset) {
       const ok = await selectPresetByName(ctx.page, argv.preset);
