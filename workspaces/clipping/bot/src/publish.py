@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import db
+from dataclasses import asdict
 from gate import gate
 
 REPO_ROOT = Path(__file__).resolve().parents[2].parents[1]

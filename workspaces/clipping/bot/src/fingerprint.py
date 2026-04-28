@@ -70,7 +70,9 @@ def fingerprint_excerpt(source_id: int, start_s: float, end_s: float,
     midpoint = (start_s + end_s) / 2
     p_hash = perceptual_hash(src["filepath"], midpoint)
     matches = db.find_duplicate_candidates(n_hash, p_hash, days=30)
-    score = min(1.0, len(matches) / 5.0)
+    # ANY duplicate is a fail. Per Codex code review #5: a 0.2 score on one match
+    # used to slip past the gate; we fail closed instead.
+    score = 1.0 if matches else 0.0
     return n_hash, p_hash, score
 
 

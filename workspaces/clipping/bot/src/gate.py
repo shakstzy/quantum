@@ -18,7 +18,22 @@ from pathlib import Path
 import db
 from lib.banned import is_banned
 
-DISCLOSURE_RE = re.compile(r"#ad\b|#paidpartnership\b|#sponsored\b", re.I)
+_URL_RE = re.compile(r"https?://\S+", re.I)
+_DISCLOSURE_TOKENS = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(#ad|#paidpartnership|#sponsored|paid partnership|paid promotion|sponsored by|advertisement|\bad:)"
+    r"(?![A-Za-z0-9-])",
+    re.I,
+)
+
+
+def _has_disclosure(caption: str | None) -> bool:
+    """Strip URLs first so #ad-fragment URLs do not satisfy the check.
+    Then require a standalone disclosure token, not a substring."""
+    if not caption:
+        return False
+    stripped = _URL_RE.sub(" ", caption)
+    return bool(_DISCLOSURE_TOKENS.search(stripped))
 
 
 @dataclass
@@ -50,7 +65,8 @@ def _rights_check(source_row) -> Check:
 
 def _duplicate_check(cand) -> Check:
     score = cand["duplicate_score"] if cand["duplicate_score"] is not None else 1.0
-    return Check("duplicate_check", score < 0.5, f"score={score:.2f}")
+    # Hard zero. Any duplicate is a fail. Per Codex code review #5.
+    return Check("duplicate_check", score == 0.0, f"score={score:.2f}")
 
 
 def _account_cadence(account_row) -> Check:
@@ -93,8 +109,7 @@ def _originality_check(cand) -> Check:
 def _disclosure_check(campaign_row, caption: str | None) -> Check:
     if not campaign_row:
         return Check("disclosure_resolved", True, "no campaign; not paid")
-    cap = caption or ""
-    has_tag = bool(DISCLOSURE_RE.search(cap))
+    has_tag = _has_disclosure(caption)
     return Check("disclosure_resolved", has_tag, f"caption_has_disclosure={has_tag}")
 
 

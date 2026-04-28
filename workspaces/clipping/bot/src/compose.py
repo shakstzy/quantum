@@ -86,7 +86,7 @@ def render(candidate_id: int) -> int:
     if not cand:
         print(f"no candidate id={candidate_id}", file=sys.stderr)
         return 2
-    if cand["duplicate_score"] is not None and cand["duplicate_score"] >= 0.5:
+    if cand["duplicate_score"] is not None and cand["duplicate_score"] > 0.0:
         print(f"refusing render: duplicate_score={cand['duplicate_score']:.2f}", file=sys.stderr)
         return 3
 

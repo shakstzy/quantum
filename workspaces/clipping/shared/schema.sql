@@ -116,11 +116,23 @@ CREATE TABLE IF NOT EXISTS accounts (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS gate_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id INTEGER NOT NULL REFERENCES clip_candidates(id),
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  passed INTEGER NOT NULL,
+  failed_checks TEXT,
+  full_checks_json TEXT NOT NULL,
+  caption TEXT NOT NULL,
+  evaluated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS publish_attempts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   candidate_id INTEGER NOT NULL REFERENCES clip_candidates(id),
   render_id INTEGER NOT NULL REFERENCES renders(id),
   account_id INTEGER NOT NULL REFERENCES accounts(id),
+  gate_decision_id INTEGER NOT NULL REFERENCES gate_decisions(id),
   zernio_post_id TEXT,
   platform_url TEXT,
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','posted','failed','removed','dry_run')),
@@ -158,9 +170,10 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status);
 CREATE INDEX IF NOT EXISTS idx_sources_campaign ON sources(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_candidates_status ON clip_candidates(status);
 CREATE INDEX IF NOT EXISTS idx_candidates_source ON clip_candidates(source_id);
+CREATE INDEX IF NOT EXISTS idx_gate_candidate ON gate_decisions(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_publish_status ON publish_attempts(status);
 CREATE INDEX IF NOT EXISTS idx_publish_candidate ON publish_attempts(candidate_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_attempt ON metrics_snapshots(publish_attempt_id);
 CREATE INDEX IF NOT EXISTS idx_payout_status ON payout_claims(status);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (2);
+INSERT OR IGNORE INTO schema_version(version) VALUES (3);

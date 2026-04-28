@@ -140,8 +140,10 @@ def update_candidate_status(candidate_id: int, status: str) -> None:
 
 
 def find_duplicate_candidates(ngram_hash: str | None, perceptual_hash: str | None,
-                              days: int = 30) -> list[sqlite3.Row]:
-    """Return candidates with same ngram_hash or pHash within Hamming 6, in last N days."""
+                              days: int = 30, phash_bit_threshold: int = 24) -> list[sqlite3.Row]:
+    """Return candidates with same ngram_hash, OR with pHash within `phash_bit_threshold`
+    bit-Hamming distance, in the last N days. With imagehash.phash(hash_size=16) the
+    output is 256 bits; 24 bits is a fairly tight near-duplicate window."""
     if not ngram_hash and not perceptual_hash:
         return []
     with conn() as c:
@@ -159,16 +161,19 @@ def find_duplicate_candidates(ngram_hash: str | None, perceptual_hash: str | Non
             out.append(r)
             continue
         if perceptual_hash and r["perceptual_hash"]:
-            d = _hamming(perceptual_hash, r["perceptual_hash"])
-            if d <= 6:
+            if _hamming(perceptual_hash, r["perceptual_hash"]) <= phash_bit_threshold:
                 out.append(r)
     return out
 
 
 def _hamming(a: str, b: str) -> int:
-    if len(a) != len(b):
-        return max(len(a), len(b))
-    return sum(1 for x, y in zip(a, b) if x != y)
+    """True bit-Hamming distance for hex-encoded perceptual hashes."""
+    if len(a) != len(b) or not a:
+        return 10**6
+    try:
+        return (int(a, 16) ^ int(b, 16)).bit_count()
+    except ValueError:
+        return 10**6
 
 
 def insert_render(**fields) -> int:
@@ -187,12 +192,43 @@ def insert_qa(**fields) -> int:
         return cur.lastrowid
 
 
-def insert_publish_attempt(**fields) -> int:
-    cols = ", ".join(fields.keys())
-    placeholders = ", ".join("?" * len(fields))
+def create_publish_attempt_after_gate(*, candidate_id: int, account_id: int, render_id: int,
+                                      caption: str, gate_passed: bool, failed_checks: list[str],
+                                      full_checks_json: str, status: str = "queued") -> tuple[int, int]:
+    """Atomic: write the gate_decision row, then (if passed) the publish_attempt row referencing it.
+
+    Returns (gate_decision_id, publish_attempt_id_or_None).
+
+    This is the ONLY public path that creates publish_attempts. There is no public
+    insert_publish_attempt() because the schema (publish_attempts.gate_decision_id NOT NULL)
+    enforces that every attempt is bound to a recorded gate run.
+    """
     with conn() as c:
-        cur = c.execute(f"INSERT INTO publish_attempts ({cols}) VALUES ({placeholders})", tuple(fields.values()))
-        return cur.lastrowid
+        c.execute("BEGIN IMMEDIATE")
+        cur = c.execute(
+            """INSERT INTO gate_decisions(candidate_id, account_id, passed, failed_checks,
+                                          full_checks_json, caption)
+               VALUES (?,?,?,?,?,?)""",
+            (candidate_id, account_id, int(gate_passed),
+             json.dumps(failed_checks), full_checks_json, caption),
+        )
+        gate_id = cur.lastrowid
+        attempt_id = None
+        if gate_passed:
+            cur = c.execute(
+                """INSERT INTO publish_attempts(candidate_id, render_id, account_id,
+                                                gate_decision_id, status, caption)
+                   VALUES (?,?,?,?,?,?)""",
+                (candidate_id, render_id, account_id, gate_id, status, caption),
+            )
+            attempt_id = cur.lastrowid
+        return gate_id, attempt_id
+
+
+def update_publish_attempt(attempt_id: int, **fields) -> None:
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with conn() as c:
+        c.execute(f"UPDATE publish_attempts SET {sets} WHERE id = ?", (*fields.values(), attempt_id))
 
 
 def list_active_accounts(niche: str | None = None) -> list[sqlite3.Row]:

@@ -9,7 +9,7 @@ Per Adv Review v2: this is the most important rule in the system. No bypass.
 |-------|--------|---------------|
 | `campaign_verified` | `campaigns.status` | == 'active' AND `verified_at` is not NULL |
 | `rights_check` | `sources.rights_status` | in (`authorized`, `campaign_allowed`, `fair_use_review`) |
-| `duplicate_check` | `clip_candidates.duplicate_score` | < 0.5 |
+| `duplicate_check` | `clip_candidates.duplicate_score` | == 0.0 (any match fails) |
 | `account_cadence_available` | `publish_attempts` last 24h+1h | account is below `daily_post_cap` AND `hourly_post_cap` |
 | `account_niche_fit` | `accounts.niche` vs `campaigns.niche` | exact match (string-eq) |
 | `originality_check` | candidate has hook overlay OR custom captions OR commentary track | at least one transformative element |
