@@ -19,10 +19,6 @@ export const SELECTORS_FILE = resolve(CONFIG_DIR, "selectors.json");
 export const PROFILE_DIR = resolve(WORKSPACE_ROOT, ".profile");
 
 export const RAW_DIR = resolve(QUANTUM_ROOT, "raw/tinder");
-export const RAW_SWIPES = resolve(RAW_DIR, "swipes");
-export const RAW_MATCHES = resolve(RAW_DIR, "matches");
-export const RAW_THREADS = resolve(RAW_DIR, "threads");
-export const RAW_SENT = resolve(RAW_DIR, "sent");
 export const INGEST_LOG = resolve(QUANTUM_ROOT, "raw/.ingest-log");
 export const WATERMARK_FILE = resolve(INGEST_LOG, "tinder.watermark");
 

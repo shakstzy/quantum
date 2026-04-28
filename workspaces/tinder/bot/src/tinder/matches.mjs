@@ -1,7 +1,8 @@
 import { selectors } from "../runtime/detection.mjs";
 import { gotoMatches, openThread } from "./page.mjs";
 import { humanScroll, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
-import { logMatch, logThreadMessage } from "../runtime/logger.mjs";
+import { logSession } from "../runtime/logger.mjs";
+import { upsertMatch, appendMessages, findEntityByMatchId } from "../runtime/entity-store.mjs";
 import { scanForHalts } from "../runtime/detection.mjs";
 import { loadCaps } from "../runtime/caps.mjs";
 
