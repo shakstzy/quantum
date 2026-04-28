@@ -232,17 +232,26 @@ export async function appendMessages(slug, messages) {
   const have = new Set(ent.conversation.split("\n").filter(l => l.startsWith("**")));
   const newLines = [];
   let lastTs = ent.meta.last_activity;
+  let extractedPhone = null;
   for (const m of messages) {
     const line = fmtMessageLine(m);
     if (have.has(line)) continue;
     newLines.push(line);
     if (m.ts && (!lastTs || m.ts > lastTs)) lastTs = m.ts;
+    if (!extractedPhone && !ent.meta.phone) {
+      const found = extractPhoneFromText(m.text);
+      if (found) extractedPhone = found;
+    }
   }
   if (newLines.length === 0) return { added: 0 };
   const conversation = [ent.conversation, ...newLines].filter(Boolean).join("\n");
-  const meta = { ...ent.meta, last_activity: lastTs || new Date().toISOString() };
+  const meta = {
+    ...ent.meta,
+    last_activity: lastTs || new Date().toISOString(),
+    phone: ent.meta.phone || extractedPhone || null,
+  };
   await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound });
-  return { added: newLines.length };
+  return { added: newLines.length, phone_discovered: extractedPhone };
 }
 
 export async function appendOutboundEvent(slug, { event, mode, intent, draftId, text, lintPass }) {
