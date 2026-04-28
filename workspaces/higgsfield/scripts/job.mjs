@@ -53,8 +53,9 @@ export async function preflight(page, runDir, { expectedCost, jwtCapture, costCa
     err.code = 'INVALID_COST';
     throw err;
   }
-  // Enforce --cost-cap (default 100). expectedCost > cap -> abort before any browser work.
-  const cap = Number.isFinite(costCap) ? costCap : 100;
+  // Enforce --cost-cap (default 500). High enough that any single submit (cinema video = 96
+  // is the most expensive) flows by default; still catches runaway batches.
+  const cap = Number.isFinite(costCap) ? costCap : 500;
   if (expectedCost > cap) {
     await maybeTransition(runDir, 'aborted_precheck', { error: `expectedCost ${expectedCost} exceeds cost-cap ${cap}` });
     const err = new Error(`Expected cost ${expectedCost} exceeds --cost-cap ${cap}. Pass --cost-cap ${expectedCost} to allow.`);

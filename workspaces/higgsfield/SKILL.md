@@ -60,7 +60,7 @@ All commands accept `--output <dir>` (override default), `--dry-run` (print inte
 
 ## Budget and safety
 
-- Per-run cost cap: 100 credits (`--cost-cap N`). Refuses if `wallet_balance < cap * 2`.
+- Per-run cost cap: 500 credits default (`--cost-cap N` to override). Default covers any single submit incl. cinema video (96 cr); still catches runaway batches.
 - Max retries on 429: 3, total wait capped at 5 minutes.
 - Polling caps: 5 min for images, 30 min for videos. Timeout leaves `state=timeout`; resumable.
 - Concurrent invocations on same profile: refused via pidfile.
