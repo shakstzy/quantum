@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Thin wrapper around the Python real-estate scrapers.
+#
+# Usage: ./re <site> <subcommand> [args...]
+#   ./re redfin search "Austin, TX" --max-price 700000 --min-beds 3
+#   ./re redfin property https://www.redfin.com/TX/Austin/...
+#   ./re zillow search "Austin, TX" --max-price 700000
+#   ./re zillow property https://www.zillow.com/homedetails/.../<zpid>_zpid/
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+if [[ $# -lt 1 ]]; then
+    echo "usage: re <redfin|zillow> <subcommand> [args...]" >&2
+    exit 2
+fi
+MODULE="$1"
+shift
+exec uv run --quiet python -m "scripts.$MODULE" "$@"
