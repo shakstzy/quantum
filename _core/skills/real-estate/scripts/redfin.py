@@ -335,22 +335,51 @@ def _parse_csv(text: str) -> list[dict]:
 
 
 def _to_int(v):
+    """Coerce a CSV value to int, tolerating currency symbols and commas."""
+    if v in (None, ""):
+        return None
+    if isinstance(v, str):
+        v = v.replace("$", "").replace(",", "").strip()
+        if not v:
+            return None
     try:
-        return int(float(v)) if v not in (None, "") else None
+        return int(float(v))
     except (TypeError, ValueError):
         return None
 
 
 def _to_float(v):
+    if v in (None, ""):
+        return None
+    if isinstance(v, str):
+        v = v.replace("$", "").replace(",", "").strip()
+        if not v:
+            return None
     try:
-        return float(v) if v not in (None, "") else None
+        return float(v)
     except (TypeError, ValueError):
         return None
 
 
+_PROPERTY_TYPE_BY_CODE = {
+    1: "single-family", 2: "condo", 3: "townhouse",
+    4: "multi-family", 5: "land", 6: "other",
+    7: "mobile", 8: "co-op",
+}
+
+
 def _summarize_home(h: dict) -> dict:
+    """Flatten a Redfin GIS-API home into the same shape used by the CSV path.
+
+    Both paths produce dicts with: address, city, state, zip, price, beds,
+    baths, sqft, lot_size, year_built, url, status, days_on_market,
+    property_type, hoa_per_month, price_per_sqft. JSON-only extras
+    (mls_id, property_id, listing_id) are nullable on the CSV side.
+    """
     addr = h.get("streetLine") or {}
     price = h.get("price") or {}
+    hoa = h.get("hoa") or {}
+    code = h.get("propertyType")
     return {
         "mls_id": h.get("mlsId"),
         "property_id": h.get("propertyId"),
@@ -360,14 +389,17 @@ def _summarize_home(h: dict) -> dict:
         "state": (h.get("state") or {}).get("value") if isinstance(h.get("state"), dict) else h.get("state"),
         "zip": h.get("zip"),
         "price": price.get("value") if isinstance(price, dict) else price,
+        "price_per_sqft": (h.get("pricePerSqFt") or {}).get("value") if isinstance(h.get("pricePerSqFt"), dict) else h.get("pricePerSqFt"),
         "beds": h.get("beds"),
         "baths": h.get("baths"),
         "sqft": (h.get("sqFt") or {}).get("value") if isinstance(h.get("sqFt"), dict) else h.get("sqFt"),
         "lot_size": (h.get("lotSize") or {}).get("value") if isinstance(h.get("lotSize"), dict) else h.get("lotSize"),
         "year_built": (h.get("yearBuilt") or {}).get("value") if isinstance(h.get("yearBuilt"), dict) else h.get("yearBuilt"),
+        "hoa_per_month": hoa.get("value") if isinstance(hoa, dict) else hoa,
         "url": f"{BASE}{h.get('url')}" if h.get("url") and not h.get("url", "").startswith("http") else h.get("url"),
         "status": h.get("mlsStatus"),
         "listing_type": h.get("listingType"),
+        "property_type": _PROPERTY_TYPE_BY_CODE.get(code) if isinstance(code, int) else None,
         "days_on_market": (h.get("timeOnRedfin") or {}).get("days") if isinstance(h.get("timeOnRedfin"), dict) else None,
     }
 
