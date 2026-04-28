@@ -28,7 +28,7 @@ KEEP_HEADERS = {
     "message-id", "in-reply-to", "references", "list-id", "list-unsubscribe",
 }
 
-PACE_SEC = 0.3  # ~3.3 req/sec; Gmail's standard per-user limit is 250 queries/min (~4/sec)
+PACE_SEC = 0.05  # 20 req/sec; safe under Gmail's 250 quota-units/sec/user (thread.get = 10 units = 25/sec ceiling)
 MAX_RETRIES = 6  # Exponential backoff on 429/rateLimitExceeded
 
 

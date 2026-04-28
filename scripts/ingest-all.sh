@@ -10,6 +10,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG="$ROOT/raw/.ingest-log"
 mkdir -p "$LOG"
 
+# gdrive ingestor needs pymupdf4llm; runs from a dedicated venv.
+VENV_PY="$ROOT/_core/scripts/.venv/bin/python"
+PYBIN_DEFAULT="python3"
+pybin_for() { case "$1" in gdrive) echo "$VENV_PY";; *) echo "$PYBIN_DEFAULT";; esac; }
+
 ACCOUNTS=(
   "adithya.shak.kumar@gmail.com"
   "adithya@eclipse.builders"
@@ -26,12 +31,13 @@ declare -a PIDS=()
 declare -a LABELS=()
 
 for svc in "${SERVICES[@]}"; do
+  py="$(pybin_for "$svc")"
   for acct in "${ACCOUNTS[@]}"; do
     label="${svc}-${acct}"
     logfile="$LOG/${label}.log"
     echo "--- launch ${label} -> ${logfile}"
     (
-      python3 "$ROOT/workspaces/${svc}/scripts/ingest_all.py" --account "$acct"
+      "$py" "$ROOT/workspaces/${svc}/scripts/ingest_all.py" --account "$acct"
       ec=$?
       if [ $ec -eq 0 ]; then
         echo "ok ${label}"

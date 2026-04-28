@@ -1,26 +1,37 @@
-#!/usr/bin/env python3
-"""Drive ingest for one account: full metadata index + selective body extraction.
+#!/Users/shakstzy/QUANTUM/_core/scripts/.venv/bin/python
+"""Drive ingest for one account: full metadata index + clean-markdown body extraction.
 
 Pass A: enumerate every non-trashed file (own + shared-with-me) and write metadata
         to raw/gdrive/<account>/_index.ndjson.
 
-Pass B: for each file, route by mimeType + size:
-  - Native Google Doc/Slides       -> export to .md  via gog drive download --format md
-  - Native Google Sheet            -> export to .csv via gog drive download --format csv
-  - PDF / Word / PowerPoint / HTML -> download then markitdown to .md (drop original)
-  - Plain text formats (md/txt/csv/json/code) under threshold -> download verbatim
-  - Excel sheets                   -> markitdown to .md
-  - Images, audio, video           -> SKIP body, metadata only
-  - Anything > 25 MB without a markitdown route -> SKIP body, metadata only
+Pass B: route by mimeType to a per-type tool that produces clean markdown:
+
+  Google Doc       -> gog drive download --format md            (Drive native export)
+  Google Sheet     -> gog drive download --format csv           (Drive native export)
+  Google Slides    -> gog drive download --format pptx, then pptx2md
+  PDF              -> pymupdf4llm.to_markdown (in-process, fast)
+  DOCX             -> pandoc -f docx -t gfm --wrap=none
+  PPTX (Office)    -> pptx2md
+  XLSX             -> markitdown (markdown table)
+  HTML / EPUB / RTF / DOC / PPT / XLS -> markitdown (fallback)
+  Plain text       -> download verbatim
+  Image/audio/video -> SKIP body, metadata only
+  > 25 MB without a route -> SKIP body, metadata only
+
+Output naming: raw/gdrive/<account>/md/<sanitized-name>--<id8>.<ext>
+               raw/gdrive/<account>/files/<sanitized-name>--<id8>.<ext>
+
+All produced markdown is post-scrubbed for known artifacts (GoogleShape*.jpg lines,
+file://file-* text-fragment URLs).
 
 Resumable: tracks processed file IDs in raw/.ingest-log/gdrive-<account>.files.txt.
-Paced at 5 req/sec. Read-only operations only.
 """
 from __future__ import annotations
 import argparse
 import json
+import os
 import pathlib
-import shutil
+import re
 import subprocess
 import sys
 import time
@@ -29,24 +40,24 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 RAW = ROOT / "raw" / "gdrive"
 LOG = ROOT / "raw" / ".ingest-log"
 
-PACE_SEC = 0.1  # Drive quota is roomier (12k/min/user); 10/sec safe
+PACE_SEC = 0.1
 MAX_RETRIES = 6
 HEAVY_MAX_BYTES = 25 * 1024 * 1024  # 25 MB
+NAME_MAX_LEN = 80
+ID_SUFFIX_LEN = 8
 
-# Native Google formats -> (export-format, output-ext, post-process: 'none'|'markitdown')
-# Slides export to .md is rejected by gog (use pdf|pptx); we go pptx -> markitdown.
-NATIVE_EXPORTS = {
-    "application/vnd.google-apps.document":     ("md",   "md",   "none"),
-    "application/vnd.google-apps.spreadsheet":  ("csv",  "csv",  "none"),
-    "application/vnd.google-apps.presentation": ("pptx", "pptx", "markitdown"),
-}
+# mime -> route tag
+NATIVE_DOC = "application/vnd.google-apps.document"
+NATIVE_SHEET = "application/vnd.google-apps.spreadsheet"
+NATIVE_SLIDES = "application/vnd.google-apps.presentation"
 
-# Office / web formats -> download, then markitdown.
+PDF_MIME = "application/pdf"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# markitdown is the catch-all for older/legacy office and web formats.
 MARKITDOWN_MIMES = {
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/msword",
     "application/vnd.ms-powerpoint",
     "application/vnd.ms-excel",
@@ -56,7 +67,6 @@ MARKITDOWN_MIMES = {
     "application/xhtml+xml",
 }
 
-# Plain text mimetypes -> download verbatim.
 PLAIN_TEXT_PREFIXES = ("text/",)
 PLAIN_TEXT_EXACT = {
     "application/json",
@@ -68,8 +78,15 @@ PLAIN_TEXT_EXACT = {
     "application/x-typescript",
 }
 
-# Skip these entirely (body), keep metadata.
 SKIP_PREFIXES = ("image/", "audio/", "video/")
+
+# Post-scrub regexes for markdown.
+SCRUB_PATTERNS = [
+    re.compile(r"^\s*GoogleShape\d+p?\d*\.jpe?g\s*$", re.I | re.M),
+    re.compile(r"file://file-[A-Za-z0-9]+#:~:text=[^\s)]*", re.I),
+    re.compile(r"!\[\]\(GoogleShape\d+p?\d*\.jpe?g\)", re.I),  # empty image refs
+]
+COLLAPSE_BLANKS = re.compile(r"\n{3,}")
 
 
 def gog_json(args: list[str]) -> dict | list:
@@ -94,45 +111,110 @@ def gog_json(args: list[str]) -> dict | list:
     raise RuntimeError(f"gog {' '.join(args)} failed after {MAX_RETRIES} retries: {last_err}")
 
 
-def slugify(account: str) -> str:
+def gog_download(account: str, fid: str, out_path: pathlib.Path,
+                 export_format: str | None = None, timeout: int = 300) -> None:
+    """Download (or export) a Drive file with retries."""
+    delay = 1.0
+    last_err = ""
+    for _ in range(MAX_RETRIES):
+        cmd = ["gog", "-a", account, "drive", "download", fid, "--out", str(out_path)]
+        if export_format:
+            cmd += ["--format", export_format]
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout)
+        if proc.returncode == 0:
+            return
+        last_err = proc.stderr.strip()
+        retryable = any(t in last_err for t in (
+            "rateLimitExceeded", "userRateLimitExceeded", "Quota exceeded",
+            "429", "503", "500", "502", "504",
+            "backendError", "internalError",
+            "TLS handshake timeout", "i/o timeout", "context deadline",
+            "connection reset", "EOF", "no such host", "temporary failure",
+        ))
+        if not retryable:
+            raise RuntimeError(last_err)
+        time.sleep(delay)
+        delay = min(delay * 2, 60.0)
+    raise RuntimeError(f"download failed after {MAX_RETRIES} retries: {last_err}")
+
+
+def slugify_account(account: str) -> str:
     return account.replace("@", "-").replace(".", "-")
 
 
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def sanitize_name(name: str) -> str:
+    base = name.rsplit(".", 1)[0] if "." in name else name
+    s = _SLUG_RE.sub("-", base.lower()).strip("-")
+    return (s[:NAME_MAX_LEN].rstrip("-")) or "untitled"
+
+
+def filename(file: dict, ext: str) -> str:
+    name = sanitize_name(file.get("name") or "")
+    fid = (file.get("id") or "")[:ID_SUFFIX_LEN]
+    return f"{name}--{fid}.{ext}"
+
+
+def safe_ext(file: dict, fallback: str) -> str:
+    name = file.get("name") or ""
+    if "." in name:
+        ext = name.rsplit(".", 1)[1].lower()
+        if 1 <= len(ext) <= 6 and ext.isalnum():
+            return ext
+    return fallback
+
+
+def scrub_markdown(text: str) -> str:
+    for pat in SCRUB_PATTERNS:
+        text = pat.sub("", text)
+    text = COLLAPSE_BLANKS.sub("\n\n", text)
+    return text.strip() + "\n"
+
+
+def write_md(md_path: pathlib.Path, text: str) -> None:
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(scrub_markdown(text))
+
+
 def classify(file: dict) -> str:
-    """Return one of: native, markitdown, plaintext, skip."""
+    """Return route tag: native_doc, native_sheet, native_slides, pdf, docx, pptx,
+    xlsx, markitdown, plaintext, skip."""
     mime = (file.get("mimeType") or "").lower()
     size_str = file.get("size")
     size = int(size_str) if size_str and str(size_str).isdigit() else 0
-
-    if mime in NATIVE_EXPORTS:
-        return "native"
     if any(mime.startswith(p) for p in SKIP_PREFIXES):
         return "skip"
+    if mime == NATIVE_DOC:
+        return "native_doc"
+    if mime == NATIVE_SHEET:
+        return "native_sheet"
+    if mime == NATIVE_SLIDES:
+        return "native_slides"
+    if mime == PDF_MIME:
+        return "pdf" if not size or size <= HEAVY_MAX_BYTES else "skip"
+    if mime == DOCX_MIME:
+        return "docx" if not size or size <= HEAVY_MAX_BYTES else "skip"
+    if mime == PPTX_MIME:
+        return "pptx" if not size or size <= HEAVY_MAX_BYTES else "skip"
+    if mime == XLSX_MIME:
+        return "xlsx" if not size or size <= HEAVY_MAX_BYTES else "skip"
     if mime in MARKITDOWN_MIMES:
-        if size and size > HEAVY_MAX_BYTES:
-            return "skip"
-        return "markitdown"
+        return "markitdown" if not size or size <= HEAVY_MAX_BYTES else "skip"
     if mime in PLAIN_TEXT_EXACT or any(mime.startswith(p) for p in PLAIN_TEXT_PREFIXES):
-        if size and size > HEAVY_MAX_BYTES:
-            return "skip"
-        return "plaintext"
+        return "plaintext" if not size or size <= HEAVY_MAX_BYTES else "skip"
     return "skip"
 
 
 def enumerate_files(account: str) -> list[dict]:
-    """Page through drive search, return all non-trashed file metadata."""
     print(f"[{account}] enumerating drive files...", flush=True)
     files: list[dict] = []
     page_token: str | None = None
     page_n = 0
     while True:
         page_n += 1
-        cmd = [
-            "-a", account,
-            "drive", "search",
-            "--raw-query", "trashed=false",
-            "--max", "1000",
-        ]
+        cmd = ["-a", account, "drive", "search", "--raw-query", "trashed=false", "--max", "1000"]
         if page_token:
             cmd += ["--page", page_token]
         result = gog_json(cmd)
@@ -146,13 +228,33 @@ def enumerate_files(account: str) -> list[dict]:
     return files
 
 
-def safe_ext(file: dict, fallback: str) -> str:
-    name = file.get("name") or ""
-    if "." in name:
-        ext = name.rsplit(".", 1)[1].lower()
-        if 1 <= len(ext) <= 6 and ext.isalnum():
-            return ext
-    return fallback
+def convert_pdf(src: pathlib.Path) -> str:
+    import pymupdf4llm  # type: ignore
+    return pymupdf4llm.to_markdown(str(src))
+
+
+def run_pandoc(src: pathlib.Path) -> str:
+    proc = subprocess.run(
+        ["pandoc", "-f", "docx", "-t", "gfm", "--wrap=none", str(src)],
+        check=True, capture_output=True, text=True, timeout=120,
+    )
+    return proc.stdout
+
+
+def run_pptx2md(src: pathlib.Path, out: pathlib.Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["pptx2md", str(src), "--disable-image", "-o", str(out)],
+        check=True, capture_output=True, text=True, timeout=300,
+    )
+
+
+def run_markitdown(src: pathlib.Path, out: pathlib.Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["markitdown", str(src), "-o", str(out)],
+        check=True, capture_output=True, text=True, timeout=300,
+    )
 
 
 def main() -> int:
@@ -160,13 +262,15 @@ def main() -> int:
     parser.add_argument("--account", required=True)
     args = parser.parse_args()
     account = args.account
-    slug = slugify(account)
+    slug = slugify_account(account)
 
     out_dir = RAW / slug
     md_dir = out_dir / "md"
     files_dir = out_dir / "files"
+    work_dir = out_dir / ".work"  # temp dir for downloads we will convert and discard
     md_dir.mkdir(parents=True, exist_ok=True)
     files_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
     LOG.mkdir(parents=True, exist_ok=True)
 
     state_path = LOG / f"gdrive-{slug}.files.txt"
@@ -178,105 +282,119 @@ def main() -> int:
         processed = {line.strip() for line in state_path.read_text().splitlines() if line.strip()}
         print(f"[{account}] resuming: {len(processed)} files already processed", flush=True)
 
-    # Pass A: index.
     files = enumerate_files(account)
     with index_path.open("w") as fh:
         for f in files:
             fh.write(json.dumps(f, ensure_ascii=False) + "\n")
     print(f"[{account}] index written: {len(files)} files", flush=True)
 
-    # Pass B: bodies.
     state_fh = state_path.open("a")
     err_fh = err_path.open("a")
-    counts = {"native": 0, "markitdown": 0, "plaintext": 0, "skip": 0, "fail": 0}
+    counts: dict[str, int] = {}
+
+    def bump(k: str) -> None:
+        counts[k] = counts.get(k, 0) + 1
 
     try:
         for i, f in enumerate(files, 1):
             fid = f.get("id")
             if not fid or fid in processed:
                 continue
-            mime = (f.get("mimeType") or "").lower()
             decision = classify(f)
 
-            if decision == "skip":
-                counts["skip"] += 1
-                state_fh.write(fid + "\n")
-                state_fh.flush()
-                continue
-
             try:
-                if decision == "native":
-                    fmt, ext, post = NATIVE_EXPORTS[mime]
-                    if post == "markitdown":
-                        raw_path = files_dir / f"{fid}.{ext}"
-                        md_path = md_dir / f"{fid}.md"
-                        subprocess.run(
-                            ["gog", "-a", account, "drive", "download", fid,
-                             "--format", fmt, "--out", str(raw_path)],
-                            check=True, capture_output=True, text=True, timeout=300,
-                        )
-                        md_proc = subprocess.run(
-                            ["markitdown", str(raw_path), "-o", str(md_path)],
-                            check=False, capture_output=True, text=True, timeout=300,
-                        )
-                        if md_proc.returncode == 0 and md_path.exists() and md_path.stat().st_size > 0:
-                            try:
-                                raw_path.unlink()
-                            except OSError:
-                                pass
-                            counts["native"] += 1
-                        else:
-                            err_fh.write(f"{fid}\tmarkitdown(slides) failed: {md_proc.stderr.strip()[:300]}\n")
-                            err_fh.flush()
-                            counts["fail"] += 1
-                    else:
-                        out_path = md_dir / f"{fid}.{ext}"
-                        subprocess.run(
-                            ["gog", "-a", account, "drive", "download", fid,
-                             "--format", fmt, "--out", str(out_path)],
-                            check=True, capture_output=True, text=True, timeout=120,
-                        )
-                        counts["native"] += 1
-                elif decision == "plaintext":
-                    ext = safe_ext(f, "txt")
-                    out_path = files_dir / f"{fid}.{ext}"
-                    subprocess.run(
-                        ["gog", "-a", account, "drive", "download", fid, "--out", str(out_path)],
-                        check=True, capture_output=True, text=True, timeout=120,
-                    )
-                    counts["plaintext"] += 1
+                if decision == "skip":
+                    bump("skip")
+
+                elif decision == "native_doc":
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, out, export_format="md")
+                    if out.exists():
+                        out.write_text(scrub_markdown(out.read_text(errors="replace")))
+                    bump("native_doc")
+
+                elif decision == "native_sheet":
+                    out = md_dir / filename(f, "csv")
+                    gog_download(account, fid, out, export_format="csv")
+                    bump("native_sheet")
+
+                elif decision == "native_slides":
+                    pptx_tmp = work_dir / f"{fid}.pptx"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, pptx_tmp, export_format="pptx")
+                    run_pptx2md(pptx_tmp, out)
+                    if out.exists():
+                        out.write_text(scrub_markdown(out.read_text(errors="replace")))
+                    pptx_tmp.unlink(missing_ok=True)
+                    bump("native_slides")
+
+                elif decision == "pdf":
+                    src = work_dir / f"{fid}.pdf"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, src)
+                    md_text = convert_pdf(src)
+                    write_md(out, md_text)
+                    src.unlink(missing_ok=True)
+                    bump("pdf")
+
+                elif decision == "docx":
+                    src = work_dir / f"{fid}.docx"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, src)
+                    md_text = run_pandoc(src)
+                    write_md(out, md_text)
+                    src.unlink(missing_ok=True)
+                    bump("docx")
+
+                elif decision == "pptx":
+                    src = work_dir / f"{fid}.pptx"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, src)
+                    run_pptx2md(src, out)
+                    if out.exists():
+                        out.write_text(scrub_markdown(out.read_text(errors="replace")))
+                    src.unlink(missing_ok=True)
+                    bump("pptx")
+
+                elif decision == "xlsx":
+                    src = work_dir / f"{fid}.xlsx"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, src)
+                    run_markitdown(src, out)
+                    if out.exists():
+                        out.write_text(scrub_markdown(out.read_text(errors="replace")))
+                    src.unlink(missing_ok=True)
+                    bump("xlsx")
+
                 elif decision == "markitdown":
                     ext = safe_ext(f, "bin")
-                    raw_path = files_dir / f"{fid}.{ext}"
-                    md_path = md_dir / f"{fid}.md"
-                    subprocess.run(
-                        ["gog", "-a", account, "drive", "download", fid, "--out", str(raw_path)],
-                        check=True, capture_output=True, text=True, timeout=300,
-                    )
-                    md_proc = subprocess.run(
-                        ["markitdown", str(raw_path), "-o", str(md_path)],
-                        check=False, capture_output=True, text=True, timeout=300,
-                    )
-                    if md_proc.returncode == 0 and md_path.exists() and md_path.stat().st_size > 0:
-                        # Markitdown succeeded -> drop the binary original.
-                        try:
-                            raw_path.unlink()
-                        except OSError:
-                            pass
-                        counts["markitdown"] += 1
-                    else:
-                        # Conversion failed; keep the original so we at least have the bytes.
-                        err_fh.write(f"{fid}\tmarkitdown failed: {md_proc.stderr.strip()[:300]}\n")
-                        err_fh.flush()
-                        counts["fail"] += 1
+                    src = work_dir / f"{fid}.{ext}"
+                    out = md_dir / filename(f, "md")
+                    gog_download(account, fid, src)
+                    run_markitdown(src, out)
+                    if out.exists():
+                        out.write_text(scrub_markdown(out.read_text(errors="replace")))
+                    src.unlink(missing_ok=True)
+                    bump("markitdown")
+
+                elif decision == "plaintext":
+                    ext = safe_ext(f, "txt")
+                    out = files_dir / filename(f, ext)
+                    gog_download(account, fid, out)
+                    bump("plaintext")
+
             except subprocess.CalledProcessError as e:
-                err_fh.write(f"{fid}\t{decision} failed: {e.stderr.strip()[:300]}\n")
+                err_fh.write(f"{fid}\t{decision} failed: {(e.stderr or '').strip()[:300]}\n")
                 err_fh.flush()
-                counts["fail"] += 1
+                bump("fail")
             except subprocess.TimeoutExpired:
                 err_fh.write(f"{fid}\t{decision} timed out\n")
                 err_fh.flush()
-                counts["fail"] += 1
+                bump("fail")
+            except Exception as e:
+                err_fh.write(f"{fid}\t{decision} error: {str(e)[:300]}\n")
+                err_fh.flush()
+                bump("fail")
 
             state_fh.write(fid + "\n")
             state_fh.flush()
@@ -286,6 +404,13 @@ def main() -> int:
     finally:
         state_fh.close()
         err_fh.close()
+        # Best-effort cleanup of work dir.
+        try:
+            for p in work_dir.iterdir():
+                p.unlink(missing_ok=True)
+            work_dir.rmdir()
+        except OSError:
+            pass
 
     print(f"[{account}] done. {counts}", flush=True)
     return 0
