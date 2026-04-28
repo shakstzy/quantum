@@ -58,8 +58,8 @@ def classify(path: Path) -> str:
         return "L1_workspace_context"
     if re.match(r"^workspaces/[^/]+/stages/[^/]+/CONTEXT\.md$", rel):
         return "L2_stage_context"
-    if path.name == "PLAYBOOK.md":
-        return "L3_playbook"
+    if path.name == "SKILL.md":
+        return "L3_skill"
     if path.name == "CONTEXT.md":
         return "L2_other_context"
     if path.name == "CLAUDE.md":
@@ -77,7 +77,7 @@ WEIGHTS = {
     "L2_stage_context": 1.0,
     "L2_other_context": 1.0,
     "L3_ref": 0.3,
-    "L3_playbook": 0.3,
+    "L3_skill": 0.3,
     "L3_other": 0.1,
 }
 

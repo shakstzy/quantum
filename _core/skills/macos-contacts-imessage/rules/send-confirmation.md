@@ -56,7 +56,7 @@ If the caller loops over multiple recipients:
 
 ## What the preview does NOT check
 
-- Whether the recipient wants to hear from you. That is upstream logic (relationships voice rules, escalation playbook, etc.).
+- Whether the recipient wants to hear from you. That is upstream logic (relationships voice rules, escalation skill, etc.).
 - Whether the body has typos. The agent that drafted the body owns that.
 - Whether the recipient is on the caller's allowlist. Out of scope.
 

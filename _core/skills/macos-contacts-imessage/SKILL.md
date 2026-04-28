@@ -41,7 +41,7 @@ If any required field is missing, stop and ask. Do not guess phone numbers, name
 5. **Preview the send.** `imessage.sh` auto-detects the service (see "Service detection" below), prints the assembled payload (recipient, resolved service with detection source, body) to stdout, then sends immediately. Do NOT wait for a `SEND` token unless `MACOS_IMSG_REQUIRE_CONFIRM=1` is set. See `rules/send-confirmation.md`.
 6. **Send.** Call `scripts/imessage.sh send --to <recipient> --text "<body>" [--service auto|iMessage|SMS|RCS]`. Default `auto` resolves iMessage vs SMS vs RCS from Apple's local registration data plus Messages.app chat history. For attachments use `send-file --to <recipient> --file <absolute-path>`.
 7. **History or watch (if requested).** Call `scripts/history.sh chats` to list recent conversations, `history --handle <recipient> [--limit N]` to fetch a thread, or `watch --handle <recipient> --since-rowid N` to fetch messages newer than the last seen rowid. These commands require FDA; sends do not.
-8. **Emit results.** Return the JSON payload from the invoked script. `imessage.sh send` emits `{"handoff":"ok","service_used":"...","detection":"ids|messages-chat|explicit"}`. The playbook does NOT claim delivery. Delivery is visible only in Messages.app UI.
+8. **Emit results.** Return the JSON payload from the invoked script. `imessage.sh send` emits `{"handoff":"ok","service_used":"...","detection":"ids|messages-chat|explicit"}`. The skill does NOT claim delivery. Delivery is visible only in Messages.app UI.
 9. **Audit.** Run every check in the Audit table below. If any fail, surface them.
 
 ## Service detection (auto mode)
@@ -68,9 +68,9 @@ Run after step 7, before declaring done:
 |-------|----------------|
 | Automation verified | `osascript` probe of Messages succeeded this session OR the caller set `MACOS_IMSG_SKIP_PERMCHECK=1` |
 | Phone normalized | All recipients are `+<digits>` OR an email address |
-| Service resolved honestly | `imessage.sh` emitted `service_used` with a detection source (`ids`, `messages-chat`, or `explicit`); the playbook never picked iMessage blindly |
+| Service resolved honestly | `imessage.sh` emitted `service_used` with a detection source (`ids`, `messages-chat`, or `explicit`); the skill never picked iMessage blindly |
 | Send previewed | Payload (recipient, resolved service + detection source, body) printed to stdout before send; `SEND` token required only if `MACOS_IMSG_REQUIRE_CONFIRM=1` |
-| Handoff captured | osascript returned exit 0 and `imessage.sh` emitted `{"handoff":"ok",...}`. Delivery is NOT claimed by the playbook; it is visible in Messages.app UI only |
+| Handoff captured | osascript returned exit 0 and `imessage.sh` emitted `{"handoff":"ok",...}`. Delivery is NOT claimed by the skill; it is visible in Messages.app UI only |
 | No chat.db on send path | `imessage.sh` did not read `~/Library/Messages/chat.db` at any point during the send. chat.db access is confined to `history.sh` |
 | Contact mutation confirmed | After `create`/`update`, a `find` returns the new state |
 | Read-only DB access | If `scripts/history.sh` ran, it opened chat.db with `-readonly` (never `-readwrite`) |
@@ -96,9 +96,9 @@ Run after step 7, before declaring done:
 
 - AppleScript cannot send tapbacks, edit, or unsend messages. These require Apple's private MessageKit API.
 - AppleScript send to SMS or RCS (not iMessage) requires a paired iPhone via Continuity. No fallback on Mac-only.
-- IDS service detection for phone handles is not always definitive without an authenticated `preferredFromID`. The playbook compensates by consulting Messages.app's chat history as the second source, but a fresh handle the user has never messaged will fall through to `--service` refusal. Pass an explicit service to unblock cold sends.
-- Delivery status beyond osascript handoff is NOT programmatically observable without reading chat.db. The playbook intentionally does not read chat.db on the send path. Verify delivery in Messages.app UI.
-- Inbound attachments: `chat.db` stores file paths only. The actual files live in `~/Library/Messages/Attachments/`. This playbook returns paths; callers read files themselves if needed.
+- IDS service detection for phone handles is not always definitive without an authenticated `preferredFromID`. The skill compensates by consulting Messages.app's chat history as the second source, but a fresh handle the user has never messaged will fall through to `--service` refusal. Pass an explicit service to unblock cold sends.
+- Delivery status beyond osascript handoff is NOT programmatically observable without reading chat.db. The skill intentionally does not read chat.db on the send path. Verify delivery in Messages.app UI.
+- Inbound attachments: `chat.db` stores file paths only. The actual files live in `~/Library/Messages/Attachments/`. This skill returns paths; callers read files themselves if needed.
 - Dates in chat.db are Apple-epoch nanoseconds (seconds since 2001-01-01 UTC). `history.sh` converts to ISO-8601 in local time; callers should expect string timestamps.
 - **Rich-content messages return empty text.** When Messages.app receives a message with inline reply, link preview, or rich media, it stores the content in the `attributedBody` NSKeyedArchiver blob and leaves `text` NULL. `history.sh` returns empty string for those rows. A decoder lives on the roadmap; until then callers see the message exists but not what it said.
 - macOS 14+ only. Earlier versions have a different chat.db schema and different `IDSIDQueryController` selectors.

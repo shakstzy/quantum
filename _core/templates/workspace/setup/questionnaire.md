@@ -124,4 +124,4 @@
 
 ## After Onboarding
 
-After all replacements, scan the entire workspace for remaining `{{` patterns. If any remain, ask for the missing info. Then run `python3 _core/playbooks/icm-audit/scripts/audit.py` to confirm structural compliance.
+After all replacements, scan the entire workspace for remaining `{{` patterns. If any remain, ask for the missing info. Then run `python3 _core/skills/icm-audit/scripts/audit.py` to confirm structural compliance.

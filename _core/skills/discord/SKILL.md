@@ -119,7 +119,7 @@ Discord REST is the authoritative surface for edge cases. Do not re-document end
 - `package.json` patchright as the only dep; `postinstall` pins Chrome channel.
 - `references/detection-mitigation.md` risk surface, why keep Discord open, heartbeat-WS roadmap.
 - `references/token-extraction.md` manual DevTools fallback if patchright login breaks.
-- `references/ban-playbook.md` what to do if the account gets flagged.
+- `references/ban-procedure.md` what to do if the account gets flagged.
 - `rules/send-gate.md` when the `CONFIRM` gate fires and when it does not.
 
 ## Security notes
