@@ -16,7 +16,7 @@ Trigger phrases: "post to IG", "publish this reel", "drop this on TikTok", "uplo
 Do NOT fire for:
 - Reading DMs, replying to comments, or analytics lookups (not covered; use Zernio dashboard).
 - Platforms other than IG, YT, TikTok (future references/ files can extend; do not improvise).
-- Paid ads, audience sync, or ad-level analytics. Those live on Zernio's unified Ads API (`/v1/ads`, launched 2026-04-17) and will land as a sibling `zernio-ads` playbook when needed. Forward context: `references/ads-api.md`.
+- Paid ads, audience sync, conversion events (CAPI / Google `ingestEvents`), ad-level analytics. Those live in the sibling `_core/skills/zernio-ads/` playbook (covers all six Zernio ad platforms: `metaads`, `googleads`, `linkedinads`, `tiktokads`, `pinterestads`, `xads`). Trigger phrases route there, not here. Same `ZERNIO_API_KEY`, but a tighter `LAUNCH-AD` gate replaces `PUBLISH` because every write path moves real money or sends PII to a paid platform. See `references/ads-api.md` for the cross-link.
 - Content that has not yet been approved by the caller. The skill publishes; it does not draft.
 
 ## Required caller inputs
