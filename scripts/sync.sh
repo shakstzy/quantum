@@ -41,7 +41,7 @@ if ! git diff --cached --quiet; then
     exit 2
   fi
   MSG="chore(auto-sync): $(date '+%Y-%m-%d %H:%M:%S')"
-  if git -c user.name="quantum-sync" -c user.email="auto-sync@local" commit -m "$MSG" >> "$LOG" 2>&1; then
+  if git -c user.name="Adithya Kumar" -c user.email="adithya.shak.kumar@gmail.com" commit -m "$MSG" >> "$LOG" 2>&1; then
     log "committed: $MSG"
   fi
 fi
