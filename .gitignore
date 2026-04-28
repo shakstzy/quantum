@@ -17,9 +17,6 @@ references/
 # raw is cron-fed personal data; keep folder structure, never commit content
 raw/*/*
 !raw/*/.gitkeep
-# tinder workspace nests one level deeper (raw/tinder/{swipes,matches,threads,sent}/)
-raw/tinder/*/*
-!raw/tinder/*/.gitkeep
 
 # patchright persistent chrome profile — never commit; carries auth cookies
 workspaces/tinder/.profile/

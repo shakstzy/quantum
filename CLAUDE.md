@@ -113,7 +113,7 @@ Before answering any question about Adithya's life, projects, people, history, o
 
 After a workspace deposits new files into `raw/<workspace>/`:
 
-1. Files land at `raw/<workspace>/YYYY-MM-DD-<slug>.<ext>`.
+1. Files land at `raw/<workspace>/<slug>.<ext>` (per-entity workspaces like `tinder`, `people`) OR `raw/<workspace>/YYYY-MM-DD-<slug>.<ext>` (per-event workspaces like `journal`, `email`). The "Raw deposits MUST be graph-linkable" rules below apply to both shapes.
 2. The next scheduled `/graphify raw/ --update` rebuilds the graph incrementally.
 3. Workspaces never hand-edit `graphify-out/`. Graphify owns it.
 
