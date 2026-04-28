@@ -501,7 +501,16 @@ export async function runBatch(argv) {
     await openHistoryPanel(ctx.page);
     const preBaseline = await scrapeUserAssets(ctx.page, userSubstr);
     const baselineCdns = new Set(preBaseline.map(x => x.cdn));
-    console.log(`[higgsfield-batch] baseline: ${baselineCdns.size} pre-existing user assets`);
+    // History panel is lazy-loaded: scrapeUserAssets only sees what's currently
+    // mounted (~20-30 items). Older assets that scroll into view later will leak
+    // through the !baselineCdns filter and get misattributed. Anchor on a UTC
+    // timestamp instead: only assets created at-or-after the batch start are
+    // candidates. Format matches asset filenames: YYYYMMDDHHMMSS.
+    const batchStartTs = (() => {
+      const d = new Date(); const p = n => String(n).padStart(2, '0');
+      return d.getUTCFullYear().toString() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds());
+    })();
+    console.log(`[higgsfield-batch] baseline: ${baselineCdns.size} pre-existing user assets; gating fresh assets at ts >= ${batchStartTs}`);
 
     const unlimState = await enableUnlimitedToggle(ctx.page);
     console.log(`[higgsfield-batch] unlimited toggle: ${unlimState}`);
@@ -533,7 +542,13 @@ export async function runBatch(argv) {
       if (inflight.size === 0) return;
       // History-panel fallback: look for fresh assets not yet tied to anyone.
       const all = await scrapeUserAssets(ctx.page, userSubstr);
-      const fresh = all.filter(a => !baselineCdns.has(a.cdn) && !baselineCdns.has(a.derivedMp4Url || ''));
+      const fresh = all.filter(a => {
+        if (baselineCdns.has(a.cdn) || baselineCdns.has(a.derivedMp4Url || '')) return false;
+        // Timestamp gate: must be lex-comparable >= batch start (14-digit YYYYMMDDHHMMSS).
+        // Empty / missing timestamp is rejected to fail closed.
+        if (!a.timestamp || a.timestamp.length !== 14) return false;
+        return a.timestamp >= batchStartTs;
+      });
       // In cinema batches, the kind mix can be image + video. For pure image or
       // pure video batches, filter down to just matching kind so foreign-tab
       // generations of the other kind don't pollute the pool.
