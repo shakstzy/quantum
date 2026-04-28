@@ -61,9 +61,23 @@ function setFrontmatterField(rawFm, key, value) {
   return rawFm + `\n${key}: ${formatted}`;
 }
 
+// A "human first-name pattern" = a single ascii word, 2+ letters, capitalized,
+// no business-noise tokens. If the firstName slot looks like that, default to person
+// even if the rest of the name contains employer/brand words (e.g. "Amy" / "Yensuang Coinbase APM").
+function looksLikeHumanFirstName(s) {
+  if (!s) return false;
+  const trimmed = s.trim();
+  if (trimmed.length < 2) return false;
+  if (!/^[A-Z][a-zA-Z'\-]+$/.test(trimmed)) return false;
+  if (BUSINESS_NAME_RE.test(trimmed)) return false;
+  if (KNOWN_BRANDS_RE.test(trimmed)) return false;
+  return true;
+}
+
 function classify({ rawFm }) {
   const fullName = get(rawFm, "full_name") || "";
   const firstName = get(rawFm, "first_name") || "";
+  const lastName = get(rawFm, "last_name") || "";
   const organization = get(rawFm, "organization") || "";
   const emails = getArray(rawFm, "emails");
   const phones = getArray(rawFm, "phones");
@@ -71,14 +85,22 @@ function classify({ rawFm }) {
   let rawPhones = [];
   try { rawPhones = JSON.parse(rawPhonesLine); } catch {}
 
-  const nameForChecks = `${fullName} ${organization}`;
-  if (BUSINESS_NAME_RE.test(nameForChecks)) return "business";
-  if (KNOWN_BRANDS_RE.test(nameForChecks)) return "business";
+  // Hard signals (overrule first-name check): these are unambiguously business.
   if (rawPhones.some(looksLikeShortcode)) return "business";
   if (rawPhones.some(looksLikeMnemonic)) return "business";
   if (emails.length && emails.every(e => NOREPLY_DOMAIN_RE.test(e))) return "business";
 
-  if (firstName.length === 1 && !get(rawFm, "last_name") && phones.length === 0 && emails.length === 0) return "noise";
+  // If the first-name field looks like a real human, trust it — even if employer/brand
+  // appears later in the name. "Amy Yensuang Coinbase APM" is a person; "Apple Support" is not.
+  const humanFirst = looksLikeHumanFirstName(firstName);
+  if (!humanFirst) {
+    const nameForChecks = `${fullName} ${organization}`;
+    if (BUSINESS_NAME_RE.test(nameForChecks)) return "business";
+    if (KNOWN_BRANDS_RE.test(nameForChecks)) return "business";
+  }
+
+  // Noise: nothing identifying at all.
+  if (firstName.length <= 1 && !lastName && phones.length === 0 && emails.length === 0) return "noise";
 
   return "person";
 }
