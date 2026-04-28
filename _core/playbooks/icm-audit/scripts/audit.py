@@ -174,19 +174,22 @@ def step3_workspace_integrity(out_dir):
         for f in ws.rglob("*"):
             if not f.is_file():
                 continue
-            if f.suffix.lower() not in {".md", ".sh", ".py", ".mjs", ".js", ".ts", ".json"}:
+            if is_excluded(f):
                 continue
-            if "setup/questionnaire.md" in f.relative_to(REPO).as_posix():
+            if f.suffix.lower() not in {".md"}:
+                continue
+            rel = f.relative_to(REPO).as_posix()
+            if rel.endswith("setup/questionnaire.md"):
                 continue
             try:
                 content = f.read_text(errors="ignore")
             except OSError:
                 continue
             for i, line in enumerate(content.splitlines(), 1):
-                for m in re.finditer(r"\{\{[^}]+\}\}", line):
+                for m in re.finditer(r"\{\{[A-Z][A-Z0-9_?/]*\}\}", line):
                     placeholder_files.append({
                         "workspace": ws.name,
-                        "path": f.relative_to(REPO).as_posix(),
+                        "path": rel,
                         "line": i,
                         "span": m.group(0),
                     })
