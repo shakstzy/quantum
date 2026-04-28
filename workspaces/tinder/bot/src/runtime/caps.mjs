@@ -1,0 +1,82 @@
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { CAPS_FILE, RATE_STATE_FILE } from "./paths.mjs";
+
+let _capsCache = null;
+
+export async function loadCaps() {
+  if (_capsCache) return _capsCache;
+  _capsCache = JSON.parse(await readFile(CAPS_FILE, "utf8"));
+  return _capsCache;
+}
+
+async function loadState() {
+  try { return JSON.parse(await readFile(RATE_STATE_FILE, "utf8")); }
+  catch { return { day: {}, hour: {}, last: {} }; }
+}
+
+async function saveState(s) {
+  await mkdir(dirname(RATE_STATE_FILE), { recursive: true });
+  await writeFile(RATE_STATE_FILE, JSON.stringify(s, null, 2));
+}
+
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+function hourKey() { return new Date().toISOString().slice(0, 13); }
+
+function pruneOld(s) {
+  const today = todayKey();
+  const thisHour = hourKey();
+  for (const k of Object.keys(s.day || {})) if (k !== today) delete s.day[k];
+  for (const k of Object.keys(s.hour || {})) if (!k.startsWith(today)) delete s.hour[k];
+  if (Object.keys(s.hour || {}).length > 48) {
+    const sorted = Object.keys(s.hour).sort();
+    for (const k of sorted.slice(0, sorted.length - 24)) delete s.hour[k];
+  }
+}
+
+export async function checkAndIncrement(kind) {
+  const caps = await loadCaps();
+  const state = await loadState();
+  pruneOld(state);
+
+  const today = todayKey();
+  const thisHour = hourKey();
+  state.day[today] = state.day[today] || {};
+  state.hour[thisHour] = state.hour[thisHour] || {};
+  state.last = state.last || {};
+
+  const dayUsed = state.day[today][kind] || 0;
+  const hourUsed = state.hour[thisHour][kind] || 0;
+
+  if (kind === "swipe" && dayUsed >= caps.swipes.per_day) {
+    throw new Error(`cap_reached: swipes daily ${dayUsed}/${caps.swipes.per_day}`);
+  }
+  if (kind === "message" && hourUsed >= caps.messages.per_hour) {
+    throw new Error(`cap_reached: messages hourly ${hourUsed}/${caps.messages.per_hour}`);
+  }
+
+  state.day[today][kind] = dayUsed + 1;
+  state.hour[thisHour][kind] = hourUsed + 1;
+  state.last[kind] = Date.now();
+  await saveState(state);
+  return { dayUsed: dayUsed + 1, hourUsed: hourUsed + 1 };
+}
+
+export async function readCounters() {
+  const state = await loadState();
+  pruneOld(state);
+  return { day: state.day[todayKey()] || {}, hour: state.hour[hourKey()] || {}, last: state.last || {} };
+}
+
+export async function shouldSkipDay() {
+  const caps = await loadCaps();
+  const state = await loadState();
+  state.skipPlan = state.skipPlan || {};
+  const today = todayKey();
+  if (state.skipPlan[today] === undefined) {
+    state.skipPlan[today] = Math.random() < caps.global.skip_day_probability;
+    for (const k of Object.keys(state.skipPlan)) if (k !== today) delete state.skipPlan[k];
+    await saveState(state);
+  }
+  return state.skipPlan[today];
+}
