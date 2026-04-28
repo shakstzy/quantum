@@ -1,90 +1,191 @@
-"""Redfin scraper using internal stingray API endpoints.
+"""Redfin scraper using public HTML pages.
 
-These endpoints power Redfin's own web app. They are undocumented but stable
-enough for personal use at low volume. JSON responses are prefixed with the
-XSSI guard `{}&&` which is stripped before parsing.
+Redfin's WAF (CloudFront) blocks direct hits to /stingray/do/* and
+/stingray/api/home/details/* but lets the public HTML pages through. Those
+pages are server-rendered and embed every API response Redfin's React app
+needs into a `reactServerState.InitialContext` <script> blob, including the
+XSSI-prefixed JSON we'd otherwise call directly.
+
+So the strategy is:
+  1. GET the HTML page humans visit (city / zipcode / property URL).
+  2. Pull the InitialContext JSON.
+  3. Reach into `ReactServerAgent.cache.dataCache[<key>].res.text`, strip the
+     `{}&&` XSSI guard, parse the inner JSON.
+  4. Fall through to the gis-csv/gis JSON endpoints (NOT WAF-blocked) when
+     the cache entry isn't there.
+
+Region resolution (free-text -> region_id, region_type) goes through the
+brave-search skill: query "site:redfin.com <city>" and parse the URL path.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
+import shlex
+import subprocess
 import sys
-import time
 from typing import Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlparse
 
-from curl_cffi import requests
+from curl_cffi import requests as curl_requests
 
 XSSI_PREFIX = "{}&&"
 BASE = "https://www.redfin.com"
 DEFAULT_HEADERS = {
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.redfin.com/",
 }
+INITIAL_CTX_RE = re.compile(
+    r"reactServerState\.InitialContext\s*=\s*(\{.*?\});", re.DOTALL
+)
+# city URLs look like /city/<id>/<state>/<name>
+CITY_URL_RE = re.compile(r"/city/(\d+)/([A-Z]{2})/([^/]+)")
+# zip URLs like /zipcode/78704
+ZIP_URL_RE = re.compile(r"/zipcode/(\d+)")
+# neighborhood URLs like /neighborhood/<id>/...
+NEIGHBORHOOD_URL_RE = re.compile(r"/neighborhood/(\d+)/")
+
+# Region type IDs Redfin's GIS endpoint uses (NOT the autocomplete IDs).
+GIS_REGION_TYPE = {"city": 6, "zip": 2, "neighborhood": 1, "county": 5, "state": 4}
+
+# Property URL: /TX/Austin/2403-E-2nd-St-78702/home/29841515
+PROPERTY_URL_RE = re.compile(r"/[A-Z]{2}/[^/]+/[^/]+/home/(\d+)")
 
 
-def _get(path: str, params: dict[str, Any] | None = None, impersonate: str = "chrome") -> Any:
-    url = f"{BASE}{path}"
-    r = requests.get(url, params=params, headers=DEFAULT_HEADERS, impersonate=impersonate, timeout=20)
+_session: curl_requests.Session | None = None
+
+
+def _get_session() -> curl_requests.Session:
+    """Return a warmed session. We hit the homepage once to acquire cookies."""
+    global _session
+    if _session is None:
+        s = curl_requests.Session(impersonate="chrome131")
+        s.get(BASE + "/", headers=DEFAULT_HEADERS, timeout=20)
+        _session = s
+    return _session
+
+
+def _fetch_html(url: str) -> str:
+    s = _get_session()
+    r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
     if r.status_code != 200:
-        raise RuntimeError(f"redfin {path} -> HTTP {r.status_code}: {r.text[:200]}")
-    body = r.text
-    if body.startswith(XSSI_PREFIX):
-        body = body[len(XSSI_PREFIX):]
+        raise RuntimeError(f"redfin GET {url} -> HTTP {r.status_code}: {r.text[:200]}")
+    return r.text
+
+
+def _initial_context(html: str) -> dict:
+    m = INITIAL_CTX_RE.search(html)
+    if not m:
+        raise RuntimeError("redfin: reactServerState.InitialContext not in HTML; layout changed?")
+    return json.loads(m.group(1))
+
+
+def _cache_entry(ctx: dict, path_prefix: str) -> dict | None:
+    """Pull the parsed body of a cached API response by URL path prefix."""
+    cache = (ctx.get("ReactServerAgent.cache") or {}).get("dataCache") or {}
+    for key, entry in cache.items():
+        if not key.startswith(path_prefix):
+            continue
+        text = ((entry.get("res") or {}).get("text")) or ""
+        if text.startswith(XSSI_PREFIX):
+            text = text[len(XSSI_PREFIX):]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Region resolution
+# ---------------------------------------------------------------------------
+
+def _brave_search_first_redfin_url(query: str) -> str | None:
+    """Use the brave-search skill to find the Redfin URL for a query."""
+    brave = "/Users/shakstzy/QUANTUM/_core/skills/brave-search/search.sh"
+    if not os.path.exists(brave):
+        return None
+    q = f"site:redfin.com {query}"
     try:
-        return json.loads(body)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"redfin {path} -> non-JSON body: {body[:200]}") from e
+        out = subprocess.check_output([brave, q, "5"], timeout=20).decode()
+    except Exception:
+        return None
+    try:
+        data = json.loads(out)
+    except Exception:
+        return None
+    results = (data.get("web") or {}).get("results") or data.get("results") or []
+    for r in results:
+        url = r.get("url") or ""
+        # Prefer city/<id>/.../houses-for-sale URLs
+        if CITY_URL_RE.search(url) or ZIP_URL_RE.search(url):
+            return url
+    if results:
+        return results[0].get("url")
+    return None
 
 
-def autocomplete(query: str) -> list[dict]:
-    """Return location matches for a free-text query (city, zip, address)."""
-    data = _get("/stingray/do/location-autocomplete", {"location": query, "v": "2"})
-    sections = (data.get("payload") or {}).get("sections") or []
-    out = []
-    for s in sections:
-        for row in s.get("rows") or []:
-            out.append({
-                "name": row.get("name"),
-                "subName": row.get("subName"),
-                "type": row.get("type"),
-                "id": row.get("id"),
-                "url": row.get("url"),
-            })
-    return out
+def resolve_region(query: str) -> dict:
+    """Return {region_id, region_type, url, path} for a free-text query.
 
-
-def _resolve_region(query: str) -> tuple[str, str]:
-    """Resolve a free-text query into (region_id, region_type) for /api/gis.
-
-    Region type ids Redfin uses: 1=zip, 2=city, 4=county, 5=state, 6=neighborhood.
-    The autocomplete response embeds these in the row's URL path, e.g.
-    `/city/30818/TX/Austin`. We parse the URL.
+    Resolution order:
+      1. If `query` already looks like a Redfin URL or path, parse it.
+      2. Else, ask Brave for `site:redfin.com <query>` and pick the first
+         /city/<id>, /zipcode/<id>, or /neighborhood/<id> URL.
     """
-    matches = autocomplete(query)
-    if not matches:
-        raise RuntimeError(f"redfin: no autocomplete match for {query!r}")
-    # Prefer city, then zip, then anything with an id+url.
-    type_priority = {"2": 0, "1": 1, "6": 2, "4": 3, "5": 4}
-    matches.sort(key=lambda m: type_priority.get(str(m.get("type")), 99))
-    for m in matches:
-        rid = m.get("id")
-        url = m.get("url") or ""
-        if not rid or not url:
-            continue
-        # url like /city/30818/TX/Austin, /zipcode/78704, /neighborhood/...
-        parts = [p for p in url.split("/") if p]
-        if not parts:
-            continue
-        kind = parts[0]
-        type_map = {"zipcode": "2", "city": "6", "county": "5", "neighborhood": "1", "state": "4"}
-        # Note: Redfin's `region_type` for the GIS endpoint maps differently than autocomplete `type`.
-        # Empirically: 1=neighborhood, 2=zip, 5=county, 6=city. We invert to match GIS.
-        gis_map = {"zipcode": "2", "city": "6", "county": "5", "neighborhood": "1", "state": "4"}
-        rtype = gis_map.get(kind)
-        if rtype:
-            return str(rid), rtype
-    raise RuntimeError(f"redfin: could not resolve region for {query!r}")
+    # Direct URL or path
+    looks_like_url = query.startswith("http") or query.startswith("/")
+    candidate = query if looks_like_url else None
+    if candidate is None:
+        candidate = _brave_search_first_redfin_url(query)
+    if not candidate:
+        raise RuntimeError(
+            f"redfin: could not resolve {query!r}; pass a Redfin URL or check brave-search auth"
+        )
+    path = urlparse(candidate).path or candidate
+    if m := CITY_URL_RE.search(path):
+        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["city"],
+                "kind": "city", "state": m.group(2), "name": m.group(3),
+                "url": BASE + f"/city/{m.group(1)}/{m.group(2)}/{m.group(3)}"}
+    if m := ZIP_URL_RE.search(path):
+        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["zip"],
+                "kind": "zip", "url": BASE + f"/zipcode/{m.group(1)}"}
+    if m := NEIGHBORHOOD_URL_RE.search(path):
+        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["neighborhood"],
+                "kind": "neighborhood", "url": BASE + path}
+    raise RuntimeError(f"redfin: URL {candidate!r} doesn't match a known region pattern")
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+def _build_filter_segment(*, max_price=None, min_price=None, min_beds=None,
+                          min_baths=None, min_sqft=None, home_types=None) -> str | None:
+    parts = []
+    if home_types:
+        parts.append("property-type=" + ",".join(home_types))
+    if max_price is not None:
+        parts.append(f"max-price={_money(max_price)}")
+    if min_price is not None:
+        parts.append(f"min-price={_money(min_price)}")
+    if min_beds is not None:
+        parts.append(f"min-beds={min_beds}")
+    if min_baths is not None:
+        parts.append(f"min-baths={min_baths}")
+    if min_sqft is not None:
+        parts.append(f"min-sqft={min_sqft}")
+    return "/filter/" + ",".join(parts) if parts else ""
+
+
+def _money(n: int) -> str:
+    if n >= 1_000_000 and n % 1_000_000 == 0:
+        return f"{n // 1_000_000}m"
+    if n >= 1_000 and n % 1_000 == 0:
+        return f"{n // 1_000}k"
+    return str(n)
 
 
 def search(
@@ -98,50 +199,107 @@ def search(
     home_types: list[str] | None = None,
     num_homes: int = 50,
 ) -> dict:
-    """Search listings by city / zip / neighborhood. Returns JSON with `homes` list."""
-    region_id, region_type = _resolve_region(query)
-    # Mirror the params Redfin's web UI sends. `al=1` means "active listings",
-    # `market=austin` is autodetected server-side, `num_homes` capped ~450.
-    params = {
-        "al": 1,
-        "market": "socal",  # ignored when region_id+region_type are given
-        "num_homes": min(num_homes, 450),
-        "ord": "redfin-recommended-asc",
-        "page_number": 1,
-        "region_id": region_id,
-        "region_type": region_type,
-        "sf": "1,2,3,5,6,7",  # status filter: active, contingent, etc.
-        "status": 9,           # for sale
-        "uipt": "1,2,3,4,5,6,7,8",  # property types
-        "v": 8,
-    }
-    if max_price is not None:
-        params["max_price"] = max_price
-    if min_price is not None:
-        params["min_price"] = min_price
-    if min_beds is not None:
-        params["num_beds"] = min_beds
-    if min_baths is not None:
-        params["num_baths"] = min_baths
-    if min_sqft is not None:
-        params["min_sqft"] = min_sqft
-    if home_types:
-        # uipt: 1=house, 2=condo, 3=townhouse, 4=multi, 5=land, 6=other, 7=mobile, 8=coop
-        params["uipt"] = ",".join(home_types)
-
-    data = _get("/stingray/api/gis", params)
-    homes = ((data.get("payload") or {}).get("homes")) or []
-    out_homes = []
-    for h in homes:
-        out_homes.append(_summarize_home(h))
+    region = resolve_region(query)
+    filter_seg = _build_filter_segment(
+        max_price=max_price, min_price=min_price, min_beds=min_beds,
+        min_baths=min_baths, min_sqft=min_sqft, home_types=home_types,
+    )
+    url = region["url"] + (filter_seg or "")
+    html = _fetch_html(url)
+    ctx = _initial_context(html)
+    region_resp = _cache_entry(ctx, "/stingray/api/region")
+    if not region_resp:
+        # Fallback: hit gis-csv directly (still works through WAF).
+        return _search_via_gis(region, num_homes=num_homes,
+                               max_price=max_price, min_price=min_price,
+                               min_beds=min_beds, min_baths=min_baths,
+                               min_sqft=min_sqft, home_types=home_types)
+    homes = ((region_resp.get("payload") or {}).get("homes")) or []
     return {
         "source": "redfin",
         "query": query,
-        "region_id": region_id,
-        "region_type": region_type,
-        "count": len(out_homes),
-        "homes": out_homes,
+        "region": region,
+        "url": url,
+        "count": len(homes),
+        "homes": [_summarize_home(h) for h in homes][:num_homes],
     }
+
+
+def _search_via_gis(region: dict, **kw) -> dict:
+    """Fallback path: /stingray/api/gis-csv."""
+    s = _get_session()
+    params = {
+        "al": 1, "market": "austin", "num_homes": min(kw.get("num_homes", 50), 450),
+        "ord": "redfin-recommended-asc", "page_number": 1,
+        "region_id": region["region_id"], "region_type": region["region_type"],
+        "sf": "1,2,3,5,6,7", "status": 9,
+        "uipt": ",".join(kw.get("home_types") or ["1", "2", "3", "4", "5", "6", "7", "8"]),
+        "v": 8,
+    }
+    if kw.get("max_price") is not None:
+        params["max_price"] = kw["max_price"]
+    if kw.get("min_price") is not None:
+        params["min_price"] = kw["min_price"]
+    if kw.get("min_beds") is not None:
+        params["num_beds"] = kw["min_beds"]
+    if kw.get("min_baths") is not None:
+        params["num_baths"] = kw["min_baths"]
+    if kw.get("min_sqft") is not None:
+        params["min_sqft"] = kw["min_sqft"]
+    r = s.get(BASE + "/stingray/api/gis-csv", params=params,
+              headers={**DEFAULT_HEADERS, "Accept": "text/csv"}, timeout=25)
+    if r.status_code != 200:
+        raise RuntimeError(f"redfin gis-csv -> HTTP {r.status_code}: {r.text[:200]}")
+    rows = _parse_csv(r.text)
+    return {
+        "source": "redfin",
+        "query": region.get("name") or region.get("url"),
+        "region": region,
+        "url": r.url,
+        "count": len(rows),
+        "homes": rows,
+    }
+
+
+def _parse_csv(text: str) -> list[dict]:
+    import csv
+    import io
+    reader = csv.DictReader(io.StringIO(text))
+    out = []
+    for row in reader:
+        # Normalize a few columns to friendlier names.
+        out.append({
+            "address": row.get("ADDRESS"),
+            "city": row.get("CITY"),
+            "state": row.get("STATE OR PROVINCE"),
+            "zip": row.get("ZIP OR POSTAL CODE"),
+            "price": _to_int(row.get("PRICE")),
+            "beds": _to_int(row.get("BEDS")),
+            "baths": _to_float(row.get("BATHS")),
+            "sqft": _to_int(row.get("SQUARE FEET")),
+            "lot_size": _to_int(row.get("LOT SIZE")),
+            "year_built": _to_int(row.get("YEAR BUILT")),
+            "url": row.get("URL (SEE https://www.redfin.com/buy-a-home/comparative-market-analysis FOR INFO ON PRICING)") or row.get("URL"),
+            "status": row.get("STATUS"),
+            "property_type": row.get("PROPERTY TYPE"),
+            "days_on_market": _to_int(row.get("DAYS ON MARKET")),
+            "hoa_per_month": _to_int(row.get("$/SQUARE FEET") and row.get("HOA/MONTH")),
+        })
+    return out
+
+
+def _to_int(v):
+    try:
+        return int(float(v)) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(v):
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _summarize_home(h: dict) -> dict:
@@ -151,103 +309,124 @@ def _summarize_home(h: dict) -> dict:
         "mls_id": h.get("mlsId"),
         "property_id": h.get("propertyId"),
         "listing_id": h.get("listingId"),
-        "address": addr.get("value"),
+        "address": addr.get("value") if isinstance(addr, dict) else h.get("streetLine"),
         "city": h.get("city"),
         "state": (h.get("state") or {}).get("value") if isinstance(h.get("state"), dict) else h.get("state"),
         "zip": h.get("zip"),
-        "price": price.get("value"),
+        "price": price.get("value") if isinstance(price, dict) else price,
         "beds": h.get("beds"),
         "baths": h.get("baths"),
         "sqft": (h.get("sqFt") or {}).get("value") if isinstance(h.get("sqFt"), dict) else h.get("sqFt"),
         "lot_size": (h.get("lotSize") or {}).get("value") if isinstance(h.get("lotSize"), dict) else h.get("lotSize"),
         "year_built": (h.get("yearBuilt") or {}).get("value") if isinstance(h.get("yearBuilt"), dict) else h.get("yearBuilt"),
-        "url": f"{BASE}{h.get('url')}" if h.get("url") else None,
+        "url": f"{BASE}{h.get('url')}" if h.get("url") and not h.get("url", "").startswith("http") else h.get("url"),
         "status": h.get("mlsStatus"),
         "listing_type": h.get("listingType"),
         "days_on_market": (h.get("timeOnRedfin") or {}).get("days") if isinstance(h.get("timeOnRedfin"), dict) else None,
     }
 
 
+# ---------------------------------------------------------------------------
+# Property
+# ---------------------------------------------------------------------------
+
 def property_details(url_or_path: str) -> dict:
-    """Fetch full details for a single Redfin listing.
+    if not url_or_path.startswith("http"):
+        url_or_path = BASE + (url_or_path if url_or_path.startswith("/") else "/" + url_or_path)
+    html = _fetch_html(url_or_path)
+    ctx = _initial_context(html)
 
-    Accepts a full URL (https://www.redfin.com/TX/Austin/123-Main-St-78704/home/12345)
-    or just the path portion.
-    """
-    parsed = urlparse(url_or_path)
-    path = parsed.path or url_or_path
-    if not path.startswith("/"):
-        path = "/" + path
+    initial = _cache_entry(ctx, "/stingray/api/home/details/initialInfo") or {}
+    above = _cache_entry(ctx, "/stingray/api/home/details/aboveTheFold") or {}
+    below = _cache_entry(ctx, "/stingray/api/home/details/belowTheFold") or {}
 
-    initial = _get("/stingray/api/home/details/initialInfo", {"path": path})
-    payload = (initial.get("payload") or {})
-    property_id = payload.get("propertyId")
-    listing_id = payload.get("listingId")
-    if not property_id:
-        raise RuntimeError(f"redfin: could not resolve propertyId for {path!r}")
+    payload_initial = initial.get("payload") or {}
+    payload_above = above.get("payload") or {}
+    payload_below = below.get("payload") or {}
 
-    above = _get("/stingray/api/home/details/aboveTheFold", {"propertyId": property_id, "accessLevel": 1})
-    below = _get("/stingray/api/home/details/belowTheFold", {"propertyId": property_id, "accessLevel": 1})
-    main_house_info = (above.get("payload") or {}).get("mainHouseInfo") or {}
-    public_records = (below.get("payload") or {}).get("publicRecordsInfo") or {}
+    # Light summary on top, full payloads attached for downstream queries.
+    main = payload_above.get("mainHouseInfo") or {}
+    public_records = payload_below.get("publicRecordsInfo") or {}
+    history_events = ((payload_below.get("propertyHistoryInfo") or {}).get("events")) or []
+
     return {
         "source": "redfin",
-        "property_id": property_id,
-        "listing_id": listing_id,
-        "url": f"{BASE}{path}",
-        "main_house_info": main_house_info,
-        "public_records_info": public_records,
-        "above_the_fold": above.get("payload"),
-        "below_the_fold": below.get("payload"),
+        "url": url_or_path,
+        "property_id": payload_initial.get("propertyId"),
+        "listing_id": payload_initial.get("listingId"),
+        "address": main.get("addressInfo"),
+        "price": main.get("priceInfo"),
+        "beds": main.get("beds"),
+        "baths": main.get("baths"),
+        "sqft": main.get("sqFt"),
+        "year_built": main.get("yearBuilt"),
+        "lot_size": main.get("lotSize"),
+        "status": main.get("listingStatus"),
+        "description": main.get("marketingRemarks"),
+        "history": history_events,
+        "public_records": public_records,
+        "raw": {"initial": payload_initial, "above": payload_above, "below": payload_below},
     }
 
 
 def price_history(url_or_path: str) -> list[dict]:
-    """Just the price + listing history for a property."""
-    details = property_details(url_or_path)
-    btf = details.get("below_the_fold") or {}
-    return (btf.get("propertyHistoryInfo") or {}).get("events") or []
+    return property_details(url_or_path).get("history") or []
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _print(obj):
+    json.dump(obj, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+
+
+def main(argv=None):
     import argparse
-
-    ap = argparse.ArgumentParser(prog="redfin", description="Redfin internal-API CLI.")
+    ap = argparse.ArgumentParser(prog="redfin")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("autocomplete")
+    sp = sub.add_parser("resolve", help="resolve a query to a region")
     sp.add_argument("query")
 
-    sp = sub.add_parser("search")
+    sp = sub.add_parser("search", help="search listings in a city / zip / neighborhood")
     sp.add_argument("query")
     sp.add_argument("--max-price", type=int)
     sp.add_argument("--min-price", type=int)
     sp.add_argument("--min-beds", type=int)
     sp.add_argument("--min-baths", type=float)
     sp.add_argument("--min-sqft", type=int)
+    sp.add_argument("--home-types", help="comma-separated: house,condo,townhouse,multi,land,mobile")
     sp.add_argument("--num-homes", type=int, default=50)
 
-    sp = sub.add_parser("property")
+    sp = sub.add_parser("property", help="full details for a single listing")
     sp.add_argument("url")
 
-    sp = sub.add_parser("history")
+    sp = sub.add_parser("history", help="price/listing history for a property")
     sp.add_argument("url")
 
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    if args.cmd == "autocomplete":
-        print(json.dumps(autocomplete(args.query), indent=2))
+    if args.cmd == "resolve":
+        _print(resolve_region(args.query))
     elif args.cmd == "search":
-        print(json.dumps(search(
+        ht_map = {"house": "1", "condo": "2", "townhouse": "3", "multi": "4",
+                  "land": "5", "mobile": "7", "coop": "8"}
+        ht = None
+        if args.home_types:
+            ht = [ht_map.get(t, t) for t in args.home_types.split(",") if t]
+        _print(search(
             args.query,
-            max_price=args.max_price,
-            min_price=args.min_price,
-            min_beds=args.min_beds,
-            min_baths=args.min_baths,
-            min_sqft=args.min_sqft,
-            num_homes=args.num_homes,
-        ), indent=2))
+            max_price=args.max_price, min_price=args.min_price,
+            min_beds=args.min_beds, min_baths=args.min_baths,
+            min_sqft=args.min_sqft, home_types=ht, num_homes=args.num_homes,
+        ))
     elif args.cmd == "property":
-        print(json.dumps(property_details(args.url), indent=2))
+        _print(property_details(args.url))
     elif args.cmd == "history":
-        print(json.dumps(price_history(args.url), indent=2))
+        _print(price_history(args.url))
+
+
+if __name__ == "__main__":
+    main()
