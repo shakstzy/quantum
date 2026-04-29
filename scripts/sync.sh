@@ -6,6 +6,7 @@ set -uo pipefail
 REPO="/Users/shakstzy/QUANTUM"
 LOG="${HOME}/Library/Logs/quantum-sync.log"
 LOCK_DIR="/tmp/quantum-sync.lock.d"
+COORD_LOCK="/tmp/quantum-heal-coord.lock"
 BRANCH="main"
 
 mkdir -p "$(dirname "$LOG")"
@@ -18,6 +19,13 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+# coord lock with heal-loop. Wait up to 30s; if heal-loop holds it, skip this tick.
+exec 9>"$COORD_LOCK"
+if ! flock -w 30 9; then
+  log "heal-loop coord lock held >30s -- skipping tick"
+  exit 0
+fi
 
 cd "$REPO" 2>/dev/null || { log "repo missing: $REPO"; exit 1; }
 
