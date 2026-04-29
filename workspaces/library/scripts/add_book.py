@@ -117,7 +117,7 @@ def search_libgen(s: requests.Session, query: str, author: Optional[str]) -> lis
     encoded = quote(full_query)
     last_err: Optional[Exception] = None
     for host in MIRRORS:
-        url = f"https://{host}/search.php?req={encoded}&res=25&view=simple&column=def"
+        url = f"https://{host}/index.php?req={encoded}&columns%5B%5D=t&columns%5B%5D=a&columns%5B%5D=s&columns%5B%5D=y&columns%5B%5D=p&columns%5B%5D=i&objects%5B%5D=f&topics%5B%5D=l&res=25"
         try:
             html = fetch_cached(s, url)
             hits = parse_libgen_results(html, base=f"https://{host}")
