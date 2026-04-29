@@ -76,12 +76,22 @@ class Hit:
         s = 0
         if self.extension == "epub":
             s += 10
-        if self.pages and 150 <= self.pages <= 800:
+        elif self.extension == "pdf":
             s += 5
-        elif self.pages and self.pages > 0:
-            s -= 2
-        if self.year and self.year >= 2000:
-            s += min(self.year - 2000, 25) // 5
+        if self.pages is None:
+            pass  # unknown, don't penalize
+        elif 200 <= self.pages <= 800:
+            s += 8
+        elif self.pages < 100:
+            s -= 10  # excerpt or summary
+        # size sanity (catches obvious excerpts even when pages=0)
+        if self.size_bytes is not None:
+            if self.extension == "epub" and self.size_bytes < 500 * 1024:
+                s -= 8
+            elif self.extension == "pdf" and self.size_bytes < 1 * 1024 * 1024:
+                s -= 5
+        if self.year and self.year >= 2010:
+            s += 2
         if self.language.lower() in ("english", "en"):
             s += 3
         return s
@@ -133,8 +143,13 @@ def search_libgen(s: requests.Session, query: str, author: Optional[str]) -> lis
 
 
 def parse_libgen_results(html: str, base: str) -> list[Hit]:
+    """Parse libgen.li (and libgen.bz) result tables.
+
+    Columns (9): 0=title, 1=author, 2=publisher, 3=year, 4=language,
+    5=pages, 6=size, 7=ext, 8=mirrors (md5 in href).
+    """
     soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table", class_="c") or soup.find("table", {"rules": "rows"})
+    table = soup.find("table", id="tablelibgen") or soup.find("table", class_="table")
     if not table:
         return []
     rows = table.find_all("tr")[1:]
@@ -144,31 +159,28 @@ def parse_libgen_results(html: str, base: str) -> list[Hit]:
         if len(cols) < 9:
             continue
         try:
-            authors = [a.get_text(strip=True) for a in cols[1].find_all("a") or [cols[1]]]
-            authors = [a for a in authors if a]
-            title_cell = cols[2]
-            title_link = title_cell.find("a")
-            title = title_link.get_text(" ", strip=True) if title_link else title_cell.get_text(" ", strip=True)
-            title = re.sub(r"\s+", " ", title).strip()
-            md5 = ""
-            if title_link and title_link.get("href"):
-                m = re.search(r"md5=([a-fA-F0-9]{32})", title_link["href"])
-                if m:
-                    md5 = m.group(1).lower()
-            publisher = cols[3].get_text(strip=True)
-            year_txt = cols[4].get_text(strip=True)
+            title = re.sub(r"\s+", " ", cols[0].get_text(" ", strip=True)).strip()
+            authors_raw = cols[1].get_text(" ", strip=True)
+            authors = [a.strip() for a in re.split(r"[;,]", authors_raw) if a.strip()] if authors_raw else []
+            publisher = cols[2].get_text(" ", strip=True)
+            year_txt = cols[3].get_text(strip=True)
             year = int(year_txt) if year_txt.isdigit() else None
-            pages_txt = cols[5].get_text(strip=True).split("/")[0].strip()
-            pages = int(pages_txt) if pages_txt.isdigit() else None
-            language = cols[6].get_text(strip=True)
-            size_txt = cols[7].get_text(strip=True).lower()
-            size_bytes = parse_size(size_txt)
-            extension = cols[8].get_text(strip=True).lower()
+            language = cols[4].get_text(strip=True)
+            pages_txt = cols[5].get_text(strip=True)
+            pages = parse_pages(pages_txt)
+            size_bytes = parse_size(cols[6].get_text(" ", strip=True).lower())
+            extension = cols[7].get_text(strip=True).lower()
+
+            md5 = ""
             mirror_urls = []
-            for cell in cols[9:11] if len(cols) > 10 else cols[9:10]:
-                a = cell.find("a")
-                if a and a.get("href"):
-                    mirror_urls.append(urljoin(base, a["href"]))
+            for a in cols[8].find_all("a"):
+                href = a.get("href", "")
+                m = re.search(r"md5=([a-fA-F0-9]{32})", href)
+                if m and not md5:
+                    md5 = m.group(1).lower()
+                if href:
+                    mirror_urls.append(urljoin(base + "/", href.lstrip("/")))
+
             if not md5 or not title:
                 continue
             hits.append(Hit(
@@ -179,6 +191,16 @@ def parse_libgen_results(html: str, base: str) -> list[Hit]:
         except Exception:
             continue
     return hits
+
+
+def parse_pages(s: str) -> Optional[int]:
+    """Pages cell can be 'X', 'X / Y' (cover/total), or empty."""
+    s = s.strip()
+    if not s:
+        return None
+    parts = [p.strip() for p in s.split("/")]
+    nums = [int(p) for p in parts if p.isdigit() and int(p) > 0]
+    return max(nums) if nums else None
 
 
 def parse_size(s: str) -> Optional[int]:
