@@ -21,6 +21,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict
@@ -98,8 +99,32 @@ CEILING = {
 }
 
 
+def gitignored_set(paths: list[Path]) -> set[Path]:
+    """Return the subset of paths that git would ignore. Single batch call."""
+    if not paths:
+        return set()
+    try:
+        rel_inputs = [str(p.relative_to(REPO)) for p in paths]
+    except ValueError:
+        return set()
+    try:
+        res = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            input="\n".join(rel_inputs),
+            capture_output=True,
+            text=True,
+            cwd=REPO,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    ignored_rel = {ln.strip() for ln in res.stdout.splitlines() if ln.strip()}
+    return {REPO / r for r in ignored_rel}
+
+
 def collect_md_files() -> list[Path]:
-    return [p for p in REPO.rglob("*.md") if not is_excluded(p)]
+    candidates = [p for p in REPO.rglob("*.md") if not is_excluded(p)]
+    ignored = gitignored_set(candidates)
+    return [p for p in candidates if p not in ignored]
 
 
 def step1_ledger(files, out_dir):
@@ -180,12 +205,14 @@ def step3_workspace_integrity(out_dir):
         if is_ingest and not (raw_root / ws.name).is_dir():
             missing_raw.append(ws.name)
 
+        ws_files = []
         for f in ws.rglob("*"):
-            if not f.is_file():
+            if not f.is_file() or is_excluded(f) or f.suffix.lower() != ".md":
                 continue
-            if is_excluded(f):
-                continue
-            if f.suffix.lower() not in {".md"}:
+            ws_files.append(f)
+        ignored = gitignored_set(ws_files)
+        for f in ws_files:
+            if f in ignored:
                 continue
             rel = f.relative_to(REPO).as_posix()
             if rel.endswith("setup/questionnaire.md"):
@@ -249,6 +276,8 @@ def step4_em_dash_sweep(out_dir):
             if f.suffix.lower() not in {".md"}:
                 continue
             candidates.append(f)
+    ignored = gitignored_set(candidates)
+    candidates = [c for c in candidates if c not in ignored]
 
     for f in candidates:
         try:
