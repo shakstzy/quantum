@@ -66,7 +66,9 @@ async function main() {
     const intent = inferIntent(ent);
     if (!intent) { skipped += 1; continue; }
 
-    const phone = ent.meta.phone || await findPhoneByName(ent.meta.first_name);
+    // C4 fix: only look up phone if we have BOTH first AND last name (or already-known phone).
+    // Without last name, fuzzy first-name match is catastrophic across 2000+ contacts.
+    const phone = ent.meta.phone || (ent.meta.last_name ? await findPhoneByName(ent.meta.first_name, ent.meta.last_name) : null);
     const activity = phone ? await lastImessageActivity(phone) : null;
     const channel = recommendChannel(activity);
     if (channel === "imessage_active") { skipped += 1; continue; }

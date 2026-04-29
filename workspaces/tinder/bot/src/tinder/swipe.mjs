@@ -66,8 +66,8 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     }
 
     const inFilter = passesFilter(profile, filter);
-    const liveRatio = swiped > 0 ? liked / swiped : 0;
-    const wantLike = inFilter && (liveRatio < filter.right_swipe_ratio_cap);
+    // Per user: no ratio cap. Like everyone in filter.
+    const wantLike = inFilter;
 
     let counters;
     try {
@@ -99,7 +99,6 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       filter_pass: inFilter,
       profile,
       day_count: counters.dayUsed,
-      live_ratio: liveRatio,
     });
     swiped += 1;
     if (wantLike) liked += 1;

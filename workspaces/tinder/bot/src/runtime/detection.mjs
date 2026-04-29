@@ -37,21 +37,7 @@ export async function scanForHalts(page) {
   }
 }
 
-// Verify the selectors needed for the current script's page. Pass the page's
-// critical selector names — passing all selectors regardless of page would
-// false-fail thread_input on /app/recs etc.
-export async function ensureSelectorsHealthy(page, critical = ["rec_card", "like_button", "nope_button"]) {
-  const sels = await selectors();
-  const broken = [];
-  for (const key of critical) {
-    const sel = sels[key];
-    if (!sel || sel.selector == null) { broken.push(key); continue; }
-    if (!(await present(page, sel))) broken.push(key);
-  }
-  if (broken.length) {
-    const reason = `selectors_broken:${broken.join(",")}`;
-    await setHalt(reason);
-    await logSession({ event: "halt", kind: "selector_drift", broken });
-    throw new Error(`HALTED: ${reason}. Run scripts/dump-dom.mjs + scripts/analyze-fixture.mjs to find new selectors.`);
-  }
-}
+// (ensureSelectorsHealthy removed — caused more false-halts than real catches.
+// Each script now uses inline `page.waitForSelector` for the elements IT needs
+// on the page IT loads. If a selector breaks during a swipe/send/scrape, the
+// primitive throws naturally — same halt outcome, less error surface.)

@@ -2,9 +2,9 @@
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { scrapeMatches, scrapeThread } from "../src/tinder/matches.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
-import { ensureSelectorsHealthy } from "../src/runtime/detection.mjs";
 import { logSession } from "../src/runtime/logger.mjs";
 import { loadCaps } from "../src/runtime/caps.mjs";
+import { sleep, jitter } from "../src/runtime/humanize.mjs";
 
 await abortIfHalted();
 const caps = await loadCaps();
@@ -12,7 +12,9 @@ const caps = await loadCaps();
 const { ctx, page } = await launchPersistent({ headless: false });
 try {
   await page.goto("https://tinder.com/app/matches", { waitUntil: "domcontentloaded" });
-  await ensureSelectorsHealthy(page);
+  await sleep(jitter(2400, 4200));
+  try { await page.waitForSelector("a[href^='/app/messages/']", { timeout: 15000 }); }
+  catch { console.error("matches list never rendered; halting"); process.exit(1); }
   const matches = await scrapeMatches(page);
   console.log(`matches:${matches.length}`);
 

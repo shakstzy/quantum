@@ -1,10 +1,14 @@
 // City resolver. Buckets a Tinder profile into a city slug for graph linking.
-// Strategy: if phone known + area code maps -> use that. Else use Tinder distance from home (Austin).
-// Default to "austin" when distance < 100mi.
+// Resolution order (highest signal first):
+//   1. Conversation mention ("I'm in NYC", "just moved to LA") — strongest, overrides all
+//   2. Phone area code, if known (E.164 +1 numbers)
+//   3. Distance-from-current-location (Tinder shows distance from where the user is now)
+//   4. Default: home (austin)
 
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { CONFIG_DIR } from "./paths.mjs";
+import { detectLocationFromConversation } from "./location.mjs";
 
 let _cache = null;
 async function loadCities() {
@@ -21,9 +25,16 @@ function areaCodeOf(phone) {
   return null;
 }
 
-export async function resolveCity({ phone = null, distance_mi = null } = {}) {
+export async function resolveCity({ phone = null, distance_mi = null, conversation = null } = {}) {
   const cities = await loadCities();
 
+  // 1. Explicit mention in conversation overrides everything
+  if (conversation) {
+    const detected = detectLocationFromConversation(conversation);
+    if (detected?.city) return detected.city;
+  }
+
+  // 2. Phone area code
   if (phone) {
     const ac = areaCodeOf(phone);
     if (ac) {
@@ -33,6 +44,10 @@ export async function resolveCity({ phone = null, distance_mi = null } = {}) {
     }
   }
 
+  // 3. Distance from user's current location (Tinder's distance is from where the
+  //    user is right now). For matches close to current location, bucket as home city.
+  //    For far matches (legacy entries from when user was elsewhere), no signal —
+  //    leave them in the home bucket as a default.
   if (distance_mi != null) {
     const home = cities.buckets[cities.home];
     if (home && distance_mi <= (home.tx_distance_max_mi ?? 100)) return cities.home;
