@@ -16,6 +16,10 @@ raw/.ingest-log/
 # Tinder profile dump is operational data for the bot, not wiki-worthy
 raw/tinder/
 
+# Library: skip raw binaries; content.md and summary.md are what feeds the graph
+raw/library/**/source.epub
+raw/library/**/source.pdf
+
 # VCS / dev cruft
 .git/
 .DS_Store

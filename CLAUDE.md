@@ -69,7 +69,7 @@ QUANTUM/
 | journal | Manual entries | Daily and weekly reflections |
 | finance | Manual / banking exports | Accounts, transactions, decisions |
 | health | Apple Health exports / manual | Workouts, vitals, habits |
-| library | Manual / browser captures | Books, articles, papers, watchlists |
+| library | LibGen scrape (books); video/paper pipelines planned | Personal learning corpus. `add <title>` triggers libgen search + EPUB download + pandoc parse + summary stub at `raw/library/books/<slug>/{source.epub, content.md, summary.md}`. Graphify (no NotebookLM) handles ingest and cross-book synthesis. v1 = books only; videos/papers added when wired. |
 | tinder | tinder.com via patchright (browser automation) | Swipes, matches, threads, outbound drafting + send. Ban-aversion is priority #1; see workspace CLAUDE.md for hard rules. |
 | contacts | macOS Contacts via JXA / osascript | Daily 4am ingest. Per-entry markdown at `raw/contacts/<slug>.md`. Auto-classified `person` / `business` / `noise`. |
 | discord | Discord DMs + group DMs (via `_core/skills/discord`) | Every 48h pull, Gemma-gated for significance, monthly shards at `raw/discord/YYYY-MM.ndjson`. Selfbot-conscious pacing. |

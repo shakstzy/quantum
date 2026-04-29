@@ -36,3 +36,6 @@ workspaces/tinder/04-outbound/expired/*
 workspaces/tinder/04-outbound/auto-sent/*
 !workspaces/tinder/04-outbound/auto-sent/.gitkeep
 workspaces/tinder/bot/.dev-fixtures/
+
+# library: scraper HTML cache, never commit
+workspaces/library/.dev-fixtures/
