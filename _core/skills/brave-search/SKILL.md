@@ -12,13 +12,13 @@ Thin curl wrapper around Brave's public Web Search API. Lives as a shell script 
 Trigger phrases (semantic, non-exhaustive): "search the web for X", "look up X", "google X", "find sources on X", "what's the latest on X", "recent news about X", "is X still recommended", "find the docs for X".
 
 Do NOT fire for:
-- Questions answerable from loaded context — answer from context first.
-- Knowledge-graph questions about Adithya's life — `/graphify query` first (see root `CLAUDE.md`).
-- Single-URL extraction — go straight to the `firecrawl` skill.
+- Questions answerable from loaded context  -  answer from context first.
+- Knowledge-graph questions about Adithya's life  -  `/graphify query` first (see root `CLAUDE.md`).
+- Single-URL extraction  -  go straight to the `firecrawl` skill.
 
 ## Auth
 
-Key lives in `.claude/settings.local.json` under `env.BRAVE_API_KEY`. Claude Code injects it into the shell, so the script just reads `$BRAVE_API_KEY`. If the var is unset, the script exits with a clear message — surface it back to Adithya rather than guessing or rotating.
+Key lives in `.claude/settings.local.json` under `env.BRAVE_API_KEY`. Claude Code injects it into the shell, so the script just reads `$BRAVE_API_KEY`. If the var is unset, the script exits with a clear message  -  surface it back to Adithya rather than guessing or rotating.
 
 ## Procedure
 
@@ -49,7 +49,7 @@ _core/skills/brave-search/search.sh "rust async runtime comparison 2026" 5
 ## Budget
 
 - Default cap: 3 search queries per task. Confirm before going higher.
-- Free tier is rate-limited — if a 429 comes back, back off, don't retry-storm.
+- Free tier is rate-limited  -  if a 429 comes back, back off, don't retry-storm.
 
 ## Notes
 

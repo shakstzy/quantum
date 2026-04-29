@@ -1,6 +1,6 @@
 # Chrome profile setup
 
-The bot uses a dedicated patchright Chromium profile at `workspaces/tinder/.profile/`. This profile is gitignored and Tinder-only — never use it for personal browsing or it'll fingerprint as a real human's mixed-purpose browser, then suddenly start swiping at 12:30pm sharp every day.
+The bot uses a dedicated patchright Chromium profile at `workspaces/tinder/.profile/`. This profile is gitignored and Tinder-only  -  never use it for personal browsing or it'll fingerprint as a real human's mixed-purpose browser, then suddenly start swiping at 12:30pm sharp every day.
 
 ## One-time setup
 
@@ -21,7 +21,7 @@ The bot uses a dedicated patchright Chromium profile at `workspaces/tinder/.prof
 
    You'll see warnings about `.profile/` not existing yet (expected) and `QUANTUM_SELF_PHONE` (set if you want HITL push notifications to yourself).
 
-3. First launch — opens the browser empty:
+3. First launch  -  opens the browser empty:
 
    ```
    ./bin/tinder selector-check
@@ -30,7 +30,7 @@ The bot uses a dedicated patchright Chromium profile at `workspaces/tinder/.prof
    Patchright starts, opens tinder.com, and you'll land on the login wall. **This is when you log in.** Do everything manually:
 
    - Click "Log in"
-   - Use your phone number (don't use Google/Facebook OAuth — fewer fingerprint surfaces)
+   - Use your phone number (don't use Google/Facebook OAuth  -  fewer fingerprint surfaces)
    - Solve any Arkose if it appears
    - Once you're on `/app/recs`, the script will detect it, run selector verification, and exit.
 

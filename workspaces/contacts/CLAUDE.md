@@ -1,6 +1,6 @@
 # contacts
 
-macOS Contacts ingest. One markdown file per Apple Contacts entry at `raw/contacts/<slug>.md`. Read-only mirror of the system contacts DB — never written back to. Manual humans not in Apple Contacts live in `workspaces/people/` instead.
+macOS Contacts ingest. One markdown file per Apple Contacts entry at `raw/contacts/<slug>.md`. Read-only mirror of the system contacts DB  -  never written back to. Manual humans not in Apple Contacts live in `workspaces/people/` instead.
 
 ## Layout
 
@@ -15,7 +15,7 @@ setup/
 
 ## How it runs
 
-Daily 4am via launchd plist. The ingest is idempotent and atomic per-file: each rescrape rewrites the entity file fully. Body sections (`## Notes`) are preserved across rescrapes — only frontmatter + the auto-managed sections get rewritten.
+Daily 4am via launchd plist. The ingest is idempotent and atomic per-file: each rescrape rewrites the entity file fully. Body sections (`## Notes`) are preserved across rescrapes  -  only frontmatter + the auto-managed sections get rewritten.
 
 ## Schema
 
@@ -101,6 +101,6 @@ This is the ground rule from QUANTUM root CLAUDE.md ("edges form via shared iden
 
 ## Related workspaces
 
-- `workspaces/people/` — manual humans not in Apple Contacts. Same slug shape, different source. Graphify merges entries with overlapping identifiers.
-- `workspaces/tinder/` — phone matches in tinder entities trigger automatic graph edges to contacts entries here.
-- `workspaces/imessage/` — phone-keyed message history; phones in contacts here become discoverable via the canonical E.164 form.
+- `workspaces/people/`  -  manual humans not in Apple Contacts. Same slug shape, different source. Graphify merges entries with overlapping identifiers.
+- `workspaces/tinder/`  -  phone matches in tinder entities trigger automatic graph edges to contacts entries here.
+- `workspaces/imessage/`  -  phone-keyed message history; phones in contacts here become discoverable via the canonical E.164 form.

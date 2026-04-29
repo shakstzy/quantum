@@ -12,8 +12,8 @@ When any of these fire, the bot writes a halt file at `~/.quantum/tinder/.halt` 
 
 ## Soft signals (not auto-halted, but watch)
 
-- **Zero matches in 7 days while swiping** — assume soft shadowban. Run `./bin/tinder halt` manually. Don't burn more swipes. Investigate: try a re-photo cycle, change account info, etc. The status command will surface a warning when this triggers (TODO: not yet wired in v0.1).
-- **Right-swipe ratio rising above 60%** — `swipe.mjs` will sample down within filter to keep it ≤50%. If you find it consistently capping out, your filter is too loose.
+- **Zero matches in 7 days while swiping**  -  assume soft shadowban. Run `./bin/tinder halt` manually. Don't burn more swipes. Investigate: try a re-photo cycle, change account info, etc. The status command will surface a warning when this triggers (TODO: not yet wired in v0.1).
+- **Right-swipe ratio rising above 60%**  -  `swipe.mjs` will sample down within filter to keep it ≤50%. If you find it consistently capping out, your filter is too loose.
 
 ## Halt file mechanics
 

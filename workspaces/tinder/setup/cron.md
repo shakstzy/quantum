@@ -42,8 +42,8 @@ done
 
 The plists set a baseline PATH but launchd doesn't inherit your shell env. You need:
 
-- `ANTHROPIC_API_KEY` — for the drafting model
-- `QUANTUM_SELF_PHONE` — your number in E.164 (e.g. `+15125551234`) for HITL nudges
+- `ANTHROPIC_API_KEY`  -  for the drafting model
+- `QUANTUM_SELF_PHONE`  -  your number in E.164 (e.g. `+15125551234`) for HITL nudges
 
 The cleanest way is to add an `EnvironmentVariables` block to each plist OR (better) edit `bot/scripts/decide.mjs` and `send.mjs` to source `~/.quantum/tinder/env` at the top. The latter avoids checking secrets into git.
 

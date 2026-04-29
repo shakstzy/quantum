@@ -17,7 +17,7 @@ This workspace replaces an earlier API-direct bot which contributed to a shadowb
 
 ## How it runs
 
-There is no human-facing CLI. Cron fires `node scripts/<X>.mjs` directly (see `setup/cron.md`). When Adithya wants to drive interactively, Claude (me) runs the scripts via Bash — Adithya never types `./bin/...`.
+There is no human-facing CLI. Cron fires `node scripts/<X>.mjs` directly (see `setup/cron.md`). When Adithya wants to drive interactively, Claude (me) runs the scripts via Bash  -  Adithya never types `./bin/...`.
 
 | Script | Purpose |
 |--------|---------|
@@ -32,7 +32,7 @@ There is no human-facing CLI. Cron fires `node scripts/<X>.mjs` directly (see `s
 
 ### Drafting via `claude -p`
 
-Drafts come from `claude -p`, which uses Adithya's Claude Code subscription — no separate API key. The voice profile (`config/voice/`) is composed into each prompt. Override model with `QUANTUM_TINDER_MODEL` (default: `sonnet`).
+Drafts come from `claude -p`, which uses Adithya's Claude Code subscription  -  no separate API key. The voice profile (`config/voice/`) is composed into each prompt. Override model with `QUANTUM_TINDER_MODEL` (default: `sonnet`).
 
 ## Layout
 
@@ -131,7 +131,7 @@ Slug rule: `<first>-<source>-<city>` (lowercase, hyphenated). Collisions get `-2
 
 City buckets: **austin**, **sf**, **la**, **nyc** (others to be proposed). Resolution is phone area code first, then Tinder distance from Austin (≤100mi -> austin), else default home (austin). When city changes on rescrape, file is renamed and old slug appended to `previous_slugs` for backlink resolution.
 
-Session-level events (swipe sweeps, halts, selector drift, send actions) go to `~/.quantum/tinder/sessions.ndjson` — not the entity files. Entity files stay clean for graphify.
+Session-level events (swipe sweeps, halts, selector drift, send actions) go to `~/.quantum/tinder/sessions.ndjson`  -  not the entity files. Entity files stay clean for graphify.
 
 ## Cross-workspace dependencies
 
@@ -146,7 +146,7 @@ Session-level events (swipe sweeps, halts, selector drift, send actions) go to `
 | Re-engagement nudge after iMessage silence (5+ days) | auto | Short, one-shot, low-stakes |
 | Reply where she sent something substantive | HITL | Taste call, escalation, escalation timing |
 | Anything matching `voice-lint.mjs` failure | HITL | Forces human review of voice-rule violations |
-| Anything past message #6 in the thread | HITL | Move toward number/date — high stakes |
+| Anything past message #6 in the thread | HITL | Move toward number/date  -  high stakes |
 
 HITL items expire to `expired/` after 6 hours. AppleScript pings Adithya's own iMessage when pending queue grows past 3.
 
@@ -159,7 +159,7 @@ HITL items expire to `expired/` after 6 hours. AppleScript pings Adithya's own i
 5. Zero matches in 7 days while swiping -> assume soft shadowban; halt; alert user
 6. Selector self-check fails on startup -> halt; run `selector-check.mjs` interactively
 
-State file: `~/.quantum/tinder/.halt` — presence blocks all sessions until removed (`rm` it).
+State file: `~/.quantum/tinder/.halt`  -  presence blocks all sessions until removed (`rm` it).
 
 ## Learnings (agent-drafted, user-approved)
 

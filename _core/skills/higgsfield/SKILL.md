@@ -12,7 +12,7 @@ Five tool families on higgsfield.ai, one Node CLI. UI automation first, direct-A
 Trigger phrases (non-exhaustive): "generate a higgsfield image", "higgsfield video", "make a marketing ad", "cinema studio scene", "nano banana", "soul cinematic", "seedance", "kling 2.5", "veo", "wan", "sora 2", "make me a video / image of X" when context implies higgsfield.
 
 Do NOT fire for:
-- Non-higgsfield AI image/video services (DALL-E, Midjourney, Runway — use their own skills/APIs).
+- Non-higgsfield AI image/video services (DALL-E, Midjourney, Runway  -  use their own skills/APIs).
 - Text generation, music generation, audio generation.
 - Edit / remix / inpaint flows on higgsfield (out of scope v1).
 - Character or location creation (`/character`, Soul Cast/Location).
@@ -88,14 +88,14 @@ All commands accept `--output <dir>` (override default), `--dry-run` (print inte
 
 ## Files
 
-- `scripts/run.mjs` — CLI dispatcher (entry point for every command)
-- `scripts/{image,video,marketing,cinema,batch}.mjs` — per-tool handlers
-- `scripts/{browser,job,state,download,ui-submit,jwt,behavior,fingerprint}.mjs` — shared infra
-- `scripts/diag-*.mjs` — DOM probes for selector-drift debugging (no spend, no submit)
-- `rules/tool-flows.md` — per-tool UI selectors, backend slugs, body schemas (reference; catalogs are hardcoded in `.mjs`)
-- `rules/datadome-defenses.md` — stealth stack, cadence settings, circuit-breaker rules
-- `rules/output-conventions.md` — output folder layout, metadata.json schema
-- `rules/site-map.json` — discovered routes
+- `scripts/run.mjs`  -  CLI dispatcher (entry point for every command)
+- `scripts/{image,video,marketing,cinema,batch}.mjs`  -  per-tool handlers
+- `scripts/{browser,job,state,download,ui-submit,jwt,behavior,fingerprint}.mjs`  -  shared infra
+- `scripts/diag-*.mjs`  -  DOM probes for selector-drift debugging (no spend, no submit)
+- `rules/tool-flows.md`  -  per-tool UI selectors, backend slugs, body schemas (reference; catalogs are hardcoded in `.mjs`)
+- `rules/datadome-defenses.md`  -  stealth stack, cadence settings, circuit-breaker rules
+- `rules/output-conventions.md`  -  output folder layout, metadata.json schema
+- `rules/site-map.json`  -  discovered routes
 
 ## Composing into workflows
 

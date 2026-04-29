@@ -73,15 +73,15 @@ Do NOT fire for:
 - **Latency (warm):** text 1-3s; vision 1-4 images 5-15s.
 - **Context limit:** ~32k combined input+output. Vision images count.
 - **Resident memory:** ~22GB unified once warm (16GB RSS as reported by `ps`).
-- **Idle cost:** 0% CPU when no request is in flight (process sleeps in `accept()`). No measurable battery drain idle. Don't stop the daemon for "battery" reasons — stopping only saves RAM, not power.
+- **Idle cost:** 0% CPU when no request is in flight (process sleeps in `accept()`). No measurable battery drain idle. Don't stop the daemon for "battery" reasons  -  stopping only saves RAM, not power.
 
 ## Persistence model
 
 `com.quantum.local-llm` is a **LaunchAgent** at `~/Library/LaunchAgents/com.quantum.local-llm.plist` with:
 
-- `RunAtLoad: true` — starts at every login.
-- `KeepAlive` only on `Crashed` (NOT on `SuccessfulExit`) — a clean stop sticks until next login.
-- `ThrottleInterval: 30s` — no restart-storms.
+- `RunAtLoad: true`  -  starts at every login.
+- `KeepAlive` only on `Crashed` (NOT on `SuccessfulExit`)  -  a clean stop sticks until next login.
+- `ThrottleInterval: 30s`  -  no restart-storms.
 
 So:
 
@@ -151,7 +151,7 @@ If response is empty or contains `[Error:` prefix, log the full response and sur
 
 ## QUANTUM consumers
 
-- **`_core/skills/instagram-summary`** — final multimodal synthesis after caption + audio + frame extraction.
+- **`_core/skills/instagram-summary`**  -  final multimodal synthesis after caption + audio + frame extraction.
 - Future: any workspace that needs zero-cost local vision/text inference. Reference this skill's contract; don't duplicate the curl boilerplate.
 
 ## Notes

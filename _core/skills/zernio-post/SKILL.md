@@ -66,13 +66,13 @@ Run after step 9, before declaring done:
 
 ## Files
 
-- `rules/call-shape.md` — required caller input contract
-- `rules/preflight.md` — local file validation rules, platform-specific
-- `rules/confirmation-gate.md` — confirmation-gate semantics, `ZERNIO_NO_CONFIRM` override
-- `rules/ai-disclosure.md` — caller sets AI flags per-post; skill warns, does not default
-- `rules/error-taxonomy.md` — retryable vs fatal, partial-failure handling
-- `references/instagram.md` — `platformSpecificData` shape for feed/carousel/story/reel
-- `references/youtube.md` — title/category/visibility/madeForKids/Shorts auto-detection
-- `references/tiktok.md` — creator-info precheck, privacy_level enum, consent flags
+- `rules/call-shape.md`  -  required caller input contract
+- `rules/preflight.md`  -  local file validation rules, platform-specific
+- `rules/confirmation-gate.md`  -  confirmation-gate semantics, `ZERNIO_NO_CONFIRM` override
+- `rules/ai-disclosure.md`  -  caller sets AI flags per-post; skill warns, does not default
+- `rules/error-taxonomy.md`  -  retryable vs fatal, partial-failure handling
+- `references/instagram.md`  -  `platformSpecificData` shape for feed/carousel/story/reel
+- `references/youtube.md`  -  title/category/visibility/madeForKids/Shorts auto-detection
+- `references/tiktok.md`  -  creator-info precheck, privacy_level enum, consent flags
 - `references/ads-api.md`: forward reference for Zernio's unified Ads API. Out of scope for this skill; consumed when the future `zernio-ads` sibling is built.
-- `scripts/zernio.sh` — single-entry curl wrapper (accounts, creator-info, preflight, presign, upload, post, status)
+- `scripts/zernio.sh`  -  single-entry curl wrapper (accounts, creator-info, preflight, presign, upload, post, status)

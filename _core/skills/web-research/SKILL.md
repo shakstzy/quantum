@@ -7,9 +7,9 @@ description: Smart multi-step web research orchestrator. Chains brave-search and
 
 Hybrid orchestrator. Claude does query gen, ranking, and synthesis. Codex (already installed CLI) runs ONE red-team pass to find missing source classes / domains / viewpoints and emits follow-up queries. Empirically grounded:
 
-- **Self-MoA (arxiv 2502.00674)** — single-best-model synthesis beats cross-model synthesis. So synthesis stays Claude.
-- **PROClaim (arxiv 2603.28488)** — cross-model wins came from *retrieval expansion*, not from arguing. So heterogeneity is used at the gap-discovery layer only, and its output is *queries*, not prose critique.
-- **Identity bias in MAD (arxiv 2510.07517)** — anonymize inputs to the critic; don't tell it which model produced the shortlist.
+- **Self-MoA (arxiv 2502.00674)**  -  single-best-model synthesis beats cross-model synthesis. So synthesis stays Claude.
+- **PROClaim (arxiv 2603.28488)**  -  cross-model wins came from *retrieval expansion*, not from arguing. So heterogeneity is used at the gap-discovery layer only, and its output is *queries*, not prose critique.
+- **Identity bias in MAD (arxiv 2510.07517)**  -  anonymize inputs to the critic; don't tell it which model produced the shortlist.
 
 ## When this fires
 
@@ -100,10 +100,10 @@ Read all scraped markdown. Write a 3-5 paragraph synthesis. Tag every non-trivia
 |-----|---------|
 | `[corroborated]` | Claim appears in 3+ independent domains |
 | `[primary-source]` | Sourced from the actual paper / dataset / regulator / first-party |
-| `[single-source]` | Only one source supports this — treat as soft |
-| `[conflicting]` | Sources disagree — surface the disagreement explicitly |
+| `[single-source]` | Only one source supports this  -  treat as soft |
+| `[conflicting]` | Sources disagree  -  surface the disagreement explicitly |
 
-Cite each claim by hostname inline. Do NOT paste full scraped contents into chat — they live in the run dir.
+Cite each claim by hostname inline. Do NOT paste full scraped contents into chat  -  they live in the run dir.
 
 Also save the synthesis itself to `~/.quantum/skill-output/web-research/$runId/synthesis.md` with frontmatter (`question`, `runId`, `query_variants`, `followup_queries`, `sources`, `created_at`).
 
@@ -131,7 +131,7 @@ Graphify ignores this path entirely. No pollution.
 - ≤10 total scrapes (step 6)
 - 1 Codex red-team call (step 4)
 
-Cap can be lifted by explicit instruction. If a step starts looping or returning garbage, stop — don't retry-storm.
+Cap can be lifted by explicit instruction. If a step starts looping or returning garbage, stop  -  don't retry-storm.
 
 ## Audit (run before declaring done)
 
@@ -144,8 +144,8 @@ Cap can be lifted by explicit instruction. If a step starts looping or returning
 
 ## Files
 
-- `_core/skills/brave-search/search.sh` — primitive (search)
-- `_core/skills/firecrawl/scrape.sh` — primitive (scrape)
-- `codex` — already installed at `/opt/homebrew/bin/codex` for the red-team pass
-- `~/.quantum/skill-output/web-research/$runId/` — run output (graphify-ignored)
-- `raw/library/` — promotion target on explicit save
+- `_core/skills/brave-search/search.sh`  -  primitive (search)
+- `_core/skills/firecrawl/scrape.sh`  -  primitive (scrape)
+- `codex`  -  already installed at `/opt/homebrew/bin/codex` for the red-team pass
+- `~/.quantum/skill-output/web-research/$runId/`  -  run output (graphify-ignored)
+- `raw/library/`  -  promotion target on explicit save
