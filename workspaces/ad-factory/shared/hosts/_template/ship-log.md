@@ -1,4 +1,4 @@
-# Ship Log — {{HOST_ID}}
+# Ship Log
 
 Append-only. One row per platform per shipped product. Format:
 

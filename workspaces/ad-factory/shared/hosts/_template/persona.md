@@ -1,4 +1,4 @@
-# Persona — {{HOST_ID}}
+# Persona
 
 ## Identity
 

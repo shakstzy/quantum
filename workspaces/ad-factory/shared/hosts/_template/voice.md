@@ -1,4 +1,4 @@
-# Voice — {{HOST_ID}}
+# Voice
 
 ## Voice characterization (for v1 default Higgsfield voice)
 

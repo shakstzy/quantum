@@ -1,4 +1,4 @@
-# Performance — {{HOST_ID}}
+# Performance
 
 Appended by stage 06-metrics. One row per (product, platform, checkpoint).
 

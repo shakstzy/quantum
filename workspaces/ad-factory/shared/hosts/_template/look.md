@@ -1,4 +1,4 @@
-# Look — {{HOST_ID}}
+# Look
 
 ## Physical description (verbatim, used in every Higgsfield prompt)
 
