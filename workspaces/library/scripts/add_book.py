@@ -224,13 +224,29 @@ def filter_hits(hits: list[Hit]) -> list[Hit]:
 
 
 def slugify(title: str, author_lastname: str) -> str:
-    title = re.sub(r"[^\w\s-]", "", title.lower())
-    title = re.sub(r"[\s_]+", "-", title).strip("-")
-    title = re.sub(r"-+", "-", title)
+    """Title -> kebab slug. Strips ISBN/catalog cruft and subtitles, caps length."""
+    t = title
+    # Strip libgen catalog markers ("b l 12345")
+    t = re.sub(r"\bb\s*l\s+\d+\b", "", t, flags=re.IGNORECASE)
+    # Strip ISBN-13, ISBN-10
+    t = re.sub(r"\b97[89]\d{10}\b", "", t)
+    t = re.sub(r"\b\d{9}[\dXx]\b", "", t)
+    t = re.sub(r"\b\d{10,13}\b", "", t)
+    # Trim subtitle (everything after first colon)
+    t = t.split(":", 1)[0]
+    # Drop bracketed editions "(2nd ed.)" etc.
+    t = re.sub(r"\([^)]*\)|\[[^\]]*\]", "", t)
+    # Slugify
+    t = re.sub(r"[^\w\s-]", "", t.lower())
+    t = re.sub(r"[\s_]+", "-", t).strip("-")
+    t = re.sub(r"-+", "-", t)
+    # Cap title slug at 40 chars on word boundary
+    if len(t) > 40:
+        t = t[:40].rsplit("-", 1)[0]
     if author_lastname:
         last = re.sub(r"[^\w]", "", author_lastname.lower())
-        return f"{title}-{last}" if last else title
-    return title
+        return f"{t}-{last}" if last else t
+    return t
 
 
 def parse_authors(raw: str) -> list[str]:
@@ -287,40 +303,49 @@ def fuzzy_dedup_warn(slug: str, existing: list[str]) -> Optional[str]:
 
 
 def download(s: requests.Session, hit: Hit, dest: Path) -> None:
-    """Resolve library.lol or libgen mirror -> direct file URL -> download."""
+    """Resolve a libgen.li/.bz ads.php page -> get.php?md5=...&key=... -> file.
+
+    Each ads.php load mints a fresh per-session key, so we always do the two-step.
+    """
     last_err = None
-    for mirror_url in hit.mirror_urls + [
-        f"http://library.lol/main/{hit.md5}",
-        f"http://libgen.li/ads.php?md5={hit.md5}",
-    ]:
+    candidate_pages = [u for u in hit.mirror_urls if "ads.php?md5=" in u] or [
+        f"https://libgen.li/ads.php?md5={hit.md5}",
+        f"https://libgen.bz/ads.php?md5={hit.md5}",
+    ]
+    for page_url in candidate_pages:
         try:
-            r = s.get(mirror_url, timeout=TIMEOUT, allow_redirects=True)
+            r = s.get(page_url, timeout=TIMEOUT, allow_redirects=True)
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
             direct = None
-            h2 = soup.find("h2")
-            if h2 and h2.find("a"):
-                direct = h2.find("a")["href"]
+            for a in soup.find_all("a"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True).upper()
+                if "get.php" in href and f"md5={hit.md5}" in href.lower():
+                    direct = urljoin(page_url, href)
+                    break
+                if text == "GET" and href and href != "#":
+                    direct = urljoin(page_url, href)
+                    break
             if not direct:
-                for a in soup.find_all("a"):
-                    href = a.get("href", "")
-                    if "get.php" in href or href.endswith(f".{hit.extension}"):
-                        direct = urljoin(mirror_url, href)
-                        break
-            if not direct:
+                last_err = RuntimeError(f"no GET link found on {page_url}")
                 continue
             print(f"[download] {direct}", file=sys.stderr)
-            with s.get(direct, stream=True, timeout=TIMEOUT * 4) as resp:
+            with s.get(direct, stream=True, timeout=TIMEOUT * 6, headers={"Referer": page_url}) as resp:
                 resp.raise_for_status()
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with open(dest, "wb") as f:
                     for chunk in resp.iter_content(chunk_size=64 * 1024):
                         if chunk:
                             f.write(chunk)
+            if dest.stat().st_size < 1024:
+                last_err = RuntimeError(f"file too small ({dest.stat().st_size} bytes)")
+                dest.unlink(missing_ok=True)
+                continue
             return
         except Exception as e:
             last_err = e
-            print(f"[download] mirror {mirror_url} failed: {e}", file=sys.stderr)
+            print(f"[download] {page_url} failed: {e}", file=sys.stderr)
             continue
     raise SystemExit(f"all download mirrors failed: {last_err}")
 
