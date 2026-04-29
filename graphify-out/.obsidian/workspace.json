@@ -4,11 +4,11 @@
     "type": "split",
     "children": [
       {
-        "id": "169296f868e56a79",
+        "id": "dac167aeb714ce31",
         "type": "tabs",
         "children": [
           {
-            "id": "16be535b8095c4a8",
+            "id": "fd88a83e9b787879",
             "type": "leaf",
             "state": {
               "type": "graph",
@@ -176,8 +176,9 @@
       "bases:Create new base": false
     }
   },
-  "active": "16be535b8095c4a8",
+  "active": "fd88a83e9b787879",
   "lastOpenFiles": [
+    "_COMMUNITY_Community 712.md",
     "GRAPH_REPORT.md",
     "graph.json",
     "cache/6b35dda3439eac36eaba0825a365987e30c1a9be4edfe68c2f797eef1e17f384.json",
