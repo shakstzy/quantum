@@ -49,6 +49,7 @@ def is_excluded(path: Path) -> bool:
     if any(seg in s for seg in (
         "/node_modules/", "/.venv/", "/target/", "/__pycache__/",
         "/.git/", "/raw/", "/graphify-out/",
+        "/.claude/worktrees/",
     )):
         return True
     if "/references/Interpreted-Context-Methdology-main" in s:
