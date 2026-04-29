@@ -223,24 +223,27 @@ def filter_hits(hits: list[Hit]) -> list[Hit]:
     return out
 
 
-def slugify(title: str, author_lastname: str) -> str:
-    """Title -> kebab slug. Strips ISBN/catalog cruft and subtitles, caps length."""
+def clean_title(title: str) -> str:
+    """Strip ISBN, libgen catalog markers, trailing semicolon-noise from a title."""
     t = title
-    # Strip libgen catalog markers ("b l 12345")
     t = re.sub(r"\bb\s*l\s+\d+\b", "", t, flags=re.IGNORECASE)
-    # Strip ISBN-13, ISBN-10
     t = re.sub(r"\b97[89]\d{10}\b", "", t)
     t = re.sub(r"\b\d{9}[\dXx]\b", "", t)
     t = re.sub(r"\b\d{10,13}\b", "", t)
-    # Trim subtitle (everything after first colon)
+    t = re.sub(r";\s*;", ";", t)
+    t = re.sub(r"[\s;,]+$", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def slugify(title: str, author_lastname: str) -> str:
+    """Cleaned title -> kebab slug. Trims subtitle and caps length."""
+    t = clean_title(title)
     t = t.split(":", 1)[0]
-    # Drop bracketed editions "(2nd ed.)" etc.
     t = re.sub(r"\([^)]*\)|\[[^\]]*\]", "", t)
-    # Slugify
     t = re.sub(r"[^\w\s-]", "", t.lower())
     t = re.sub(r"[\s_]+", "-", t).strip("-")
     t = re.sub(r"-+", "-", t)
-    # Cap title slug at 40 chars on word boundary
     if len(t) > 40:
         t = t[:40].rsplit("-", 1)[0]
     if author_lastname:
@@ -371,7 +374,7 @@ def write_summary_stub(book_dir: Path, hit: Hit, slug: str) -> Path:
     p = book_dir / "summary.md"
     fm = {
         "slug": slug,
-        "title": hit.title,
+        "title": clean_title(hit.title),
         "authors": hit.authors,
         "year": hit.year,
         "language": hit.language,
