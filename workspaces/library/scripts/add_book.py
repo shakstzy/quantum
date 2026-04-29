@@ -48,7 +48,7 @@ from bs4 import BeautifulSoup
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RAW_BOOKS = REPO_ROOT / "raw" / "library" / "books"
 FIXTURES = Path(__file__).resolve().parent.parent / ".dev-fixtures"
-MIRRORS = ["libgen.is", "libgen.rs", "libgen.li"]
+MIRRORS = ["libgen.li", "libgen.bz"]
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
