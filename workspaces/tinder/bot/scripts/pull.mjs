@@ -16,7 +16,11 @@ try {
   const matches = await scrapeMatches(page);
   console.log(`matches:${matches.length}`);
 
-  const limit = Math.min(matches.length, caps.scrape.thread_opens_per_session_max);
+  const envLimit = parseInt(process.env.QUANTUM_TINDER_PULL_LIMIT || "0", 10);
+  const limit = envLimit > 0
+    ? Math.min(matches.length, envLimit)
+    : Math.min(matches.length, caps.scrape.thread_opens_per_session_max);
+  if (envLimit > 0) console.log(`TEST MODE: pull capped at ${envLimit} threads`);
   let opened = 0;
   for (const m of matches.slice(0, limit)) {
     try {

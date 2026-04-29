@@ -40,11 +40,11 @@ cleanup_worktrees() {
         done
 }
 
-# Acquire shared coord lock (non-blocking).
+# Acquire shared coord lock. Wait up to 60s for sync.sh to finish a tick.
 # fd 9 is closed when shell exits, releasing the lock.
 exec 9>"$COORD_LOCK"
-if ! flock -n 9; then
-    log "coord lock held; sync mid-commit or another heal-loop running -- skipping tick"
+if ! flock -w 60 9; then
+    log "coord lock held >60s; another heal-loop or stuck sync -- skipping tick"
     exit 0
 fi
 
