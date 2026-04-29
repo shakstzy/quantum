@@ -8,7 +8,7 @@ Rewritten by stage 07-learn. Captures which hosts win in which niches.
 
 ## Niche -> host fit
 
-(no data yet — needs first 5+ shipped ads per host)
+(no data yet; needs first 5+ shipped ads per host)
 
 ## Host warning list
 

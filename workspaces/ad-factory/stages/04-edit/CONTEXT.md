@@ -19,12 +19,12 @@ Cut the rendered clips into 1 hero edit + 9x16 + 1x1 variants using ffmpeg.
    - Color host lines blue, guest lines orange (per the source video).
    - Font: Montserrat. Add black shadow for legibility.
 4. Insert subtle keyframe zooms at the start of each clip (3-5s mark, increases retention).
-5. Insert B-roll per script cues. B-roll source TBD — for v1, leave gaps marked `BROLL: <description>` in the output and skip insertion.
-6. Add curiosity sound bed (low-volume music, royalty-free, sourced from `~/.quantum/ad-factory/sound-library/` — empty for v1).
+5. Insert B-roll per script cues. B-roll source TBD; for v1, leave gaps marked `BROLL: <description>` in the output and skip insertion.
+6. Add curiosity sound bed (low-volume music, royalty-free, sourced from `~/.quantum/ad-factory/sound-library/`, empty for v1).
 7. Render three deliverables:
-   - `hero.mp4` — 16:9 or original aspect, source-of-truth edit.
-   - `9x16.mp4` — vertical, center-crop, captions repositioned to safe zone.
-   - `1x1.mp4` — square, center-crop.
+   - `hero.mp4`: 16:9 or original aspect, source-of-truth edit.
+   - `9x16.mp4`: vertical, center-crop, captions repositioned to safe zone.
+   - `1x1.mp4`: square, center-crop.
 
 ## Outputs
 

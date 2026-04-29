@@ -34,4 +34,4 @@ Generate 3 script variants from the brief, the research synthesis, the picked ho
 - Each variant is in-character with the picked host (voice tics present, no contradictions with `look.md`)
 - Each variant uses a distinct angle (no two share the same hook structure)
 - Each clip is 4 lines or fewer (Higgsfield Seedance pacing constraint from the source video)
-- No FTC-risky claims (efficacy, health, financial returns) — workspace policy excludes those niches anyway, but check
+- No FTC-risky claims (efficacy, health, financial returns); workspace policy excludes those niches anyway, but check
