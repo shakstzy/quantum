@@ -161,7 +161,7 @@ def parse_libgen_results(html: str, base: str) -> list[Hit]:
         try:
             title = re.sub(r"\s+", " ", cols[0].get_text(" ", strip=True)).strip()
             authors_raw = cols[1].get_text(" ", strip=True)
-            authors = [a.strip() for a in re.split(r"[;,]", authors_raw) if a.strip()] if authors_raw else []
+            authors = parse_authors(authors_raw)
             publisher = cols[2].get_text(" ", strip=True)
             year_txt = cols[3].get_text(strip=True)
             year = int(year_txt) if year_txt.isdigit() else None
@@ -233,11 +233,40 @@ def slugify(title: str, author_lastname: str) -> str:
     return title
 
 
+def parse_authors(raw: str) -> list[str]:
+    """LibGen authors cell: '; ' separates authors, ', ' is 'Last, First'.
+
+    Examples:
+        'James Clear'           -> ['James Clear']
+        'Clear, James'          -> ['James Clear']
+        'Clear, James; Doe, J.' -> ['James Clear', 'J. Doe']
+        'James Clear, John Doe' -> ['James Clear', 'John Doe'] (two-comma heuristic)
+    """
+    if not raw:
+        return []
+    out = []
+    for piece in raw.split(";"):
+        piece = piece.strip()
+        if not piece:
+            continue
+        # If exactly one comma and the right side is a single token group (no further commas), treat as "Last, First"
+        if piece.count(",") == 1:
+            left, right = [p.strip() for p in piece.split(",")]
+            if left and right and " " not in left:
+                out.append(f"{right} {left}")
+                continue
+        # Otherwise split on remaining commas (multi-author with no inversion)
+        for sub in piece.split(","):
+            sub = sub.strip()
+            if sub:
+                out.append(sub)
+    return out
+
+
 def author_lastname(authors: list[str]) -> str:
     if not authors:
         return ""
-    first = authors[0]
-    parts = first.replace(",", " ").split()
+    parts = authors[0].split()
     return parts[-1] if parts else ""
 
 
