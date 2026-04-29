@@ -236,10 +236,9 @@ def main():
         for rel, file_findings in by_file.items():
             target = worktree / rel
             if not target.exists():
-                for f in file_findings:
-                    write_decision(f["key"], f, "rejected-file-missing", rule_version)
+                # transient: file may show up next tick; do not cache
                 continue
-            # symlink check
+            # symlink check (permanent: symlinks won't change shape)
             if target.is_symlink():
                 for f in file_findings:
                     write_decision(f["key"], f, "rejected-symlink", rule_version)
@@ -247,8 +246,7 @@ def main():
             try:
                 original = target.read_text()
             except (OSError, UnicodeDecodeError):
-                for f in file_findings:
-                    write_decision(f["key"], f, "rejected-read-error", rule_version)
+                # transient: filesystem hiccup; retry next tick
                 continue
 
             if EM_DASH not in original:
@@ -304,17 +302,16 @@ def main():
         # base-HEAD verification: main must still be at base_head
         cur_main = run(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.strip()
         if cur_main != base_head:
-            print(f"autofix-safe: main HEAD shifted ({base_head[:8]} -> {cur_main[:8]}); aborting apply", file=sys.stderr)
-            for f in actually_fixed:
-                write_decision(f["key"], f, "rejected-base-head-shifted", rule_version)
+            # transient: auto-sync committed during our work; retry next tick
+            print(f"autofix-safe: main HEAD shifted ({base_head[:8]} -> {cur_main[:8]}); aborting apply (transient)", file=sys.stderr)
             return 3
 
-        # working tree must be clean
+        # working tree must be clean (transient: user edits in flight)
         st = run(["git", "status", "--porcelain"], cwd=REPO).stdout.strip()
-        if st:
-            print(f"autofix-safe: main working tree dirty; aborting apply\n{st}", file=sys.stderr)
-            for f in actually_fixed:
-                write_decision(f["key"], f, "rejected-main-dirty", rule_version)
+        # tolerate untracked files in graphify-out/ (graphify auto-rebuilds)
+        st_lines = [l for l in st.splitlines() if not l.startswith("?? graphify-out/")]
+        if st_lines:
+            print(f"autofix-safe: main working tree dirty; aborting apply (transient)\n" + "\n".join(st_lines), file=sys.stderr)
             return 3
 
         # fast-forward main to wt_head
