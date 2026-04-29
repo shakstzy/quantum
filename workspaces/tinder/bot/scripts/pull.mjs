@@ -24,9 +24,9 @@ try {
   let opened = 0;
   for (const m of matches.slice(0, limit)) {
     try {
-      const r = await scrapeThread(page, m.matchId);
+      const r = await scrapeThread(page, m.matchId, { name: m.name });
       opened += 1;
-      console.log(`thread ${m.matchId} -> ${r.slug || "?"} (${r.messages_new}/${r.messages_total} new)`);
+      console.log(`thread ${m.name || "?"} -> ${r.slug || "?"} (${r.messages_new}/${r.messages_total} new)`);
     } catch (e) {
       console.error(`thread_failed ${m.matchId}: ${e.message}`);
       if (/HALTED/.test(e.message)) break;

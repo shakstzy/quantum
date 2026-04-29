@@ -29,23 +29,25 @@ export async function scrapeMatches(page) {
   await gotoMatches(page);
   await scanForHalts(page);
 
-  const matchLinks = new Set();
+  const seen = new Map(); // href -> name
   for (let pass = 0; pass < 10; pass++) {
     const { els } = await pickAll(page, sels.matches_list_item);
-    const before = matchLinks.size;
+    const before = seen.size;
     for (const el of els) {
       const href = await el.getAttribute("href");
-      if (href) matchLinks.add(href);
+      if (!href) continue;
+      const name = (await el.textContent())?.trim() || null;
+      if (!seen.has(href)) seen.set(href, name);
     }
-    if (matchLinks.size === before) break;
+    if (seen.size === before) break;
     await humanScroll(page, { distance: jitter(280, 540), steps: jitter(5, 9) });
     await sleep(jitter(700, 1500));
   }
 
   const matches = [];
-  for (const href of matchLinks) {
+  for (const [href, name] of seen.entries()) {
     const matchId = href.split("/").pop();
-    matches.push({ matchId, href });
+    matches.push({ matchId, href, name });
   }
 
   await logSession({ event: "matches_list_snapshot", count: matches.length, ids: matches.map(m => m.matchId) });
@@ -66,22 +68,14 @@ export async function scrapeThread(page, matchId, { name = null, profile = {} } 
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // Try to read the displayed name from the thread header if not provided.
-  let displayName = name;
-  if (!displayName) {
-    const headerCandidates = ["h1", "header h1", "[class*='matchName']", "[class*='name']"];
-    for (const sel of headerCandidates) {
-      try {
-        const t = (await page.textContent(sel))?.trim();
-        if (t && t.length < 60 && !/messages?$/i.test(t)) { displayName = t; break; }
-      } catch { /* skip */ }
-    }
+  // Name MUST be passed in (from the matches list anchor text). The thread page header
+  // is unreliable — picks up "You" from the side nav, "Messages" from the heading, etc.
+  if (!name) {
+    console.error(`scrapeThread: no name provided for ${matchId}; skipping entity write`);
+    return { matchId, slug: null, messages_total: 0, messages_new: 0 };
   }
 
-  let entityResult = null;
-  if (displayName) {
-    entityResult = await upsertMatch({ matchId, personId: null, name: displayName, source: "tinder", profile });
-  }
+  const entityResult = await upsertMatch({ matchId, personId: null, name, source: "tinder", profile });
 
   const { els } = await pickAll(page, sels.thread_messages);
   const messages = [];
