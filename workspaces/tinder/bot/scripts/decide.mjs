@@ -57,9 +57,12 @@ async function main() {
   const existingPending = new Set((await listQueue("pending")).map(p => p.meta.match_id));
   const existingApproved = new Set((await listQueue("approved")).map(p => p.meta.match_id));
 
-  let queued = 0, autoQueued = 0, hitlQueued = 0, skipped = 0;
+  const testLimit = parseInt(process.env.QUANTUM_TINDER_DECIDE_LIMIT || "0", 10);
+  if (testLimit > 0) console.log(`TEST MODE: decide capped at ${testLimit} drafts`);
+  let queued = 0, autoQueued = 0, hitlQueued = 0, skipped = 0, draftCount = 0;
 
   for (const ent of entities) {
+    if (testLimit > 0 && draftCount >= testLimit) { skipped += 1; continue; }
     if (ent.meta.status === "unmatched" || ent.meta.status === "gone_dark") { skipped += 1; continue; }
     if (existingPending.has(ent.meta.match_id) || existingApproved.has(ent.meta.match_id)) { skipped += 1; continue; }
 
@@ -84,6 +87,7 @@ async function main() {
     let drafted;
     try { drafted = await draftMessage({ context, intent: finalIntent }); }
     catch (e) { console.error(`draft_failed ${ent.slug}: ${e.message}`); skipped += 1; continue; }
+    draftCount += 1;
 
     const autoEligible = (finalIntent === "opener" || finalIntent === "reengage_after_imessage_silence") && drafted.lint.pass;
     const stage = autoEligible ? "approved" : "pending";
