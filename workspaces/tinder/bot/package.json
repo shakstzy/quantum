@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "ghost-cursor-playwright": "^2.1.0",
-    "patchright": "^1.59.4"
+    "patchright": "^1.59.4",
+    "proper-lockfile": "^4.1.2"
   }
 }

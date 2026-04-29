@@ -20,12 +20,22 @@ function normalizeDigits(raw) {
   return null;
 }
 
-export async function findPhoneByName(name) {
-  if (!name) return null;
+// C4 FIX: require BOTH first AND last name. First-name-only fuzzy match was
+// catastrophic — with 2,277 contacts, multiple Sarahs/Annas/Emilys all match,
+// and the bot would condition Tinder drafts on the wrong person's iMessage history.
+// If only first name is known (typical for Tinder), return null and skip the
+// side-channel entirely. Better to default to "tinder_only" than draft against
+// the wrong human.
+export async function findPhoneByName(firstName, lastName = null) {
+  if (!firstName) return null;
+  if (!lastName) return null; // explicit refusal: no side-channel without last-name confirmation
+  const safeFirst = firstName.replace(/"/g, '\\"');
+  const safeLast = lastName.replace(/"/g, '\\"');
   const script = `
     tell application "Contacts"
-      set theMatches to (every person whose name contains "${name.replace(/"/g, '\\"')}")
+      set theMatches to (every person whose first name is "${safeFirst}" and last name is "${safeLast}")
       if (count of theMatches) is 0 then return ""
+      if (count of theMatches) is greater than 1 then return ""
       set thePerson to item 1 of theMatches
       set thePhones to value of phones of thePerson
       if (count of thePhones) is 0 then return ""
