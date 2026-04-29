@@ -32,6 +32,15 @@ OUT_ROOT = Path.home() / ".quantum" / "audit"
 LOG_DIR = Path.home() / ".quantum" / "logs"
 RETENTION = 30
 EM_DASH = "—"
+RULE_VERSION = 1
+
+
+def stable_key(rule: str, path: str, observed: str) -> str:
+    """Normalized hash for the decisions log. Excludes line numbers and timestamps."""
+    norm_path = re.sub(r":L\d+$", "", path)
+    norm_observed = re.sub(r"L\d+", "L*", observed).strip()
+    blob = f"{rule}|{norm_path}|{norm_observed}|v{RULE_VERSION}".encode()
+    return hashlib.sha256(blob).hexdigest()
 
 
 def is_excluded(path: Path) -> bool:
@@ -469,8 +478,15 @@ def step7_report(rows, ceiling, integrity, em_dashes, drift, dups, out_dir):
             "weighted_cost": 0,
         })
 
+    for f in findings:
+        f["key"] = stable_key(f["rule"], f["path"], f.get("observed", ""))
+
     with open(out_dir / "report.json", "w") as fp:
-        json.dump({"generated": datetime.now(timezone.utc).isoformat(), "findings": findings}, fp, indent=2)
+        json.dump({
+            "generated": datetime.now(timezone.utc).isoformat(),
+            "rule_version": RULE_VERSION,
+            "findings": findings,
+        }, fp, indent=2)
 
     crit = [f for f in findings if f["severity"] == "critical"]
     warn = [f for f in findings if f["severity"] == "warning"]
@@ -536,6 +552,8 @@ def main():
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+    print_run_dir = "--print-run-dir" in sys.argv
+
     ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     tmp = Path(tempfile.mkdtemp(prefix="quantum-icm-audit-"))
 
@@ -560,9 +578,13 @@ def main():
                 old_hash = None
 
         if old_hash == new_hash:
-            target = latest.resolve().name if latest.exists() else "(none)"
-            print(f"[{ts}] no findings change (hash={new_hash[:12]}, last={target}); skipping write")
+            target = latest.resolve() if latest.exists() else None
             shutil.rmtree(tmp)
+            if print_run_dir:
+                if target is not None:
+                    print(str(target))
+                return 0
+            print(f"[{ts}] no findings change (hash={new_hash[:12]}, last={target.name if target else '(none)'}); skipping write")
             return 0
 
         out_dir = OUT_ROOT / "runs" / ts
@@ -575,8 +597,11 @@ def main():
 
         crit = sum(1 for f in findings if f["severity"] == "critical")
         warn = sum(1 for f in findings if f["severity"] == "warning")
-        print(f"[{ts}] findings changed (hash={new_hash[:12]}); wrote {out_dir}")
-        print(f"  {len(files)} md scanned; {crit} critical, {warn} warning")
+        if print_run_dir:
+            print(str(out_dir))
+        else:
+            print(f"[{ts}] findings changed (hash={new_hash[:12]}); wrote {out_dir}")
+            print(f"  {len(files)} md scanned; {crit} critical, {warn} warning")
         prune_old_runs()
         return 0
     except Exception as e:
