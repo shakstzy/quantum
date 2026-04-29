@@ -27,7 +27,6 @@ QUANTUM/
 │   ├── journal/
 │   ├── finance/
 │   ├── health/
-│   ├── people/
 │   ├── library/
 │   ├── tinder/                  (per-person markdown <first>-<source>-<city>.md)
 │   ├── contacts/                (per-person markdown, macOS Contacts mirror)
@@ -42,7 +41,6 @@ QUANTUM/
 │   ├── journal/
 │   ├── finance/
 │   ├── health/
-│   ├── people/
 │   ├── library/
 │   ├── tinder/                  (patchright bot, no api.gotinder.com)
 │   └── contacts/                (macOS Contacts ingest via JXA, daily 4am cron)
@@ -71,7 +69,6 @@ QUANTUM/
 | journal | Manual entries | Daily and weekly reflections |
 | finance | Manual / banking exports | Accounts, transactions, decisions |
 | health | Apple Health exports / manual | Workouts, vitals, habits |
-| people | Manual / contacts | Friends, family, colleagues, network NOT in Apple Contacts (manual overlay) |
 | library | Manual / browser captures | Books, articles, papers, watchlists |
 | tinder | tinder.com via patchright (browser automation) | Swipes, matches, threads, outbound drafting + send. Ban-aversion is priority #1; see workspace CLAUDE.md for hard rules. |
 | contacts | macOS Contacts via JXA / osascript | Daily 4am ingest. Per-entry markdown at `raw/contacts/<slug>.md`. Auto-classified `person` / `business` / `noise`. |
