@@ -168,12 +168,26 @@ _STATUS_TO_FILTER: dict[str, dict[str, Any]] = {
     "off-market": {"isAllHomes": {"value": True}, "isForSaleByAgent": {"value": False},
                    "isForSaleByOwner": {"value": False}, "isNewConstruction": {"value": False},
                    "isComingSoon": {"value": False}},
-    # Rentals: flip the for-sale flags off and turn on for-rent.
+    # Rentals: Zillow's rental search uses SHORT filterState keys (fr, fsba, etc)
+    # AND a different URL path (/homes/for_rent/). The short keys are required;
+    # using the long names (isForRent, isForSaleByAgent) silently returns 0 results.
     "for-rent": {
-        "isForSaleByAgent": {"value": False}, "isForSaleByOwner": {"value": False},
-        "isNewConstruction": {"value": False}, "isComingSoon": {"value": False},
-        "isAuction": {"value": False}, "isForRent": {"value": True},
+        "fr": {"value": True}, "fsba": {"value": False}, "fsbo": {"value": False},
+        "nc": {"value": False}, "cmsn": {"value": False},
+        "auc": {"value": False}, "fore": {"value": False},
     },
+}
+
+
+def _is_rental_status(status: str | None) -> bool:
+    return status == "for-rent"
+
+
+# Map our public sort flag to short keys Zillow's rental search expects.
+_RENTAL_SORT_VALUES = {
+    "newest": "days",
+    "price-asc": "pricea",
+    "price-desc": "priced",
 }
 
 _SORT_VALUES = {
@@ -286,7 +300,8 @@ def search(
     )
 
     if polygon is not None or bbox is not None:
-        return _search_via_geo(polygon=polygon, bbox=bbox, page=page, filter_state=fs)
+        return _search_via_geo(polygon=polygon, bbox=bbox, page=page,
+                               filter_state=fs, rental=_is_rental_status(status))
 
     if not query:
         raise RuntimeError("zillow search: pass a query, polygon, or bbox")
@@ -341,7 +356,8 @@ def _search_via_custom_region(custom_region_id: str, src_url: str,
                         extra={"custom_region_id": custom_region_id})
 
 
-def _search_via_geo(*, polygon=None, bbox=None, page=1, filter_state: dict) -> dict:
+def _search_via_geo(*, polygon=None, bbox=None, page=1, filter_state: dict,
+                    rental: bool = False) -> dict:
     """Polygon / bbox search via mapBounds + optional client-side filter."""
     if polygon is not None and bbox is None:
         bbox = _polygon_to_bbox(polygon)
@@ -356,7 +372,8 @@ def _search_via_geo(*, polygon=None, bbox=None, page=1, filter_state: dict) -> d
         "isListVisible": True,
         "isMapVisible": True,
     }
-    full_url = (BASE + "/homes/?searchQueryState="
+    base_path = "/homes/for_rent/" if rental else "/homes/"
+    full_url = (BASE + base_path + "?searchQueryState="
                 + quote(json.dumps(sqs, separators=(",", ":"))))
     html = _fetch_html(full_url)
     data = next_data(html)
