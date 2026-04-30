@@ -1,57 +1,42 @@
 """Redfin scraper using public HTML pages.
 
-Redfin's WAF (CloudFront) blocks direct hits to /stingray/do/* and
-/stingray/api/home/details/* but lets the public HTML pages through. Those
-pages are server-rendered and embed every API response Redfin's React app
-needs into a `reactServerState.InitialContext` <script> blob, including the
-XSSI-prefixed JSON we'd otherwise call directly.
-
-So the strategy is:
+Strategy:
   1. GET the HTML page humans visit (city / zipcode / property URL).
   2. Pull the InitialContext JSON.
-  3. Reach into `ReactServerAgent.cache.dataCache[<key>].res.text`, strip the
+  3. Reach into ReactServerAgent.cache.dataCache[<key>].res.text, strip the
      `{}&&` XSSI guard, parse the inner JSON.
-  4. Fall through to the gis-csv/gis JSON endpoints (NOT WAF-blocked) when
-     the cache entry isn't there.
+  4. Fall through to the gis-csv/gis JSON endpoints when the cache entry
+     isn't there.
 
-Region resolution (free-text -> region_id, region_type) goes through the
-brave-search skill: query "site:redfin.com <city>" and parse the URL path.
+All pure parsing lives in `redfin_parse.py`. This module owns HTTP +
+region resolution + CLI.
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
-from typing import Any
 from urllib.parse import quote, urlparse
 
 from curl_cffi import requests as curl_requests
 
-XSSI_PREFIX = "{}&&"
-BASE = "https://www.redfin.com"
+import redfin_parse as P
+from redfin_parse import (
+    BASE,
+    GIS_REGION_TYPE,
+    initial_context,
+    parse_csv,
+    parse_property,
+    parse_region_from_url,
+    parse_search_homes,
+)
+
 DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.redfin.com/",
 }
-INITIAL_CTX_RE = re.compile(
-    r"reactServerState\.InitialContext\s*=\s*(\{.*?\});", re.DOTALL
-)
-# city URLs look like /city/<id>/<state>/<name>
-CITY_URL_RE = re.compile(r"/city/(\d+)/([A-Z]{2})/([^/]+)")
-# zip URLs like /zipcode/78704
-ZIP_URL_RE = re.compile(r"/zipcode/(\d+)")
-# neighborhood URLs like /neighborhood/<id>/...
-NEIGHBORHOOD_URL_RE = re.compile(r"/neighborhood/(\d+)/")
-
-# Region type IDs Redfin's GIS endpoint uses (NOT the autocomplete IDs).
-GIS_REGION_TYPE = {"city": 6, "zip": 2, "neighborhood": 1, "county": 5, "state": 4}
-
-# Property URL: /TX/Austin/2403-E-2nd-St-78702/home/29841515
-PROPERTY_URL_RE = re.compile(r"/[A-Z]{2}/[^/]+/[^/]+/home/(\d+)")
-
 
 _session: curl_requests.Session | None = None
 
@@ -74,40 +59,12 @@ def _fetch_html(url: str) -> str:
     return r.text
 
 
-def _initial_context(html: str) -> dict:
-    m = INITIAL_CTX_RE.search(html)
-    if not m:
-        raise RuntimeError("redfin: reactServerState.InitialContext not in HTML; layout changed?")
-    return json.loads(m.group(1))
-
-
-def _cache_entry(ctx: dict, path_prefix: str) -> dict | None:
-    """Pull the parsed body of a cached API response by URL path prefix."""
-    cache = (ctx.get("ReactServerAgent.cache") or {}).get("dataCache") or {}
-    for key, entry in cache.items():
-        if not key.startswith(path_prefix):
-            continue
-        text = ((entry.get("res") or {}).get("text")) or ""
-        if text.startswith(XSSI_PREFIX):
-            text = text[len(XSSI_PREFIX):]
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Region resolution
 # ---------------------------------------------------------------------------
 
 def _brave_search_first_redfin_url(query: str) -> str | None:
-    """Use the brave-search skill to find the Redfin URL for a query.
-
-    Resolves the brave-search shell script relative to this skill's location
-    (../../brave-search/search.sh under _core/skills/) so the path stays
-    valid even if the QUANTUM repo is moved or the user changes.
-    """
+    """Find a Redfin URL for `query` via the brave-search skill."""
     here = os.path.dirname(os.path.abspath(__file__))
     brave = os.path.normpath(os.path.join(here, "..", "..", "brave-search", "search.sh"))
     if not os.path.exists(brave):
@@ -124,8 +81,7 @@ def _brave_search_first_redfin_url(query: str) -> str | None:
     results = (data.get("web") or {}).get("results") or data.get("results") or []
     for r in results:
         url = r.get("url") or ""
-        # Prefer city/<id>/.../houses-for-sale URLs
-        if CITY_URL_RE.search(url) or ZIP_URL_RE.search(url):
+        if P.CITY_URL_RE.search(url) or P.ZIP_URL_RE.search(url):
             return url
     if results:
         return results[0].get("url")
@@ -133,14 +89,7 @@ def _brave_search_first_redfin_url(query: str) -> str | None:
 
 
 def resolve_region(query: str) -> dict:
-    """Return {region_id, region_type, url, path} for a free-text query.
-
-    Resolution order:
-      1. If `query` already looks like a Redfin URL or path, parse it.
-      2. Else, ask Brave for `site:redfin.com <query>` and pick the first
-         /city/<id>, /zipcode/<id>, or /neighborhood/<id> URL.
-    """
-    # Direct URL or path
+    """Return {region_id, region_type, url, ...} for a free-text query."""
     looks_like_url = query.startswith("http") or query.startswith("/")
     candidate = query if looks_like_url else None
     if candidate is None:
@@ -149,26 +98,58 @@ def resolve_region(query: str) -> dict:
         raise RuntimeError(
             f"redfin: could not resolve {query!r}; pass a Redfin URL or check brave-search auth"
         )
-    path = urlparse(candidate).path or candidate
-    if m := CITY_URL_RE.search(path):
-        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["city"],
-                "kind": "city", "state": m.group(2), "name": m.group(3),
-                "url": BASE + f"/city/{m.group(1)}/{m.group(2)}/{m.group(3)}"}
-    if m := ZIP_URL_RE.search(path):
-        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["zip"],
-                "kind": "zip", "url": BASE + f"/zipcode/{m.group(1)}"}
-    if m := NEIGHBORHOOD_URL_RE.search(path):
-        return {"region_id": int(m.group(1)), "region_type": GIS_REGION_TYPE["neighborhood"],
-                "kind": "neighborhood", "url": BASE + path}
-    raise RuntimeError(f"redfin: URL {candidate!r} doesn't match a known region pattern")
+    return parse_region_from_url(candidate)
 
 
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 
+def _money(n: int) -> str:
+    if n >= 1_000_000 and n % 1_000_000 == 0:
+        return f"{n // 1_000_000}m"
+    if n >= 1_000 and n % 1_000 == 0:
+        return f"{n // 1_000}k"
+    return str(n)
+
+
+# Public-URL filter slugs Redfin's /city/.../filter/ path expects.
+_HT_NAME_TO_UIPT = {
+    "house": "1", "condo": "2", "townhouse": "3",
+    "multi-family": "4", "multi": "4", "land": "5",
+    "other": "6", "mobile": "7", "coop": "8",
+}
+
+# Redfin's `ord` values for /stingray/api/gis sorting.
+_SORT_TO_ORD = {
+    "redfin-recommended": "redfin-recommended-asc",
+    "newest": "days-on-redfin-asc",
+    "oldest": "days-on-redfin-desc",
+    "price-asc": "price-asc",
+    "price-desc": "price-desc",
+    "sqft-desc": "square-feet-desc",
+    "sqft-asc": "square-feet-asc",
+    "lot-desc": "lot-size-desc",
+    "year-built-desc": "year-built-desc",
+}
+
+# Redfin's `status` values (for "for sale" filtering).
+_STATUS_TO_FLAG = {
+    "active": 9,         # default
+    "active-coming-soon": 139,
+    "pending": 130,
+    "contingent": 8,
+    "sold": 162,
+    "off-market": 0,
+}
+
+
 def _build_filter_segment(*, max_price=None, min_price=None, min_beds=None,
-                          min_baths=None, min_sqft=None, home_types=None) -> str | None:
+                          min_baths=None, min_sqft=None, max_sqft=None,
+                          max_hoa=None, year_built_min=None, year_built_max=None,
+                          lot_size_min=None, lot_size_max=None,
+                          home_types=None, status=None, sort=None,
+                          has_pool=None, has_garage=None, new_construction=None) -> str:
     parts = []
     if home_types:
         parts.append("property-type=" + ",".join(home_types))
@@ -182,34 +163,83 @@ def _build_filter_segment(*, max_price=None, min_price=None, min_beds=None,
         parts.append(f"min-baths={min_baths}")
     if min_sqft is not None:
         parts.append(f"min-sqft={min_sqft}")
+    if max_sqft is not None:
+        parts.append(f"max-sqft={max_sqft}")
+    if max_hoa is not None:
+        parts.append(f"max-hoa={max_hoa}")
+    if year_built_min is not None:
+        parts.append(f"min-year-built={year_built_min}")
+    if year_built_max is not None:
+        parts.append(f"max-year-built={year_built_max}")
+    if lot_size_min is not None:
+        parts.append(f"min-lot-size={lot_size_min}")
+    if lot_size_max is not None:
+        parts.append(f"max-lot-size={lot_size_max}")
+    if has_pool:
+        parts.append("has-pool")
+    if has_garage:
+        parts.append("has-garage")
+    if new_construction:
+        parts.append("include=new-construction")
+    if sort and sort in _SORT_TO_ORD:
+        parts.append(f"sort={sort}")
+    if status and status != "active":
+        parts.append(f"include={status}")
     return "/filter/" + ",".join(parts) if parts else ""
 
 
-def _money(n: int) -> str:
-    if n >= 1_000_000 and n % 1_000_000 == 0:
-        return f"{n // 1_000_000}m"
-    if n >= 1_000 and n % 1_000 == 0:
-        return f"{n // 1_000}k"
-    return str(n)
-
-
 def search(
-    query: str,
+    query: str | None = None,
     *,
     max_price: int | None = None,
     min_price: int | None = None,
     min_beds: int | None = None,
     min_baths: float | None = None,
     min_sqft: int | None = None,
+    max_sqft: int | None = None,
+    max_hoa: int | None = None,
+    year_built_min: int | None = None,
+    year_built_max: int | None = None,
+    lot_size_min: int | None = None,
+    lot_size_max: int | None = None,
+    has_pool: bool = False,
+    has_garage: bool = False,
+    new_construction: bool = False,
     home_types: list[str] | None = None,
     num_homes: int = 50,
+    page: int = 1,
+    sort: str | None = None,
+    status: str | None = None,
     region_id: int | None = None,
     region_type: int | None = None,
+    polygon: list[tuple[float, float]] | None = None,
+    bbox: tuple[float, float, float, float] | None = None,  # (n, e, s, w)
 ) -> dict:
+    """Search Redfin listings.
+
+    Region-resolution order:
+      1. polygon=[(lat,lng), ...] -> /stingray/api/gis with poly=<lng lat,...>
+      2. bbox=(n,e,s,w)            -> /stingray/api/gis with poly equivalent
+      3. region_id+region_type     -> /stingray/api/gis-csv direct
+      4. query (URL or free-text)  -> resolve_region + HTML path
+    """
+    filters = dict(
+        max_price=max_price, min_price=min_price, min_beds=min_beds,
+        min_baths=min_baths, min_sqft=min_sqft, max_sqft=max_sqft,
+        max_hoa=max_hoa, year_built_min=year_built_min,
+        year_built_max=year_built_max, lot_size_min=lot_size_min,
+        lot_size_max=lot_size_max, has_pool=has_pool,
+        has_garage=has_garage, new_construction=new_construction,
+        home_types=home_types, status=status, sort=sort,
+    )
+
+    if polygon is not None or bbox is not None:
+        return _search_via_gis_geo(
+            polygon=polygon, bbox=bbox, num_homes=num_homes, page=page,
+            **filters,
+        )
+
     if region_id is not None and region_type is not None:
-        # Manual override: skip Brave + the HTML-parse path. We don't know the
-        # state/city slug to build the canonical URL, so go straight to the
-        # gis-csv endpoint (which only needs the numeric IDs).
         region = {
             "region_id": int(region_id),
             "region_type": int(region_type),
@@ -217,80 +247,105 @@ def search(
                      5: "county", 4: "state"}.get(int(region_type), "region"),
             "url": None,
         }
-        return _search_via_gis(
-            region, num_homes=num_homes,
-            max_price=max_price, min_price=min_price,
-            min_beds=min_beds, min_baths=min_baths,
-            min_sqft=min_sqft, home_types=home_types,
-        )
+        return _search_via_gis(region, num_homes=num_homes, page=page, **filters)
+
+    if not query:
+        raise RuntimeError("redfin search: pass a query, region_id+region_type, polygon, or bbox")
+
     region = resolve_region(query)
-    filter_seg = _build_filter_segment(
-        max_price=max_price, min_price=min_price, min_beds=min_beds,
-        min_baths=min_baths, min_sqft=min_sqft, home_types=home_types,
-    )
-    url = region["url"] + (filter_seg or "")
+    filter_seg = _build_filter_segment(**filters)
+    url = region["url"] + filter_seg + (f"/page-{page}" if page > 1 else "")
     html = _fetch_html(url)
-    ctx = _initial_context(html)
-    # Listings live in the cached /stingray/api/gis response, not /api/region.
-    gis_resp = _cache_entry(ctx, "/stingray/api/gis?")
-    if not gis_resp:
-        return _search_via_gis(region, num_homes=num_homes,
-                               max_price=max_price, min_price=min_price,
-                               min_beds=min_beds, min_baths=min_baths,
-                               min_sqft=min_sqft, home_types=home_types)
-    homes = ((gis_resp.get("payload") or {}).get("homes")) or []
+    ctx = initial_context(html)
+    homes = parse_search_homes(ctx)
+    if not homes:
+        return _search_via_gis(region, num_homes=num_homes, page=page, **filters)
     return {
         "source": "redfin",
         "query": query,
         "region": region,
         "url": url,
         "count": len(homes),
-        "homes": [_summarize_home(h) for h in homes][:num_homes],
+        "homes": homes[:num_homes],
     }
 
 
-_HT_NAME_TO_UIPT = {
-    "house": "1", "condo": "2", "townhouse": "3",
-    "multi-family": "4", "multi": "4", "land": "5",
-    "other": "6", "mobile": "7", "coop": "8",
-}
+def search_multi(queries: list[str], *, dedupe: bool = True, **kw) -> dict:
+    """Run search() across N regions sequentially, dedupe, return merged.
 
-
-def _search_via_gis(region: dict, **kw) -> dict:
-    """Fallback path: /stingray/api/gis-csv.
-
-    The `market` param is informational only when `region_id` + `region_type`
-    are supplied; results scope to the region. We omit it rather than
-    hardcoding a city, which used to cause cross-city contamination.
+    Caller is responsible for not blowing past the per-task request cap;
+    each sub-search costs ~1 HTML GET (or 1 gis-csv fallback). Sleep
+    between calls is the caller's responsibility (we sleep 1.5s here).
     """
-    s = _get_session()
-    raw_types = kw.get("home_types") or []
+    import time
+    merged: list[dict] = []
+    seen: set = set()
+    sub_results = []
+    for i, q in enumerate(queries):
+        if i:
+            time.sleep(1.5)
+        try:
+            res = search(q, **kw)
+        except Exception as e:
+            sub_results.append({"query": q, "error": str(e)})
+            continue
+        sub_results.append({"query": q, "count": res.get("count", 0)})
+        for h in res.get("homes") or []:
+            key = h.get("property_id") or (h.get("address"), h.get("zip"))
+            if dedupe and key in seen:
+                continue
+            seen.add(key)
+            merged.append(h)
+    return {
+        "source": "redfin",
+        "queries": queries,
+        "sub_results": sub_results,
+        "count": len(merged),
+        "homes": merged,
+    }
+
+
+def _gis_params(filters: dict, num_homes: int, page: int) -> dict:
+    raw_types = filters.get("home_types") or []
     uipts = [_HT_NAME_TO_UIPT.get(t, t) for t in raw_types]
     if not uipts:
         uipts = ["1", "2", "3", "4", "5", "6", "7", "8"]
-    params = {
-        "al": 1, "num_homes": min(kw.get("num_homes", 50), 450),
-        "ord": "redfin-recommended-asc", "page_number": 1,
-        "region_id": region["region_id"], "region_type": region["region_type"],
-        "sf": "1,2,3,5,6,7", "status": 9,
-        "uipt": ",".join(uipts),
-        "v": 8,
+    sort_value = _SORT_TO_ORD.get(filters.get("sort") or "", "redfin-recommended-asc")
+    status_flag = _STATUS_TO_FLAG.get(filters.get("status") or "", 9)
+    p = {
+        "al": 1, "num_homes": min(num_homes, 450),
+        "ord": sort_value, "page_number": max(1, int(page)),
+        "sf": "1,2,3,5,6,7", "status": status_flag,
+        "uipt": ",".join(uipts), "v": 8,
     }
-    if kw.get("max_price") is not None:
-        params["max_price"] = kw["max_price"]
-    if kw.get("min_price") is not None:
-        params["min_price"] = kw["min_price"]
-    if kw.get("min_beds") is not None:
-        params["num_beds"] = kw["min_beds"]
-    if kw.get("min_baths") is not None:
-        params["num_baths"] = kw["min_baths"]
-    if kw.get("min_sqft") is not None:
-        params["min_sqft"] = kw["min_sqft"]
+    if filters.get("max_price") is not None: p["max_price"] = filters["max_price"]
+    if filters.get("min_price") is not None: p["min_price"] = filters["min_price"]
+    if filters.get("min_beds") is not None: p["num_beds"] = filters["min_beds"]
+    if filters.get("min_baths") is not None: p["num_baths"] = filters["min_baths"]
+    if filters.get("min_sqft") is not None: p["min_sqft"] = filters["min_sqft"]
+    if filters.get("max_sqft") is not None: p["max_sqft"] = filters["max_sqft"]
+    if filters.get("max_hoa") is not None: p["hoa"] = filters["max_hoa"]
+    if filters.get("year_built_min") is not None: p["min_year_built"] = filters["year_built_min"]
+    if filters.get("year_built_max") is not None: p["max_year_built"] = filters["year_built_max"]
+    if filters.get("lot_size_min") is not None: p["min_lot_size"] = filters["lot_size_min"]
+    if filters.get("lot_size_max") is not None: p["max_lot_size"] = filters["lot_size_max"]
+    if filters.get("has_pool"): p["pool"] = 1
+    if filters.get("has_garage"): p["garage"] = 1
+    if filters.get("new_construction"): p["include_new_construction"] = 1
+    return p
+
+
+def _search_via_gis(region: dict, *, num_homes=50, page=1, **filters) -> dict:
+    """Fallback path: /stingray/api/gis-csv. Uses region_id + region_type."""
+    s = _get_session()
+    params = _gis_params(filters, num_homes=num_homes, page=page)
+    params["region_id"] = region["region_id"]
+    params["region_type"] = region["region_type"]
     r = s.get(BASE + "/stingray/api/gis-csv", params=params,
               headers={**DEFAULT_HEADERS, "Accept": "text/csv"}, timeout=25)
     if r.status_code != 200:
         raise RuntimeError(f"redfin gis-csv -> HTTP {r.status_code}: {r.text[:200]}")
-    rows = _parse_csv(r.text)
+    rows = parse_csv(r.text)
     return {
         "source": "redfin",
         "query": region.get("name") or region.get("url"),
@@ -301,106 +356,56 @@ def _search_via_gis(region: dict, **kw) -> dict:
     }
 
 
-def _parse_csv(text: str) -> list[dict]:
-    import csv
-    import io
-    reader = csv.DictReader(io.StringIO(text))
-    out = []
-    for row in reader:
-        # Redfin slips a "In accordance with local MLS rules..." disclaimer
-        # row into the CSV that DictReader parses as a row with all-empty
-        # values past the first column. Skip rows without an address.
-        if not (row.get("ADDRESS") or "").strip():
-            continue
-        # Normalize a few columns to friendlier names.
-        out.append({
-            "address": row.get("ADDRESS"),
-            "city": row.get("CITY"),
-            "state": row.get("STATE OR PROVINCE"),
-            "zip": row.get("ZIP OR POSTAL CODE"),
-            "price": _to_int(row.get("PRICE")),
-            "beds": _to_int(row.get("BEDS")),
-            "baths": _to_float(row.get("BATHS")),
-            "sqft": _to_int(row.get("SQUARE FEET")),
-            "lot_size": _to_int(row.get("LOT SIZE")),
-            "year_built": _to_int(row.get("YEAR BUILT")),
-            "url": row.get("URL (SEE https://www.redfin.com/buy-a-home/comparative-market-analysis FOR INFO ON PRICING)") or row.get("URL"),
-            "status": row.get("STATUS"),
-            "property_type": row.get("PROPERTY TYPE"),
-            "days_on_market": _to_int(row.get("DAYS ON MARKET")),
-            "hoa_per_month": _to_int(row.get("HOA/MONTH")),
-            "price_per_sqft": _to_float(row.get("$/SQUARE FEET")),
-        })
-    return out
+def _format_poly(polygon: list[tuple[float, float]]) -> str:
+    """Redfin's `poly` param wants `lng lat,lng lat,...` (longitude first).
 
-
-def _to_int(v):
-    """Coerce a CSV value to int, tolerating currency symbols and commas."""
-    if v in (None, ""):
-        return None
-    if isinstance(v, str):
-        v = v.replace("$", "").replace(",", "").strip()
-        if not v:
-            return None
-    try:
-        return int(float(v))
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_float(v):
-    if v in (None, ""):
-        return None
-    if isinstance(v, str):
-        v = v.replace("$", "").replace(",", "").strip()
-        if not v:
-            return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-_PROPERTY_TYPE_BY_CODE = {
-    1: "single-family", 2: "condo", 3: "townhouse",
-    4: "multi-family", 5: "land", 6: "other",
-    7: "mobile", 8: "co-op",
-}
-
-
-def _summarize_home(h: dict) -> dict:
-    """Flatten a Redfin GIS-API home into the same shape used by the CSV path.
-
-    Both paths produce dicts with: address, city, state, zip, price, beds,
-    baths, sqft, lot_size, year_built, url, status, days_on_market,
-    property_type, hoa_per_month, price_per_sqft. JSON-only extras
-    (mls_id, property_id, listing_id) are nullable on the CSV side.
+    Source: https://scrapfly.io/blog/posts/how-to-scrape-redfin shows
+    `poly=<longitude>%20<latitude>,...` on the GIS endpoints.
     """
-    addr = h.get("streetLine") or {}
-    price = h.get("price") or {}
-    hoa = h.get("hoa") or {}
-    code = h.get("propertyType")
+    return ",".join(f"{lng} {lat}" for lat, lng in polygon)
+
+
+def _bbox_to_poly(bbox: tuple[float, float, float, float]) -> list[tuple[float, float]]:
+    """Convert (n, e, s, w) -> closed polygon ring as [(lat, lng), ...]."""
+    n, e, s, w = bbox
+    return [(n, w), (n, e), (s, e), (s, w), (n, w)]
+
+
+def _search_via_gis_geo(*, polygon=None, bbox=None, num_homes=50, page=1, **filters) -> dict:
+    """Polygon / bbox search via /stingray/api/gis (JSON, not CSV).
+
+    Both Redfin and the Redfin-frontend send `poly=<lng lat,...>` here.
+    """
+    if bbox is not None and polygon is None:
+        polygon = _bbox_to_poly(bbox)
+    if not polygon or len(polygon) < 3:
+        raise RuntimeError("redfin gis-geo: need at least 3 polygon vertices")
+    # Redfin closes the ring server-side, but no harm in closing it ourselves.
+    if polygon[0] != polygon[-1]:
+        polygon = list(polygon) + [polygon[0]]
+    s = _get_session()
+    params = _gis_params(filters, num_homes=num_homes, page=page)
+    params["poly"] = _format_poly(polygon)
+    params["user_poly"] = params["poly"]
+    r = s.get(BASE + "/stingray/api/gis", params=params,
+              headers={**DEFAULT_HEADERS, "Accept": "application/json"}, timeout=25)
+    if r.status_code != 200:
+        raise RuntimeError(f"redfin gis -> HTTP {r.status_code}: {r.text[:200]}")
+    text = r.text
+    if text.startswith(P.XSSI_PREFIX):
+        text = text[len(P.XSSI_PREFIX):]
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"redfin gis: non-JSON response: {text[:200]}")
+    homes = ((body.get("payload") or {}).get("homes")) or []
+    summarized = [P.summarize_home(h) for h in homes]
     return {
-        "mls_id": h.get("mlsId"),
-        "property_id": h.get("propertyId"),
-        "listing_id": h.get("listingId"),
-        "address": addr.get("value") if isinstance(addr, dict) else h.get("streetLine"),
-        "city": h.get("city"),
-        "state": (h.get("state") or {}).get("value") if isinstance(h.get("state"), dict) else h.get("state"),
-        "zip": h.get("zip"),
-        "price": price.get("value") if isinstance(price, dict) else price,
-        "price_per_sqft": (h.get("pricePerSqFt") or {}).get("value") if isinstance(h.get("pricePerSqFt"), dict) else h.get("pricePerSqFt"),
-        "beds": h.get("beds"),
-        "baths": h.get("baths"),
-        "sqft": (h.get("sqFt") or {}).get("value") if isinstance(h.get("sqFt"), dict) else h.get("sqFt"),
-        "lot_size": (h.get("lotSize") or {}).get("value") if isinstance(h.get("lotSize"), dict) else h.get("lotSize"),
-        "year_built": (h.get("yearBuilt") or {}).get("value") if isinstance(h.get("yearBuilt"), dict) else h.get("yearBuilt"),
-        "hoa_per_month": hoa.get("value") if isinstance(hoa, dict) else hoa,
-        "url": f"{BASE}{h.get('url')}" if h.get("url") and not h.get("url", "").startswith("http") else h.get("url"),
-        "status": h.get("mlsStatus"),
-        "listing_type": h.get("listingType"),
-        "property_type": _PROPERTY_TYPE_BY_CODE.get(code) if isinstance(code, int) else None,
-        "days_on_market": (h.get("timeOnRedfin") or {}).get("days") if isinstance(h.get("timeOnRedfin"), dict) else None,
+        "source": "redfin",
+        "polygon": polygon,
+        "url": r.url,
+        "count": len(summarized),
+        "homes": summarized[:num_homes],
     }
 
 
@@ -412,69 +417,10 @@ def property_details(url_or_path: str, *, include_raw: bool = False) -> dict:
     if not url_or_path.startswith("http"):
         url_or_path = BASE + (url_or_path if url_or_path.startswith("/") else "/" + url_or_path)
     html = _fetch_html(url_or_path)
-    ctx = _initial_context(html)
-
-    initial = _cache_entry(ctx, "/stingray/api/home/details/initialInfo") or {}
-    above = _cache_entry(ctx, "/stingray/api/home/details/aboveTheFold") or {}
-    # Note: belowTheFold lives at the v1 path on property pages.
-    below = (_cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold")
-             or _cache_entry(ctx, "/stingray/api/home/details/belowTheFold")
-             or {})
-    avm = _cache_entry(ctx, "/stingray/api/home/details/avm") or {}
-    rental = _cache_entry(ctx, "/stingray/api/home/details/rental-estimate") or {}
-    similars = _cache_entry(ctx, "/stingray/api/home/details/similars/listings") or {}
-    schools = (_cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/schoolsAndDistrictsInfo")
-               or {})
-    risk = _cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/riskFactorData") or {}
-
-    p_initial = initial.get("payload") or {}
-    p_above = above.get("payload") or {}
-    p_below = below.get("payload") or {}
-    p_avm = avm.get("payload") or {}
-
-    asi = p_above.get("addressSectionInfo") or {}
-    history_events = ((p_below.get("propertyHistoryInfo") or {}).get("events")) or []
-    public_records = p_below.get("publicRecordsInfo") or {}
-
-    out = {
-        "source": "redfin",
-        "url": url_or_path,
-        "property_id": p_initial.get("propertyId"),
-        "listing_id": p_initial.get("listingId"),
-        "status": (asi.get("status") or {}).get("displayValue"),
-        "address": (asi.get("streetAddress") or {}).get("assembledAddress"),
-        "city": asi.get("city"),
-        "state": asi.get("state"),
-        "zip": asi.get("zip"),
-        "lat_long": asi.get("latLong"),
-        "price": (asi.get("priceInfo") or {}).get("amount"),
-        "price_per_sqft": asi.get("pricePerSqFt"),
-        "beds": asi.get("beds"),
-        "baths": asi.get("baths"),
-        "sqft": (asi.get("sqFt") or {}).get("value"),
-        "year_built": asi.get("yearBuilt"),
-        "lot_size": asi.get("lotSize"),
-        "property_type_code": asi.get("propertyType"),
-        "redfin_estimate": p_avm.get("predictedValue") or (p_avm.get("predictedPrice") or {}).get("amount"),
-        "rent_estimate": (rental.get("payload") or {}).get("predictedValue"),
-        "history": history_events,
-        "public_records": public_records,
-        "schools": (schools.get("payload") or {}).get("schools") or [],
-        "risk_factors": (risk.get("payload") or {}),
-        "comps": _summarize_comps(similars),
-        "amenities": p_below.get("amenitiesInfo") or {},
-    }
-    if include_raw:
-        out["raw"] = {
-            "initial": p_initial, "above": p_above, "below": p_below,
-            "avm": p_avm, "similars": similars,
-        }
+    ctx = initial_context(html)
+    out = parse_property(ctx, include_raw=include_raw)
+    out["url"] = url_or_path
     return out
-
-
-def _summarize_comps(similars: dict) -> list[dict]:
-    homes = ((similars.get("payload") or {}).get("homes")) or []
-    return [_summarize_home(h) for h in homes][:20]
 
 
 def price_history(url_or_path: str) -> list[dict]:
@@ -494,6 +440,28 @@ def _print(obj):
     sys.stdout.write("\n")
 
 
+def _parse_polygon(s: str) -> list[tuple[float, float]]:
+    """Parse '30.27,-97.74;30.30,-97.74;...' into [(lat,lng), ...]."""
+    pts = []
+    for chunk in re.split(r"[;\n]+", s.strip()):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        a, b = chunk.split(",")
+        pts.append((float(a), float(b)))
+    return pts
+
+
+def _parse_bbox(s: str) -> tuple[float, float, float, float]:
+    parts = [float(x) for x in s.split(",")]
+    if len(parts) != 4:
+        raise SystemExit("--bbox needs 4 floats: n,e,s,w")
+    return tuple(parts)  # type: ignore
+
+
+import re  # noqa: E402  -- used in _parse_polygon helper above
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(prog="redfin")
@@ -502,21 +470,36 @@ def main(argv=None):
     sp = sub.add_parser("resolve", help="resolve a query to a region")
     sp.add_argument("query")
 
-    sp = sub.add_parser("search", help="search listings in a city / zip / neighborhood")
-    sp.add_argument("query")
+    sp = sub.add_parser("search", help="search listings in a region / polygon / bbox")
+    sp.add_argument("query", nargs="?")
     sp.add_argument("--max-price", type=int)
     sp.add_argument("--min-price", type=int)
     sp.add_argument("--min-beds", type=int)
     sp.add_argument("--min-baths", type=float)
     sp.add_argument("--min-sqft", type=int)
+    sp.add_argument("--max-sqft", type=int)
+    sp.add_argument("--max-hoa", type=int)
+    sp.add_argument("--year-built-min", type=int)
+    sp.add_argument("--year-built-max", type=int)
+    sp.add_argument("--lot-size-min", type=int)
+    sp.add_argument("--lot-size-max", type=int)
+    sp.add_argument("--has-pool", action="store_true")
+    sp.add_argument("--has-garage", action="store_true")
+    sp.add_argument("--new-construction", action="store_true")
     sp.add_argument("--home-types", help="comma-separated: house,condo,townhouse,multi-family,land,mobile,coop")
+    sp.add_argument("--status", choices=list(_STATUS_TO_FLAG.keys()))
+    sp.add_argument("--sort", choices=list(_SORT_TO_ORD.keys()))
     sp.add_argument("--num-homes", type=int, default=50)
+    sp.add_argument("--page", type=int, default=1)
     sp.add_argument("--region-id", type=int, help="manual override; pair with --region-type")
     sp.add_argument("--region-type", type=int, help="6=city, 2=zip, 1=neighborhood, 5=county, 4=state")
+    sp.add_argument("--polygon", help="lat,lng;lat,lng;... (>= 3 vertices)")
+    sp.add_argument("--bbox", help="north,east,south,west (4 floats)")
+    sp.add_argument("--regions", help="multi-region OR: 'Austin, TX;Round Rock, TX'")
 
     sp = sub.add_parser("property", help="full details for a single listing")
     sp.add_argument("url")
-    sp.add_argument("--include-raw", action="store_true", help="include the full nested API payloads")
+    sp.add_argument("--include-raw", action="store_true")
 
     sp = sub.add_parser("history", help="price/listing history for a property")
     sp.add_argument("url")
@@ -529,18 +512,33 @@ def main(argv=None):
     if args.cmd == "resolve":
         _print(resolve_region(args.query))
     elif args.cmd == "search":
-        # Public-URL filter slugs that Redfin's /city/.../filter/ path expects.
-        # `_search_via_gis` translates these to numeric `uipt` IDs internally.
         ht = None
         if args.home_types:
             ht = [t.strip() for t in args.home_types.split(",") if t.strip()]
-        _print(search(
-            args.query,
+        polygon = _parse_polygon(args.polygon) if args.polygon else None
+        bbox = _parse_bbox(args.bbox) if args.bbox else None
+        common = dict(
             max_price=args.max_price, min_price=args.min_price,
             min_beds=args.min_beds, min_baths=args.min_baths,
-            min_sqft=args.min_sqft, home_types=ht, num_homes=args.num_homes,
-            region_id=args.region_id, region_type=args.region_type,
-        ))
+            min_sqft=args.min_sqft, max_sqft=args.max_sqft,
+            max_hoa=args.max_hoa,
+            year_built_min=args.year_built_min, year_built_max=args.year_built_max,
+            lot_size_min=args.lot_size_min, lot_size_max=args.lot_size_max,
+            has_pool=args.has_pool, has_garage=args.has_garage,
+            new_construction=args.new_construction,
+            home_types=ht, status=args.status, sort=args.sort,
+            num_homes=args.num_homes, page=args.page,
+        )
+        if args.regions:
+            qs = [q.strip() for q in args.regions.split(";") if q.strip()]
+            _print(search_multi(qs, **common))
+        else:
+            _print(search(
+                args.query,
+                **common,
+                region_id=args.region_id, region_type=args.region_type,
+                polygon=polygon, bbox=bbox,
+            ))
     elif args.cmd == "property":
         _print(property_details(args.url, include_raw=args.include_raw))
     elif args.cmd == "history":
