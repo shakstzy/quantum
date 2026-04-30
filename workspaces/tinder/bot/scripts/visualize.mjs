@@ -13,10 +13,10 @@
 // - Never describe facial features (safety rule baked into prompt).
 // - Serial loop, one entity at a time. Tinder's natural pace + one cloud call per match.
 
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { launchPersistent } from "../src/runtime/profile.mjs";
-import { listAllEntities, saveEntity, loadEntity } from "../src/runtime/entity-store.mjs";
+import { listAllEntities, loadEntity, saveEntity } from "../src/runtime/entity-store.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { logSession } from "../src/runtime/logger.mjs";
 import { sleep, jitter } from "../src/runtime/humanize.mjs";
@@ -137,29 +137,28 @@ function buildVisualSection(visualOutput, engine, account, ts) {
   ].join("\n");
 }
 
-// Inject `## Visual` between `## Profile changes` and `## Conversation` (preserves
-// the canonical section order). If ## Visual already exists, replace it.
-async function appendVisualToEntity(slug, visualBody) {
-  const path = resolve(process.cwd(), "..", "..", "raw", "tinder", `${slug}.md`);
-  const text = await readFile(path, "utf8");
-  if (text.includes("\n## Visual\n")) {
-    // already has one — replace
-    const replaced = text.replace(/\n## Visual\n[\s\S]*?(?=\n## )/, `\n## Visual\n\n${visualBody}\n`);
-    await writeFile(path, replaced);
-    return { mode: "replaced" };
-  }
-  // Insert before ## Conversation
-  if (!text.includes("\n## Conversation\n")) throw new Error(`malformed entity ${slug}: no ## Conversation`);
-  const updated = text.replace(/\n## Conversation\n/, `\n## Visual\n\n${visualBody}\n\n## Conversation\n`);
-  await writeFile(path, updated);
-  return { mode: "inserted" };
+// Write the ## Visual section via saveEntity (canonical path through entity-store
+// so the section is preserved by all other writers — diff path, message append,
+// status change). visualBody is the rendered bullet-list block (no heading).
+async function writeVisualToEntity(slug, visualBody) {
+  const ent = await loadEntity(slug);
+  const mode = ent.visual && ent.visual.trim() ? "replaced" : "inserted";
+  await saveEntity({
+    slug,
+    meta: ent.meta,
+    profile: ent.profile,
+    conversation: ent.conversation,
+    outbound: ent.outbound,
+    profile_changes: ent.profile_changes,
+    visual: visualBody,
+  });
+  return { mode };
 }
 
 async function entityHasVisual(slug) {
-  const path = resolve(process.cwd(), "..", "..", "raw", "tinder", `${slug}.md`);
   try {
-    const text = await readFile(path, "utf8");
-    return text.includes("\n## Visual\n");
+    const ent = await loadEntity(slug);
+    return !!(ent.visual && ent.visual.trim());
   } catch { return false; }
 }
 
@@ -203,7 +202,7 @@ async function main() {
         const result = await describeImages(paths, VISUAL_PROMPT);
         const ts = new Date().toISOString();
         const body = buildVisualSection(result.output, result.engine, result.account, ts);
-        const wrote = await appendVisualToEntity(ent.slug, body);
+        const wrote = await writeVisualToEntity(ent.slug, body);
         done += 1;
         console.log(`${ent.slug}: ${paths.length} photos, ${result.engine} (${result.account || "—"}), ${wrote.mode}`);
         // Pace between matches: random gap to look human-ish to Tinder + give cloud breathing room

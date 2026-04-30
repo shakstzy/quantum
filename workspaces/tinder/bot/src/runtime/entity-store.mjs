@@ -368,6 +368,7 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
         conversation: ent.conversation,
         outbound: ent.outbound,
         profile_changes: nextChanges,
+        visual: ent.visual || "",
       });
       return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
     }
@@ -395,6 +396,7 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
       conversation: "",
       outbound: "",
       profile_changes: "",
+      visual: "",
     });
     return { slug, created: true, renamed: false, profile_diff: null };
   });
@@ -464,7 +466,7 @@ export async function appendMessages(slug, messages) {
       last_activity: lastTs || new Date().toISOString(),
       phone: ent.meta.phone || extractedPhone || null,
     };
-    await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes, visual: ent.visual });
     return { added: newLines.length, phone_discovered: extractedPhone };
   });
 }
@@ -475,7 +477,7 @@ export async function appendOutboundEvent(slug, { event, mode, intent, draftId, 
     const t = new Date().toISOString().slice(0, 16).replace("T", " ");
     const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
     const outbound = [ent.outbound, line].filter(Boolean).join("\n");
-    await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes, visual: ent.visual });
   });
 }
 
@@ -483,7 +485,7 @@ export async function setStatus(slug, status) {
   return await withEntityLock(async () => {
     const ent = await loadEntity(slug);
     const meta = { ...ent.meta, status };
-    await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes, visual: ent.visual });
   });
 }
 
