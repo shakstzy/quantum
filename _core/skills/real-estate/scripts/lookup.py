@@ -464,6 +464,9 @@ def _cad_lookup(address: str) -> dict | None:
             "parcel": full["parcel"],
             "year_built": full.get("year_built"),
             "living_sqft": full.get("living_sqft"),
+            "beds": full.get("beds"),
+            "full_baths": full.get("full_baths"),
+            "half_baths": full.get("half_baths"),
             "improvements": full.get("improvements"),
             "land": full.get("land"),
         }
@@ -502,6 +505,12 @@ def _merge_cad_into(merged: dict, cad: dict) -> dict:
     cad_sqft = cad.get("living_sqft")
     if cad_sqft:
         out.setdefault("cad_living_sqft", cad_sqft)
+    if cad.get("beds") is not None:
+        out.setdefault("cad_beds", cad["beds"])
+    if cad.get("full_baths") is not None:
+        out.setdefault("cad_full_baths", cad["full_baths"])
+    if cad.get("half_baths") is not None:
+        out.setdefault("cad_half_baths", cad["half_baths"])
     if parcel.get("hs_exempt") is not None:
         out["cad_homestead_exempt"] = parcel["hs_exempt"]
     if parcel.get("ov65_exempt"):
