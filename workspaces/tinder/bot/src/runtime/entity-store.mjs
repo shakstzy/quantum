@@ -419,44 +419,51 @@ export function extractPhoneFromText(text) {
 }
 
 export async function appendMessages(slug, messages) {
-  const ent = await loadEntity(slug);
-  const have = new Set(ent.conversation.split("\n").filter(l => l.startsWith("**")));
-  const newLines = [];
-  let lastTs = ent.meta.last_activity;
-  let extractedPhone = null;
-  for (const m of messages) {
-    const line = fmtMessageLine(m);
-    if (have.has(line)) continue;
-    newLines.push(line);
-    if (m.ts && (!lastTs || m.ts > lastTs)) lastTs = m.ts;
-    if (!extractedPhone && !ent.meta.phone) {
-      const found = extractPhoneFromText(m.text);
-      if (found) extractedPhone = found;
+  return await withEntityLock(async () => {
+    const ent = await loadEntity(slug);
+    const have = existingIdentities(ent.conversation);
+    const newLines = [];
+    let lastTs = ent.meta.last_activity;
+    let extractedPhone = null;
+    for (const m of messages) {
+      const ident = messageIdentity(m.direction, m.text);
+      if (have.has(ident)) continue;
+      have.add(ident); // also dedupe within the incoming batch
+      newLines.push(fmtMessageLine(m));
+      if (m.ts && (!lastTs || m.ts > lastTs)) lastTs = m.ts;
+      if (!extractedPhone && !ent.meta.phone) {
+        const found = extractPhoneFromText(m.text);
+        if (found) extractedPhone = found;
+      }
     }
-  }
-  if (newLines.length === 0) return { added: 0 };
-  const conversation = [ent.conversation, ...newLines].filter(Boolean).join("\n");
-  const meta = {
-    ...ent.meta,
-    last_activity: lastTs || new Date().toISOString(),
-    phone: ent.meta.phone || extractedPhone || null,
-  };
-  await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
-  return { added: newLines.length, phone_discovered: extractedPhone };
+    if (newLines.length === 0) return { added: 0 };
+    const conversation = [ent.conversation, ...newLines].filter(Boolean).join("\n");
+    const meta = {
+      ...ent.meta,
+      last_activity: lastTs || new Date().toISOString(),
+      phone: ent.meta.phone || extractedPhone || null,
+    };
+    await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+    return { added: newLines.length, phone_discovered: extractedPhone };
+  });
 }
 
 export async function appendOutboundEvent(slug, { event, mode, intent, draftId, text, lintPass }) {
-  const ent = await loadEntity(slug);
-  const t = new Date().toISOString().slice(0, 16).replace("T", " ");
-  const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
-  const outbound = [ent.outbound, line].filter(Boolean).join("\n");
-  await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
+  return await withEntityLock(async () => {
+    const ent = await loadEntity(slug);
+    const t = new Date().toISOString().slice(0, 16).replace("T", " ");
+    const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
+    const outbound = [ent.outbound, line].filter(Boolean).join("\n");
+    await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
+  });
 }
 
 export async function setStatus(slug, status) {
-  const ent = await loadEntity(slug);
-  const meta = { ...ent.meta, status };
-  await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+  return await withEntityLock(async () => {
+    const ent = await loadEntity(slug);
+    const meta = { ...ent.meta, status };
+    await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+  });
 }
 
 export async function listAllEntities() {

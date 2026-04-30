@@ -2,7 +2,7 @@
 // Focused test: force decide.mjs's drafting path on a single entity (slug from arg).
 // Prints the prompt that would be sent + the resulting draft. No queue write.
 
-import { listAllEntities } from "../src/runtime/entity-store.mjs";
+import { listAllEntities, parseLatestDiffJsonBlock } from "../src/runtime/entity-store.mjs";
 import { draftMessage } from "../src/drafting/draft.mjs";
 
 const slug = process.argv[2];
@@ -31,29 +31,7 @@ function profileFromEntity(ent) {
   return out;
 }
 
-function latestProfileDiff(ent) {
-  const md = ent.profile_changes || "";
-  if (!md.trim() || md.trim() === "(none yet)") return null;
-  const blocks = md.split(/\n\n(?=### )/);
-  const last = blocks[blocks.length - 1];
-  if (!last) return null;
-  const out = { added: {}, removed: {}, changed: {} };
-  for (const line of last.split("\n")) {
-    let m = line.match(/^- added (\S+):\s*(.*)$/);
-    if (m) { try { out.added[m[1]] = JSON.parse(m[2]); } catch { out.added[m[1]] = m[2]; } continue; }
-    m = line.match(/^- removed (\S+):\s*(.*)$/);
-    if (m) { try { out.removed[m[1]] = JSON.parse(m[2]); } catch { out.removed[m[1]] = m[2]; } continue; }
-    m = line.match(/^- changed (\S+):\s*(.*?)\s*->\s*(.*)$/);
-    if (m) {
-      let from, to;
-      try { from = JSON.parse(m[2]); } catch { from = m[2]; }
-      try { to = JSON.parse(m[3]); } catch { to = m[3]; }
-      out.changed[m[1]] = { from, to };
-    }
-  }
-  if (!Object.keys(out.added).length && !Object.keys(out.removed).length && !Object.keys(out.changed).length) return null;
-  return out;
-}
+function latestProfileDiff(ent) { return parseLatestDiffJsonBlock(ent.profile_changes); }
 
 function parseMessages(conversation) {
   return (conversation || "").split("\n").filter(l => l.startsWith("**")).map(line => {

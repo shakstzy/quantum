@@ -5,7 +5,7 @@
 //   tinder_reengage  -> draft re-engagement (auto if lint passes)
 //   tinder_only      -> draft normal reply (HITL unless first-message + lint passes)
 
-import { listAllEntities, appendOutboundEvent } from "../src/runtime/entity-store.mjs";
+import { listAllEntities, appendOutboundEvent, parseLatestDiffJsonBlock } from "../src/runtime/entity-store.mjs";
 import { findPhoneByName, lastImessageActivity, summarizeImessage, recommendChannel } from "../src/runtime/imessage-xref.mjs";
 import { draftMessage } from "../src/drafting/draft.mjs";
 import { writeQueueItem, expireOldPending, listQueue } from "../src/runtime/queue.mjs";
@@ -59,32 +59,9 @@ function profileFromEntity(ent) {
   return out;
 }
 
-// Returns the most recent diff block from ## Profile changes, parsed back into
-// the same shape computeProfileDiff produces — so drafting can anchor on the
-// latest change set. Older blocks stay archived in the markdown for history.
+// CODEX-IMP-13+14: read latest diff from JSON-fenced block (round-trip safe).
 function latestProfileDiff(ent) {
-  const md = ent.profile_changes || "";
-  if (!md.trim() || md.trim() === "(none yet)") return null;
-  // Each block starts with "### <iso ts>"; keep only the LAST one.
-  const blocks = md.split(/\n\n(?=### )/);
-  const last = blocks[blocks.length - 1];
-  if (!last) return null;
-  const out = { added: {}, removed: {}, changed: {} };
-  for (const line of last.split("\n")) {
-    let m = line.match(/^- added (\S+):\s*(.*)$/);
-    if (m) { try { out.added[m[1]] = JSON.parse(m[2]); } catch { out.added[m[1]] = m[2]; } continue; }
-    m = line.match(/^- removed (\S+):\s*(.*)$/);
-    if (m) { try { out.removed[m[1]] = JSON.parse(m[2]); } catch { out.removed[m[1]] = m[2]; } continue; }
-    m = line.match(/^- changed (\S+):\s*(.*?)\s*->\s*(.*)$/);
-    if (m) {
-      let from, to;
-      try { from = JSON.parse(m[2]); } catch { from = m[2]; }
-      try { to = JSON.parse(m[3]); } catch { to = m[3]; }
-      out.changed[m[1]] = { from, to };
-    }
-  }
-  if (!Object.keys(out.added).length && !Object.keys(out.removed).length && !Object.keys(out.changed).length) return null;
-  return out;
+  return parseLatestDiffJsonBlock(ent.profile_changes);
 }
 
 async function main() {

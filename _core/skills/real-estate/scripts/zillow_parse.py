@@ -127,11 +127,20 @@ def parse_property(data: dict, *, include_raw: bool = False) -> dict:
                 "raw": pp if include_raw else None}
     cache = json.loads(cache_raw) if isinstance(cache_raw, str) else cache_raw
     prop = find_primary_property(cache)
-    addr = prop.get("address") or {}
-    reso = prop.get("resoFacts") or {}
-    insights = prop.get("homeInsights") or {}
-    attribution = prop.get("attributionInfo") or {}
-    listing_provider = prop.get("listingProvider") or {}
+    if not isinstance(prop, dict):
+        prop = {}
+
+    def _d(v):
+        """Defensive: if v is a list or non-dict, return {} so downstream
+        .get() calls don't crash. Zillow's GraphQL schema occasionally
+        returns lists where the previous version returned dicts."""
+        return v if isinstance(v, dict) else {}
+
+    addr = _d(prop.get("address"))
+    reso = _d(prop.get("resoFacts"))
+    insights = _d(prop.get("homeInsights"))
+    attribution = _d(prop.get("attributionInfo"))
+    listing_provider = _d(prop.get("listingProvider"))
     photos_resp = prop.get("responsivePhotos") or prop.get("originalPhotos") or []
     photos: list[str] = []
     for p in photos_resp:
