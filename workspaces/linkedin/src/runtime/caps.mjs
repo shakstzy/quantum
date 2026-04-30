@@ -70,7 +70,9 @@ function inActiveHours(caps, d = new Date()) {
 
 export async function checkBudget(action, { skipActiveHours = false } = {}) {
   const caps = await loadCaps();
-  if (!skipActiveHours && !inActiveHours(caps)) {
+  // Env-var override for dev/smoke testing outside the configured active-hours window.
+  const envBypass = process.env.QUANTUM_LINKEDIN_SKIP_ACTIVE_HOURS === "1";
+  if (!skipActiveHours && !envBypass && !inActiveHours(caps)) {
     throw new RateLimitExceeded(
       `Outside active hours (${caps.active_hours.start}:00-${caps.active_hours.end}:00 ${caps.active_hours.tz})`,
       { action, scope: "active_hours" }

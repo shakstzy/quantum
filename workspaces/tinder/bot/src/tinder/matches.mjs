@@ -68,14 +68,13 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // CODEX-CRIT-1 + GEMINI-CRIT-R2-2: assert URL settled on the right matchId.
-  // Pathname-segment match — strip trailing slash before split (else last segment
-  // is "" and we'd false-fail on URLs like .../messages/abc/).
+  // CODEX-CRIT-1 + GEMINI-CRIT-R2-2 + CODEX-R3-2: assert URL settled.
+  // Use filter(Boolean).pop() to skip empty strings from trailing slashes
+  // (e.g. .../messages/abc/ -> ['', 'app', 'messages', 'abc', ''] -> pop = 'abc').
   const settledUrl = page.url();
   let lastSegment = "";
   try {
-    const path = new URL(settledUrl).pathname.replace(/\/+$/, "");
-    lastSegment = path.split("/").pop() || "";
+    lastSegment = new URL(settledUrl).pathname.split("/").filter(Boolean).pop() || "";
   } catch { lastSegment = ""; }
   if (lastSegment !== matchId) {
     console.error(`scrapeThread: thread_redirect for ${matchId}, last_segment=${lastSegment}, url=${settledUrl}; skipping`);

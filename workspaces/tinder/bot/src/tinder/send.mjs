@@ -23,13 +23,12 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // C3 GUARD + GEMINI-CRIT-R2-2: verify URL settled. Pathname-segment match
-  // (not endsWith); strip trailing slash before split.
+  // C3 GUARD + GEMINI-CRIT-R2-2 + CODEX-R3-1: verify URL settled.
+  // filter(Boolean).pop() handles trailing slashes correctly.
   const settledUrl = page.url();
   let settledLast = "";
   try {
-    const path = new URL(settledUrl).pathname.replace(/\/+$/, "");
-    settledLast = path.split("/").pop() || "";
+    settledLast = new URL(settledUrl).pathname.split("/").filter(Boolean).pop() || "";
   } catch {}
   if (settledLast !== matchId) {
     throw new Error(`thread_redirect: expected matchId=${matchId}, last_segment=${settledLast}, url=${settledUrl}. Aborting send to prevent wrong-recipient.`);
@@ -57,12 +56,11 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
 
   await checkAndIncrement("message");
 
-  // C3 GUARD + GEMINI-CRIT-R2-2: re-check URL right before send.
+  // C3 GUARD + GEMINI-CRIT-R2-2 + CODEX-R3-1: re-check URL right before send.
   const finalUrl = page.url();
   let finalLast = "";
   try {
-    const path = new URL(finalUrl).pathname.replace(/\/+$/, "");
-    finalLast = path.split("/").pop() || "";
+    finalLast = new URL(finalUrl).pathname.split("/").filter(Boolean).pop() || "";
   } catch {}
   if (finalLast !== matchId) {
     throw new Error(`thread_drift: url changed to ${finalUrl} during compose. Not sending.`);
