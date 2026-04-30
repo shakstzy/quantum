@@ -8,8 +8,8 @@ import { resolve } from "node:path";
 import { RAW_DIR } from "../src/runtime/paths.mjs";
 
 // GEMINI-IMP-R2-8: matches the welcome banner shape (start-anchor + name + time-ago).
-// Trailing copy rotates so we anchor on the start + relative-time phrase instead.
-const BANNER_RE = /\bYou Matched with\b.*\b(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|moments ago|today|yesterday)\b/i;
+// Tinder concats with no whitespace ("Zoe1 day agoBinge..."), so no \b after "ago".
+const BANNER_RE = /\bYou Matched with\b.*\b(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|moments ago|today|yesterday)/i;
 
 const files = (await readdir(RAW_DIR)).filter(f => f.endsWith(".md"));
 let touched = 0;
