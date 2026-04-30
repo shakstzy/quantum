@@ -421,14 +421,45 @@ export class LinkedInExtractor {
       return { ok: false };
     }, username).catch(() => ({ ok: false }));
     if (!rowFound || !rowFound.ok) return { url, status: "not_found", ok: false };
-    // Confirm in modal (Withdraw confirmation).
+    // Confirm in modal (Withdraw confirmation). LinkedIn renders the modal as <dialog open>
+    // with three buttons: [Dismiss-X, Cancel, Withdraw]. The Withdraw button has
+    // aria-label="Withdraw invitation sent to <Name>" — way more specific than .last().
     await sleep(jitter(500, 1200));
+    let confirmed = false;
     if (await this._dialogIsOpen({ timeoutMs: 3000 })) {
-      const confirm = this.page.locator(`${DIALOG_SELECTOR} button`).last();
-      await confirm.click().catch(() => {});
-      await this.page.waitForSelector(DIALOG_SELECTOR, { state: "hidden", timeout: 4000 }).catch(() => {});
+      confirmed = await this.page.evaluate(() => {
+        const dialog = document.querySelector('dialog[open], [role="dialog"]');
+        if (!dialog) return false;
+        // 1. Most specific: aria-label match (handles localized labels too).
+        const ariaBtn = dialog.querySelector('button[aria-label^="Withdraw invitation"]');
+        if (ariaBtn) { ariaBtn.click(); return true; }
+        // 2. innerText fallback.
+        const textBtn = Array.from(dialog.querySelectorAll("button"))
+          .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
+        if (textBtn) { textBtn.click(); return true; }
+        return false;
+      }).catch(() => false);
+      if (!confirmed) {
+        await this._dismissDialog();
+        return { url, status: "send_failed", ok: false, reason: "withdraw_confirm_button_not_found", strategy: rowFound.strategy };
+      }
+      await this.page.waitForSelector(DIALOG_SELECTOR, { state: "hidden", timeout: 6000 }).catch(() => {});
     }
-    return { url, status: "withdrawn", ok: true, strategy: rowFound.strategy };
+    // Verify by re-reading the page: the user's withdraw anchor should be gone.
+    await sleep(jitter(800, 1400));
+    const stillPending = await this.page.evaluate((u) => {
+      // Check if the user's /in/<u>/ link is still adjacent to a Withdraw trigger.
+      const inLinks = document.querySelectorAll(`a[href*="/in/${u}/"]`);
+      for (const a of inLinks) {
+        let node = a;
+        for (let d = 0; d < 12 && node; d++) {
+          if (node.querySelector('a[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]')) return true;
+          node = node.parentElement;
+        }
+      }
+      return false;
+    }, username).catch(() => null);
+    return { url, status: stillPending ? "send_failed" : "withdrawn", ok: !stillPending, strategy: rowFound.strategy, confirmed };
   }
 
   // Send a message via the magic compose URL (requires profile URN — we read it from the profile page).
