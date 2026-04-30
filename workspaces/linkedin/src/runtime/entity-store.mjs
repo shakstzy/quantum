@@ -133,13 +133,27 @@ function upsertSection(body, heading, content) {
 
 function appendThreadEvent(body, event) {
   // event = { ts: ISO, direction: "outbound"|"inbound"|"system", text: string }
+  // Dedupe: skip if a same-day same-direction same-text line already exists.
+  // (Codex r2 P2: pull.mjs reruns on the same day duplicate system lines.)
   const heading = "## Threads";
   const ts = event.ts ?? new Date().toISOString();
-  const line = `### ${ts} — ${event.direction}: ${event.text.replace(/\s+/g, " ").trim()}`;
+  const dayBucket = ts.slice(0, 10); // YYYY-MM-DD
+  const cleanText = event.text.replace(/\s+/g, " ").trim();
+  const line = `### ${ts} — ${event.direction}: ${cleanText}`;
   if (body.includes(heading)) {
-    // Append within the existing Threads block
+    // Find the Threads block.
     const re = new RegExp(`(\\n## Threads\\n[\\s\\S]*?)(?=\\n## |$)`, "");
-    return body.replace(re, (match) => match.trimEnd() + "\n" + line);
+    const match = body.match(re);
+    if (match) {
+      const block = match[0];
+      // Dedupe key: same day + same direction + same text.
+      const dupRe = new RegExp(
+        `^### ${escapeRegex(dayBucket)}[^\\n]*\\s+\\u2014\\s+${escapeRegex(event.direction)}:\\s+${escapeRegex(cleanText)}\\s*$`,
+        "m"
+      );
+      if (dupRe.test(block)) return body; // already present, no-op
+    }
+    return body.replace(re, (m) => m.trimEnd() + "\n" + line);
   }
   return body + `\n${heading}\n${line}\n`;
 }
