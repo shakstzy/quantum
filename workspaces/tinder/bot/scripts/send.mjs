@@ -6,7 +6,6 @@ import { launchPersistent } from "../src/runtime/profile.mjs";
 import { sendMessage } from "../src/tinder/send.mjs";
 import { listQueue, moveQueueItem, extractDraftedReply, readQueueItem } from "../src/runtime/queue.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
-import { ensureSelectorsHealthy } from "../src/runtime/detection.mjs";
 import { logSession } from "../src/runtime/logger.mjs";
 import { sleep, jitter } from "../src/runtime/humanize.mjs";
 
@@ -28,7 +27,9 @@ let sent = 0;
 let failed = 0;
 try {
   await page.goto("https://tinder.com/app/matches", { waitUntil: "domcontentloaded" });
-  await ensureSelectorsHealthy(page);
+  // Wait for matches list to render (cheap proxy for "session is alive + selectors healthy")
+  try { await page.waitForSelector("a[href^='/app/messages/']", { timeout: 15000 }); }
+  catch { console.error("matches list never rendered; halting"); process.exit(1); }
 
   for (const item of todo) {
     const text = extractDraftedReply(item.body);
