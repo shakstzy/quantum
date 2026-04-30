@@ -19,6 +19,8 @@ Read primitives for x.com AS Adithya. Read-only by contract. Six verbs:
 | `status` | Profile dir + cookies + breaker + pidfile state. |
 | `reset-breaker` | Clear the 24h halt after manual verification. |
 
+All verbs accept `--profile <name>` to swap accounts. Default profile (no flag) lives at `~/.quantum/chrome-profiles/x`. Each `--profile burner1`, `--profile burner2` etc gets its own dir at `~/.quantum/chrome-profiles/x-<name>` with isolated pidfile + breaker, so a burner tripping its breaker does not lock the main account. Sign in to each burner once via `login --profile burner1`, then run verbs with the same flag.
+
 Deliberately NOT using twscrape or twikit. Those need a burner-account pool with IMAP-verifiable inboxes and bring their own ban-fleet hygiene problem. v1 prioritizes "works today against the real account" over scale; if and when burner pool is wired, a sibling `x-scrape` skill should handle mass scraping with twscrape.
 
 Deliberately NOT a Twitter API v2 wrapper. Adithya does not want to pay for X API. The web GraphQL surface is what x.com uses for its own client and is the lowest-detection path.
