@@ -107,6 +107,5 @@ if __name__ == "__main__":
     p.add_argument("-q", "--query", required=True)
     p.add_argument("-o", "--out", required=True)
     p.add_argument("--no-metadata", action="store_true", help="only collect IDs, skip header fetch (fastest)")
-    p.add_argument("--workers", type=int, default=16)
     args = p.parse_args()
-    inventory(args.account, args.query, Path(args.out), fetch_metadata=not args.no_metadata, workers=args.workers)
+    inventory(args.account, args.query, Path(args.out), fetch_metadata=not args.no_metadata)
