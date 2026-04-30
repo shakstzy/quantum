@@ -448,9 +448,9 @@ def _cad_lookup(address: str) -> dict | None:
         candidates = _cad_store.lookup_address(con, address, county=ad.NAME)
         if not candidates:
             return {"error": "no parcel match", "county": ad.NAME, "address": address}
-        # Single best match: smallest situs_norm length wins (most specific)
-        candidates.sort(key=lambda c: len((c.get("situs_norm") or "")))
-        best = candidates[0]
+        # Score-based pick: exact street-number + exact zip + unit match
+        # weighed higher than mere situs_norm length.
+        best = max(candidates, key=lambda c: _cad_store.score_candidate(c, address))
         full = _cad_store.get_property_full(
             con, best["county"], best["prop_id"], val_year=best["val_year"],
         )

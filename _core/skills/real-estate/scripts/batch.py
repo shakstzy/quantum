@@ -153,7 +153,12 @@ async def _safe_lookup(address: str, *, include_raw: bool = False,
               _aresult({"error": "no exact Zillow URL found."})
 
     rf, zw = await asyncio.gather(rf_task, zw_task)
+    # CAD lookup is local DuckDB so it's cheap; runs in the thread executor
+    # alongside the HTTP merges. Same merge path used by `re lookup`.
+    cad = await _run_in_thread(lookup._cad_lookup, address)
     merged = lookup._merge_views(rf, zw)
+    if cad and not cad.get("error"):
+        merged = lookup._merge_cad_into(merged, cad)
     rf_addr = (rf.get("address") or "") if isinstance(rf, dict) else ""
     zw_addr = (zw.get("address") or "") if isinstance(zw, dict) else ""
     addr_match = "ok"
@@ -167,7 +172,7 @@ async def _safe_lookup(address: str, *, include_raw: bool = False,
         "input_address": address,
         "redfin_url": rf_url, "zillow_url": zw_url,
         "address_match": addr_match,
-        "redfin": rf, "zillow": zw, "merged": merged,
+        "redfin": rf, "zillow": zw, "cad": cad, "merged": merged,
     }
 
 

@@ -16,9 +16,13 @@ We keep ONLY the fields we actually use - the full Property record has
 """
 from __future__ import annotations
 
+# Fixed-width spec entries are either 4-tuples (start, length, kind, name) or
+# 5-tuples (..., scale) where scale is the implied-decimal places.
+FieldSpec = tuple[int, int, str, str] | tuple[int, int, str, str, int]
+
 # Fixed-width spec for True Prodigy "Property" file (PROP.TXT).
-# Indexes match the schema doc: start (1-based), length, parser type, output column.
-PROPERTY_FIELDS: list[tuple[int, int, str, str]] = [
+# Indexes match the schema doc: start (1-based), length, parser type, output column[, scale].
+PROPERTY_FIELDS: list[FieldSpec] = [
     # ID + year
     (1,    12, "int",   "prop_id"),
     (13,    5, "str",   "prop_type_cd"),       # R=Real, P=Personal, M=Mobile, etc.
@@ -82,7 +86,7 @@ PROPERTY_FIELDS: list[tuple[int, int, str, str]] = [
 
 # Fixed-width spec for True Prodigy "ImprovementDetail" file (IMP_DET.TXT).
 # This is where year_built and per-building sqft live.
-IMPROVEMENT_DETAIL_FIELDS: list[tuple[int, int, str, str]] = [
+IMPROVEMENT_DETAIL_FIELDS: list[FieldSpec] = [
     (1,   12, "int",   "prop_id"),
     (13,   4, "int",   "val_year"),
     (17,  12, "int",   "imprv_id"),
@@ -99,7 +103,7 @@ IMPROVEMENT_DETAIL_FIELDS: list[tuple[int, int, str, str]] = [
 
 # Fixed-width spec for "LandDetail" file (LAND_DET.TXT).
 # Lot info per land segment (a parcel can have multiple, e.g. residence + ag).
-LAND_DETAIL_FIELDS: list[tuple[int, int, str, str]] = [
+LAND_DETAIL_FIELDS: list[FieldSpec] = [
     (1,   12, "int",   "prop_id"),
     (13,   4, "int",   "val_year"),
     (17,  12, "int",   "land_seg_id"),

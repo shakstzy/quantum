@@ -11,6 +11,7 @@ re-runs ingest.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -482,39 +483,53 @@ def _norm_query(s: str) -> str:
     return " ".join(tokens)
 
 
+_CITY_TRAILING = re.compile(
+    r",?\s+(austin|lakeway|pflugerville|leander|manor|round\s+rock|westlake|"
+    r"bee\s+cave|buda|kyle|spicewood|cedar\s+park|west\s+lake\s+hills|"
+    r"sunset\s+valley|jonestown|lago\s+vista|hudson\s+bend|del\s+valle)?"
+    r"(?:\s*,?\s*(?:tx|texas))?"
+    r"\s*\d{5}\s*$",
+    re.I,
+)
+
+
 def lookup_address(con: duckdb.DuckDBPyConnection, address: str, *,
                    county: str | None = None, val_year: int | None = None) -> list[dict]:
     """Find parcels matching an address.
 
     Strategy:
-    1. Extract zip5 if present (strict equality on situs_zip).
-    2. Build a token-AND LIKE filter on situs_norm: every token in the
-       query must appear in situs_norm. This handles "1219 South Lamar Blvd"
-       -> tokens [1219, s, lamar, blvd] -> situs_norm "1219 s lamar blvd".
-    3. Drop tokens that look like a city or state name (TX/Texas/Austin/etc.)
-       since situs_norm only has the street.
+    1. Strip the trailing "<city>, <state>, <zip>" segment ONLY (don't drop
+       city tokens globally - 'cedar', 'park', 'bee', 'cave' etc. are real
+       street-name fragments in Travis County).
+    2. Extract zip5 separately for an indexed equality on situs_zip.
+    3. Tokenize the remaining street part. Each token contributes a
+       word-boundary LIKE clause: '% <token> %' against the space-padded
+       situs_norm, so 's' won't false-match 'casco'.
+    4. Drop super-short tokens (length 1) UNLESS they're a directional, since
+       a single-letter substring matches almost anything.
     """
-    import re
     # Find 5-digit zip
     zip_m = re.search(r"\b(\d{5})\b", address)
     zip5 = zip_m.group(1) if zip_m else None
 
-    # Strip zip + state for tokenization
-    s = re.sub(r",?\s+(TX|TEXAS)\s*", " ", address, flags=re.I)
-    s = re.sub(r"\b\d{5}\b", "", s)
-    norm_q = _norm_query(s)
+    # Strip ONLY the trailing "[, City] [, State] zip" suffix - keep early city
+    # tokens that look like street names (e.g. "100 Cedar Park Cv Austin TX").
+    stripped = _CITY_TRAILING.sub("", address.strip())
+    # If no trailing city pattern matched, also strip a bare "TX 12345" tail
+    stripped = re.sub(r",?\s+(?:tx|texas)\s+\d{5}\s*$", "", stripped, flags=re.I)
+    stripped = re.sub(r"\s+\d{5}\s*$", "", stripped)
+    norm_q = _norm_query(stripped)
 
-    # Drop common city/county words; the index-side normalize doesn't include them
-    drop = {"austin", "lakeway", "pflugerville", "leander", "manor", "round", "rock",
-            "westlake", "bee", "cave", "buda", "kyle", "spicewood", "cedar", "park",
-            "travis", "county"}
-    tokens = [t for t in norm_q.split() if t and t not in drop]
+    # Token-boundary matching against space-padded situs_norm
+    raw_tokens = [t for t in norm_q.split() if t]
+    tokens = [t for t in raw_tokens
+              if len(t) >= 2 or t in _DIRECTIONAL_CONTRACT.values()]
 
-    where = []
+    where: list[str] = []
     params: list = []
     for t in tokens:
         where.append("situs_norm LIKE ?")
-        params.append(f"%{t}%")
+        params.append(f"% {t} %")
     if not where:
         return []
     if zip5:
@@ -539,6 +554,39 @@ def lookup_address(con: duckdb.DuckDBPyConnection, address: str, *,
     cur = con.execute(sql, params)
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def score_candidate(candidate: dict, address: str) -> int:
+    """Higher score = better match for the input address.
+
+    Used to pick among multiple candidates instead of the naive
+    'shortest situs_norm wins' (which fails when a parent parcel
+    has a shorter situs_norm than the requested unit).
+    """
+    score = 0
+    # Extract street number from input
+    num_m = re.match(r"^\s*(\d+)\b", address)
+    if num_m and candidate.get("situs_num"):
+        if str(candidate["situs_num"]).strip() == num_m.group(1):
+            score += 1000   # exact street-number match: dominant
+    # Extract zip from input
+    zip_m = re.search(r"\b(\d{5})\b", address)
+    if zip_m and candidate.get("situs_zip") == zip_m.group(1):
+        score += 100
+    # Unit in input must match unit in candidate
+    unit_m = re.search(r"\b(?:apt|unit|#)\s*([0-9a-z]+)\b", address, flags=re.I)
+    cand_unit = (candidate.get("situs_unit") or "").strip()
+    if unit_m:
+        if cand_unit.lower() == unit_m.group(1).lower():
+            score += 50
+    elif cand_unit:
+        # Input has no unit but candidate is a sub-unit - penalize so the
+        # parent parcel (which usually has cand_unit blank) wins.
+        score -= 20
+    # Tie-breaker: closer length to input wins, all else equal
+    norm_len = len((candidate.get("situs_norm") or "").strip())
+    score -= max(0, norm_len - 30)
+    return score
 
 
 def get_property_full(con: duckdb.DuckDBPyConnection, county: str, prop_id: str,
