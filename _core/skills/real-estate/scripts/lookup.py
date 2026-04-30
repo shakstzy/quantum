@@ -138,7 +138,11 @@ def _brave_first_url(query: str, site: str, *,
             continue
         if require_street_num and not _url_has_street_num(url, require_street_num):
             continue
+        # Require name AND (when available) the next street-descriptor token
+        # so 'Casco-Walk' beats 'Casco-Heights' / 'Casco-Lane'.
         if require_street_name and not _url_has_street_name(url, require_street_name):
+            continue
+        if require_street_type and not _url_has_street_name(url, require_street_type):
             continue
         return url
     return None
@@ -150,9 +154,9 @@ def _url_has_street_num(url: str, num: str) -> bool:
 
 
 def _url_has_street_name(url: str, name: str) -> bool:
-    """True if URL's address slug contains the street-name token (case-
-    insensitive). Looks for '-<name>-' or '-<name>$' (end of segment)."""
-    return bool(re.search(rf"-{re.escape(name)}(?:-|/|$)", url, re.IGNORECASE))
+    """True if URL's address slug contains the token (case-insensitive),
+    bounded by hyphens or path edges."""
+    return bool(re.search(rf"(?:^|[/-]){re.escape(name)}(?:[/-]|$)", url, re.IGNORECASE))
 
 
 def _is_redfin_property_url(s: str) -> bool:
@@ -181,10 +185,12 @@ def find_redfin_url(address_or_url: str) -> str | None:
     """
     if _is_redfin_property_url(address_or_url):
         return address_or_url
+    name, street_type = _street_descriptor(address_or_url)
     return _brave_first_url(
         address_or_url, "redfin.com",
         require_street_num=_street_number(address_or_url),
-        require_street_name=_street_name_token(address_or_url),
+        require_street_name=name,
+        require_street_type=street_type,
     )
 
 
@@ -200,31 +206,34 @@ def find_zillow_url(address_or_url: str) -> str | None:
     """
     if _is_zillow_property_url(address_or_url):
         return address_or_url
-    # Direct redirect path (zero search-engine dependency)
+    # Direct redirect path (zero search-engine dependency).
     slug = _zillow_slug(address_or_url)
     if slug:
         try:
             s = zillow._get_session()
-            url = f"https://www.zillow.com/homes/{slug}/"
-            r = s.get(url, timeout=20, allow_redirects=False)
-            loc = r.headers.get("Location") or r.headers.get("location")
-            if loc:
+            chain_url = f"https://www.zillow.com/homes/{slug}/"
+            # Follow up to 3 redirect hops manually so we can validate each
+            # against the property-URL regex (post-normalization). If no hop
+            # lands on a /homedetails/<zpid>_zpid/ URL, we DON'T return the
+            # half-resolved location - we fall through to Brave.
+            for _ in range(3):
+                r = s.get(chain_url, timeout=20, allow_redirects=False)
+                loc = r.headers.get("Location") or r.headers.get("location")
+                if not loc:
+                    break
                 if loc.startswith("/"):
                     loc = "https://www.zillow.com" + loc
                 if _is_zillow_property_url(loc):
                     return loc
-                # Two-hop: /homedetails/<zpid>_zpid/ -> with full slug
-                if "/homedetails/" in loc:
-                    r2 = s.get(loc, timeout=20, allow_redirects=False)
-                    loc2 = r2.headers.get("Location") or r2.headers.get("location")
-                    if loc2 and _is_zillow_property_url(loc2):
-                        return loc2 if loc2.startswith("http") else "https://www.zillow.com" + loc2
-                    return loc
+                chain_url = loc
         except Exception:
             pass  # fall through to Brave
+    name, street_type = _street_descriptor(address_or_url)
     return _brave_first_url(
         address_or_url, "zillow.com",
         require_street_num=_street_number(address_or_url),
+        require_street_name=name,
+        require_street_type=street_type,
     )
 
 
