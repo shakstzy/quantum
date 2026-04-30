@@ -223,7 +223,26 @@ Both sites server-render their React pages and embed every API response into the
 }
 ```
 
-`address_match: "mismatch"` means Brave returned different houses for Redfin vs Zillow (the exact street number you typed wasn't indexed). Common when the home isn't currently listed; check `_conflicts` and the per-source URLs to see what each side returned.
+`address_match` values:
+- `ok`: both sites resolved to the same address (no street-name disagreement)
+- `mismatch`: Redfin and Zillow returned different houses (Brave indexing gap)
+- `single_source`: one side resolved, the other returned an error (e.g., Brave doesn't have the Redfin URL for an off-market listing)
+- `neither_resolved`: both sides errored
+
+## Address resolution
+
+**Zillow** uses a direct-redirect path with no search-engine dependency. The free-text address gets slugified to `<num>-<Street>-<Words>-<City>-<ST>-<zip>` and we hit `https://www.zillow.com/homes/<slug>/`. Zillow 301-redirects exact-address slugs to their canonical `/homedetails/<zpid>_zpid/` page. Works on active AND off-market listings. Falls back to Brave only if the redirect chain doesn't land on a homedetails page.
+
+**Redfin** uses Brave-search with strict filters: a candidate URL must contain BOTH the street number (e.g., `/5509-`) AND the street-name token (e.g., `-Casco-`). When no Brave result has both, we return None and surface "Pass `--redfin-url <url>` if you have it." This is honest about Brave's indexing gap on new-builds and off-market listings rather than silently returning a neighbor.
+
+When Brave can't find the Redfin URL, paste it manually:
+
+```bash
+_core/skills/real-estate/re lookup "5509 Casco Walk Austin TX 78724" \
+  --redfin-url "https://www.redfin.com/TX/Austin/5509-Casco-Walk-78724/home/172474743"
+```
+
+You can also pass a full URL as the `address` arg directly; the resolver auto-detects it.
 
 ## Cross-source dedupe
 

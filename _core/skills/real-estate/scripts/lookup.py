@@ -65,42 +65,48 @@ def _street_number(address: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _street_name_token(address: str) -> str | None:
-    """Pull the FIRST street-name word from a free-text address.
+def _street_descriptor(address: str) -> tuple[str | None, str | None]:
+    """Pull (street_name, street_type) from a free-text address.
 
-    For '5509 Casco Walk Austin TX 78724' -> 'casco'.
-    Skips the leading number, returns the next non-direction-non-type word.
+    For '5509 Casco Walk Austin TX 78724' -> ('casco', 'walk').
+    For '100 N Main St Austin TX' -> ('main', 'st').
+    For '500 Oak Park Ln Apt 4' -> ('oak', 'park'). The street_type may
+    actually be a second name word; that's acceptable for our matching
+    purpose because we use both as a positive filter, not a definition.
     """
     if not address:
-        return None
+        return None, None
     s = re.sub(r"[,]+", " ", address).lower()
     tokens = s.split()
     if not tokens:
-        return None
-    # Drop leading street number(s)
+        return None, None
+    # Drop leading numbers.
     start = 0
     while start < len(tokens) and re.fullmatch(r"\d+", tokens[start]):
         start += 1
-    # Optionally drop leading direction tokens (N, S, E, W, North, etc.)
+    # Drop leading direction tokens.
     directions = {"n", "s", "e", "w", "ne", "nw", "se", "sw",
                   "north", "south", "east", "west",
                   "northeast", "northwest", "southeast", "southwest"}
     while start < len(tokens) and tokens[start] in directions:
         start += 1
     if start >= len(tokens):
-        return None
-    name = tokens[start]
-    # If first token is itself a street type (rare), skip it
-    if name in _STREET_TYPE_TOKENS and start + 1 < len(tokens):
-        name = tokens[start + 1]
-    # Strip trailing punctuation (keep alnum)
-    name = re.sub(r"[^a-z0-9]+", "", name)
-    return name or None
+        return None, None
+    name = re.sub(r"[^a-z0-9]+", "", tokens[start])
+    second = re.sub(r"[^a-z0-9]+", "", tokens[start + 1]) if start + 1 < len(tokens) else None
+    return (name or None), (second or None)
+
+
+def _street_name_token(address: str) -> str | None:
+    """Backward-compatible single-token name (used in tests / older paths)."""
+    name, _ = _street_descriptor(address)
+    return name
 
 
 def _brave_first_url(query: str, site: str, *,
                      require_street_num: str | None = None,
-                     require_street_name: str | None = None) -> str | None:
+                     require_street_name: str | None = None,
+                     require_street_type: str | None = None) -> str | None:
     """Run brave-search; return only a URL whose path matches BOTH the
     street number AND the street-name token (when supplied).
 
