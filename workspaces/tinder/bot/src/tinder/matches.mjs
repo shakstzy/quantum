@@ -128,8 +128,12 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
   //   "You Matched with <Name><N hours/days ago>...Achievement unlocked!"
   // so we require BOTH the prefix and the achievement marker.
   const isBanner = (text) => {
-    if (/^You Matched with\b.*Achievement unlocked!?/i.test(text)) return true;
-    // Also drop standalone "Achievement unlocked!" if it ever appears solo.
+    // Tinder welcome banners always start with "You Matched with " and contain a
+    // relative-time phrase ("X day/hour/minute(s) ago"). The trailing copy rotates
+    // (Achievement unlocked!, Billions of messages..., What will yours be?, etc.)
+    // so we don't match on the suffix — start-anchor + name + time-ago is unique.
+    if (/^You Matched with\b.*\b\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b/i.test(text)) return true;
+    if (/^You Matched with\b.*\b(just now|moments ago|today|yesterday)\b/i.test(text)) return true;
     if (/^Achievement unlocked!?$/i.test(text)) return true;
     return false;
   };

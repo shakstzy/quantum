@@ -172,7 +172,10 @@ export async function readThreadProfile(page) {
       if (m) out.distance_mi = parseInt(m[1], 10);
     }
 
-    // Basics + Lifestyle: H3 (heading, value) pairs scoped to their H2 section
+    // Basics + Lifestyle: H3 (heading, value) pairs scoped to their H2 section.
+    // GEMINI-IMP-R2-9: position-based slice (heading is always FIRST). Old approach
+    // (`parentText.replace(heading, "")`) mangled values that contained the heading
+    // string as a substring (e.g. heading "Job", value "Job at Apple" -> " at Apple").
     function extractH3Pairs(h2) {
       const container = sectionContainerFor(h2);
       if (!container) return {};
@@ -182,7 +185,10 @@ export async function readThreadProfile(page) {
         if (!heading) continue;
         const parent = h3.parentElement;
         const parentText = (parent?.textContent || "").trim();
-        const value = parentText.replace(heading, "").trim();
+        // Heading appears first in the rendered parent; slice after it.
+        let value = parentText.startsWith(heading)
+          ? parentText.slice(heading.length).trim()
+          : parentText.replace(heading, "").trim(); // fallback for unusual layouts
         if (value) out[heading] = value;
       }
       return out;

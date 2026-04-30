@@ -7,7 +7,9 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { RAW_DIR } from "../src/runtime/paths.mjs";
 
-const BANNER_RE = /(you matched with|achievement unlocked|tinder gold|gold subscription|message blocked|profile blocked)/i;
+// GEMINI-IMP-R2-8: matches the welcome banner shape (start-anchor + name + time-ago).
+// Trailing copy rotates so we anchor on the start + relative-time phrase instead.
+const BANNER_RE = /\bYou Matched with\b.*\b(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|moments ago|today|yesterday)\b/i;
 
 const files = (await readdir(RAW_DIR)).filter(f => f.endsWith(".md"));
 let touched = 0;
