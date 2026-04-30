@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  iMessage ingest, every 12h.
+  Invokes the Homebrew python3 binary DIRECTLY (no /bin/bash wrapper).
+  Reason: /bin/bash is SIP-protected so FDA grants on it are silently ignored.
+  /opt/homebrew/Cellar/python@3.14/.../bin/python3.14 is the real binary that opens
+  chat.db; granting FDA to it (via System Settings or by macOS auto-prompt on first
+  read) actually sticks.
+-->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -6,8 +14,8 @@
   <string>com.shakstzy.quantum-imessage</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>/Users/shakstzy/QUANTUM/workspaces/imessage/scripts/pull.sh</string>
+    <string>/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/bin/python3.14</string>
+    <string>/Users/shakstzy/QUANTUM/workspaces/imessage/scripts/ingest_all.py</string>
   </array>
   <key>StartInterval</key>
   <integer>43200</integer>
