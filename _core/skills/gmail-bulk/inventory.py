@@ -11,19 +11,14 @@ list_unsubscribe, list_unsubscribe_post.
 import argparse
 import json
 import sys
-import threading
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from auth import get_creds
 
 SKILL_DIR = Path(__file__).resolve().parent
-
-# httplib2 (used by googleapiclient) is not thread-safe; one service per thread.
-_TLS = threading.local()
 
 
 def _service(email: str):
@@ -52,9 +47,7 @@ def _extract_headers(payload: dict) -> dict:
     return headers
 
 
-def _get_metadata(email: str, mid: str, retries: int = 3):
-    svc = getattr(_TLS, "svc", None) or _service(email)
-    _TLS.svc = svc
+def _get_metadata(svc, mid: str, retries: int = 3):
     for attempt in range(retries):
         try:
             return svc.users().messages().get(
@@ -69,7 +62,7 @@ def _get_metadata(email: str, mid: str, retries: int = 3):
     return {"id": mid, "_error": "exhausted retries"}
 
 
-def inventory(email: str, query: str, out_path: Path, fetch_metadata: bool = True, workers: int = 16):
+def inventory(email: str, query: str, out_path: Path, fetch_metadata: bool = True):
     svc = _service(email)
     print(f"[inventory] query='{query}' account={email}", file=sys.stderr)
     t0 = time.time()
@@ -84,29 +77,26 @@ def inventory(email: str, query: str, out_path: Path, fetch_metadata: bool = Tru
     n_done = 0
     t0 = time.time()
     with out_path.open("w") as f:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            future_map = {ex.submit(_get_metadata, email, mid): (mid, tid) for mid, tid in ids}
-            for fut in as_completed(future_map):
-                msg = fut.result()
-                mid, tid = future_map[fut]
-                headers = _extract_headers(msg.get("payload", {})) if "payload" in msg else {}
-                rec = {
-                    "id": msg.get("id", mid),
-                    "threadId": msg.get("threadId", tid),
-                    "snippet": msg.get("snippet", ""),
-                    "labels": msg.get("labelIds", []),
-                    "from": headers.get("from", ""),
-                    "subject": headers.get("subject", ""),
-                    "date": headers.get("date", ""),
-                    "list_unsubscribe": headers.get("list-unsubscribe", ""),
-                    "list_unsubscribe_post": headers.get("list-unsubscribe-post", ""),
-                }
-                if "_error" in msg:
-                    rec["_error"] = msg["_error"]
-                f.write(json.dumps(rec) + "\n")
-                n_done += 1
-                if n_done % 200 == 0:
-                    print(f"[inventory] fetched {n_done}/{len(ids)}", file=sys.stderr)
+        for mid, tid in ids:
+            msg = _get_metadata(svc, mid)
+            headers = _extract_headers(msg.get("payload", {})) if "payload" in msg else {}
+            rec = {
+                "id": msg.get("id", mid),
+                "threadId": msg.get("threadId", tid),
+                "snippet": msg.get("snippet", ""),
+                "labels": msg.get("labelIds", []),
+                "from": headers.get("from", ""),
+                "subject": headers.get("subject", ""),
+                "date": headers.get("date", ""),
+                "list_unsubscribe": headers.get("list-unsubscribe", ""),
+                "list_unsubscribe_post": headers.get("list-unsubscribe-post", ""),
+            }
+            if "_error" in msg:
+                rec["_error"] = msg["_error"]
+            f.write(json.dumps(rec) + "\n")
+            n_done += 1
+            if n_done % 200 == 0:
+                print(f"[inventory] fetched {n_done}/{len(ids)}", file=sys.stderr)
     print(f"[inventory] wrote {n_done} records to {out_path} in {time.time()-t0:.1f}s", file=sys.stderr)
     return n_done
 
