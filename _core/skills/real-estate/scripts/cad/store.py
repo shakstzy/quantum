@@ -529,18 +529,30 @@ def get_property_full(con: duckdb.DuckDBPyConnection, county: str, prop_id: str,
     icols = [d[0] for d in cur.description]
     imprvs = [dict(zip(icols, row)) for row in cur.fetchall()]
 
-    # Aggregate: year_built = earliest yr_built among "main" structures
-    # Living-area sqft = sum of areas where type_cd looks like main living (heuristic)
-    main_imprvs = [i for i in imprvs if i.get("imprv_det_type_cd") and
-                   any(k in (i["imprv_det_type_cd"] or "").upper() for k in ("MA", "1ST", "MAIN", "RES", "LA"))]
-    yr_built = None
-    if main_imprvs:
-        yrs = [i["yr_built"] for i in main_imprvs if i.get("yr_built") and i["yr_built"] > 1700]
-        yr_built = min(yrs) if yrs else None
-    else:
-        yrs = [i["yr_built"] for i in imprvs if i.get("yr_built") and i["yr_built"] > 1700]
-        yr_built = min(yrs) if yrs else None
-    living_sqft = sum((i.get("imprv_det_area") or 0) for i in main_imprvs) or None
+    # TP-Legacy improvement-detail rows mix REAL areas (1ST, 2ND, GARAGE, PORCH)
+    # with COUNTS stored as area (BEDROOMS, BATHROOM, HALF BATHROOM). Use the
+    # type_cd to disambiguate.
+    FLOOR_CODES = {"1ST", "2ND", "3RD", "4TH", "BS", "BSMT", "BSM"}
+    BED_BATH_CODES = {"250": "half_baths", "251": "full_baths", "252": "beds"}
+
+    # year_built = earliest yr_built across actual structure rows (not bed/bath counts)
+    structure_imprvs = [i for i in imprvs
+                         if (i.get("imprv_det_type_cd") or "").upper() in FLOOR_CODES]
+    if not structure_imprvs:
+        structure_imprvs = [i for i in imprvs if i.get("imprv_det_type_cd") not in BED_BATH_CODES]
+    yrs = [i["yr_built"] for i in structure_imprvs if i.get("yr_built") and i["yr_built"] > 1700]
+    yr_built = min(yrs) if yrs else None
+
+    # Living area = sum of all FLOOR_CODE areas (1st + 2nd + ...)
+    floor_imprvs = [i for i in imprvs if (i.get("imprv_det_type_cd") or "").upper() in FLOOR_CODES]
+    living_sqft = sum((i.get("imprv_det_area") or 0) for i in floor_imprvs) or None
+
+    # Bed / bath COUNTS encoded as imprv_det_area on type rows 250/251/252
+    counts: dict[str, float] = {}
+    for i in imprvs:
+        cd = i.get("imprv_det_type_cd")
+        if cd in BED_BATH_CODES and i.get("imprv_det_area") is not None:
+            counts[BED_BATH_CODES[cd]] = i["imprv_det_area"]
 
     # Land
     cur = con.execute("""
@@ -557,6 +569,9 @@ def get_property_full(con: duckdb.DuckDBPyConnection, county: str, prop_id: str,
         "parcel": parcel,
         "year_built": yr_built,
         "living_sqft": living_sqft,
+        "beds": counts.get("beds"),
+        "full_baths": counts.get("full_baths"),
+        "half_baths": counts.get("half_baths"),
         "improvements": imprvs,
         "land": lands,
     }
