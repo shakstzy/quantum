@@ -6,7 +6,11 @@ counties (Travis, Williamson, Hays, Bastrop, Caldwell, Comal, Guadalupe,
 many more). Other CAD vendors (Tyler, Pritchard & Abbott, Harris Govern)
 have similar but distinct schemas; add separate spec dicts when needed.
 
-Each entry: (start_inclusive_1based, length, type, dest_column).
+Each entry: (start_inclusive_1based, length, type, dest_column[, scale])
+The optional 5th element is the decimal scale for fields encoded WITHOUT
+a decimal point (TP-Legacy convention) - e.g. acres are stored as
+integers with 4 implied decimals: "0000000000023553" -> 2.3553 acres.
+
 We keep ONLY the fields we actually use - the full Property record has
 500+ fields and is 9813 chars wide, but we don't need most of it.
 """
@@ -40,11 +44,11 @@ PROPERTY_FIELDS: list[tuple[int, int, str, str]] = [
     (4475,  5, "str",   "situs_unit"),
     # Legal
     (1150, 255, "str",  "legal_desc"),
-    (1660, 16, "float", "legal_acreage"),
+    (1660, 16, "float", "legal_acreage", 4),       # 4 implied decimals
     (1676, 10, "str",   "subdivision_cd"),
     (1696, 50, "str",   "block"),
     (1746, 50, "str",   "tract_or_lot"),
-    (2772, 20, "float", "land_acres_sum"),    # sum of land segments (more reliable than legal_acreage)
+    (2772, 20, "float", "land_acres_sum", 4),  # sum of land segments, 4 implied decimals
     (4136, 40, "str",   "dba"),
     (4214, 14, "int",   "market_value_pretax"),  # pre-computed market value (prop tax basis)
     # Values
@@ -103,8 +107,8 @@ LAND_DETAIL_FIELDS: list[tuple[int, int, str, str]] = [
     (39,  25, "str",   "land_type_desc"),
     (64,   5, "str",   "state_cd"),
     (69,   1, "tf",    "is_homesite"),
-    (70,  14, "float", "size_acres"),
-    (84,  14, "float", "size_sqft"),
+    (70,  14, "float", "size_acres", 4),    # 4 implied decimals per spec
+    (84,  14, "float", "size_sqft"),         # whole sqft, no decimal scaling
     (98,  14, "float", "effective_front"),
     (112, 14, "float", "effective_depth"),
     (141, 14, "int",   "land_seg_mkt_val"),
@@ -113,8 +117,12 @@ LAND_DETAIL_FIELDS: list[tuple[int, int, str, str]] = [
 ]
 
 
-def _coerce(raw: str, kind: str):
-    """Coerce a fixed-width slice into a Python value. Returns None on blanks."""
+def _coerce(raw: str, kind: str, scale: int = 0):
+    """Coerce a fixed-width slice into a Python value. Returns None on blanks.
+
+    `scale` is the number of implied decimal places (TP-Legacy convention):
+    "1577" with scale=4 -> 0.1577.
+    """
     s = raw.strip()
     if not s:
         return None
@@ -128,27 +136,38 @@ def _coerce(raw: str, kind: str):
         return None
     if kind == "int":
         try:
-            return int(s)
+            v = int(s)
+            return v // (10 ** scale) if scale > 0 else v
         except ValueError:
             return None
     if kind == "float":
         try:
-            return float(s)
+            v = float(s)
+            return v / (10 ** scale) if scale > 0 else v
         except ValueError:
             return None
     return s
 
 
-def parse_line(line: str, fields: list[tuple[int, int, str, str]]) -> dict:
-    """Parse one fixed-width line per spec. Out-of-bounds slices yield None."""
+def parse_line(line: str, fields: list[tuple]) -> dict:
+    """Parse one fixed-width line per spec. Out-of-bounds slices yield None.
+
+    Each spec entry is (start, length, type, name) or
+    (start, length, type, name, scale).
+    """
     out: dict = {}
     n = len(line)
-    for start, length, kind, name in fields:
+    for spec in fields:
+        if len(spec) == 5:
+            start, length, kind, name, scale = spec
+        else:
+            start, length, kind, name = spec
+            scale = 0
         # Schema is 1-based inclusive; Python slice is 0-based [start-1:start-1+length]
         s = start - 1
         e = s + length
         if s >= n:
             out[name] = None
             continue
-        out[name] = _coerce(line[s:min(e, n)], kind)
+        out[name] = _coerce(line[s:min(e, n)], kind, scale)
     return out
