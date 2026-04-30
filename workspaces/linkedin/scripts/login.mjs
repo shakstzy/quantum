@@ -19,15 +19,18 @@ try {
   await ensureLoggedIn(page, { allowInteractive: true, interactiveTimeoutMs: 5 * 60_000 });
   console.log("[login] /feed reached. Reading own profile via extractor as a sanity check…");
   const ext = new LinkedInExtractor(page);
-  // Visit /me/ so we land on the canonical profile URL, then extract the displayed name + URN.
-  await page.goto("https://www.linkedin.com/me/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+  // Visit /me/ — it client-side redirects to /in/<vanity>/. Wait for the redirect.
+  await page.goto("https://www.linkedin.com/me/", { waitUntil: "load", timeout: 30_000 });
+  try {
+    await page.waitForURL(/linkedin\.com\/in\//, { timeout: 12_000 });
+  } catch { /* tolerate, we'll inspect URL anyway */ }
   await page.waitForTimeout(1500);
   const url = page.url();
   const match = url.match(/\/in\/([^/?#]+)/);
   if (match) {
     const me = await ext.getPersonProfile(match[1]);
     console.log("[login] OK. Self profile:");
-    console.log(JSON.stringify({ url: me.url, displayName: me.displayName, profileUrn: me.profileUrn, mainTextLen: (me.sections.main_profile || "").length }, null, 2));
+    console.log(JSON.stringify({ url: me.url, displayName: me.displayName, profileUrn: me.profileUrn, publicId: match[1], mainTextLen: (me.sections.main_profile || "").length }, null, 2));
   } else {
     console.log("[login] OK but could not derive own /in/ slug from", url);
   }
