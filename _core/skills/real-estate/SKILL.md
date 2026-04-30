@@ -32,6 +32,15 @@ None. Both sites are scraped from public HTML. The first request per session war
 From repo root:
 
 ```bash
+# THE simple "address -> all the info" path (queries BOTH sites + merges)
+_core/skills/real-estate/re lookup "9400 Shady Oaks Dr Austin TX 78729"
+
+# Just the merged top-level view, skip the per-source dumps
+_core/skills/real-estate/re lookup "<address>" --merged-only
+
+# With full nested raw payloads for both sources
+_core/skills/real-estate/re lookup "<address>" --include-raw
+
 # Basic regional search
 _core/skills/real-estate/re redfin search "Austin, TX" --max-price 700000 --min-beds 3 --num-homes 50
 _core/skills/real-estate/re zillow search "Austin, TX" --max-price 700000 --min-beds 3

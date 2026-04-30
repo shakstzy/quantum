@@ -206,13 +206,27 @@ def lookup(address: str, *, include_raw: bool = False) -> dict:
         except Exception as e:
             zw = {"error": str(e), "url": zw_url}
 
+    merged = _merge_views(rf, zw)
+    # Address-match warning. Brave-search returns the closest indexed
+    # listing, which may not be the exact house the user typed. Flag when
+    # the resolved Redfin and Zillow addresses disagree.
+    rf_addr = (rf.get("address") or "") if isinstance(rf, dict) else ""
+    zw_addr = (zw.get("address") or "") if isinstance(zw, dict) else ""
+    addr_match = "ok"
+    if rf_addr and zw_addr and rf_addr.split(",")[0].strip().lower() != zw_addr.split(",")[0].strip().lower():
+        addr_match = "mismatch"
+    if rf.get("error") and zw.get("error"):
+        addr_match = "neither_resolved"
+    elif rf.get("error") or zw.get("error"):
+        addr_match = "single_source"
     return {
         "input_address": address,
         "redfin_url": rf_url,
         "zillow_url": zw_url,
+        "address_match": addr_match,
         "redfin": rf,
         "zillow": zw,
-        "merged": _merge_views(rf, zw),
+        "merged": merged,
     }
 
 
