@@ -15,6 +15,28 @@ from urllib.parse import urlparse
 XSSI_PREFIX = "{}&&"
 BASE = "https://www.redfin.com"
 
+
+def _payload(entry: dict | None):
+    """Unwrap a Redfin cache entry to its payload (whatever shape it is).
+
+    Some endpoints return a dict payload, some a list, some a string. Callers
+    should expect the actual shape and fall through gracefully.
+    """
+    if not entry:
+        return None
+    return entry.get("payload")
+
+
+def _payload_dict(entry: dict | None) -> dict:
+    p = _payload(entry)
+    return p if isinstance(p, dict) else {}
+
+
+def _payload_list(entry: dict | None) -> list:
+    p = _payload(entry)
+    return p if isinstance(p, list) else []
+
+
 INITIAL_CTX_RE = re.compile(
     r"reactServerState\.InitialContext\s*=\s*(\{.*?\});", re.DOTALL
 )
@@ -346,35 +368,46 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         "photo_count": photo_count or len(photos) or None,
         "open_houses": (p_above.get("openHouseInfo") or {}).get("openHouseList") or [],
     }
-    # Add the new high-value fields. Most live under .payload of their cache entry.
-    out["ai_summary"] = (ai_summary.get("payload") or {}).get("summary") or (ai_summary.get("payload") or {})
-    out["ai_property_details"] = ai_details.get("payload") or {}
-    out["commute"] = commute.get("payload") or {}
-    out["market_insights"] = market_insights.get("payload") or {}
-    out["weather"] = weather.get("payload") or {}
-    out["nearby_open_houses"] = (nearby_oh.get("payload") or {}).get("openHouses") or []
-    out["neighborhood_stats"] = neighborhood_stats.get("payload") or {}
-    out["newest_listings_nearby"] = ((newest_nearby.get("payload") or {}).get("homes")) or []
-    out["parcel_boundaries"] = parcel_boundaries.get("payload") or {}
-    out["parcel_info"] = parcel_info.get("payload") or {}
-    out["zoning"] = zoning.get("payload") or {}
-    out["popularity"] = popularity.get("payload") or {}
-    out["price_drop"] = price_drop.get("payload") or {}
-    out["location_score"] = location_score.get("payload") or {}
+    # Add the new high-value fields. Payload shape varies endpoint by endpoint.
+    ai_summary_payload = _payload(ai_summary)
+    if isinstance(ai_summary_payload, dict):
+        out["ai_summary"] = ai_summary_payload.get("summary") or ai_summary_payload
+    else:
+        out["ai_summary"] = ai_summary_payload
+    out["ai_property_details"] = _payload_dict(ai_details)
+    out["commute"] = _payload_dict(commute)
+    out["market_insights"] = _payload_dict(market_insights)
+    out["weather"] = _payload_dict(weather)
+    out["nearby_open_houses"] = _payload_dict(nearby_oh).get("openHouses") or []
+    out["neighborhood_stats"] = _payload_dict(neighborhood_stats)
+    out["newest_listings_nearby"] = _payload_dict(newest_nearby).get("homes") or []
+    out["parcel_boundaries"] = _payload_dict(parcel_boundaries)
+    out["parcel_info"] = _payload_dict(parcel_info)
+    out["zoning"] = _payload_dict(zoning)
+    out["popularity"] = _payload_dict(popularity)
+    out["price_drop"] = _payload_dict(price_drop)
+    out["location_score"] = _payload_dict(location_score)
     # Walk / transit / bike: surface as flat ints when location_score has them.
     ls = out["location_score"]
     if isinstance(ls, dict):
         out["walk_score"] = ls.get("walkScore") or (ls.get("walkability") or {}).get("score")
         out["transit_score"] = ls.get("transitScore") or (ls.get("transit") or {}).get("score")
         out["bike_score"] = ls.get("bikeScore") or (ls.get("bike") or {}).get("score")
-    out["sun_exposure"] = sun_exposure.get("payload") or {}
-    out["permits"] = permits.get("payload") or {}
-    out["tour_insights"] = tour_insights.get("payload") or {}
-    out["buying_power"] = buying_power.get("payload") or {}
-    out["home_highlight_tags"] = (home_tags.get("payload") or {}).get("homeHighlightTags") or []
-    out["listing_status_banner"] = listing_status_banner.get("payload") or {}
-    out["avm_historical"] = avm_hist.get("payload") or {}
-    out["main_house_panel"] = main_panel.get("payload") or {}
+    out["sun_exposure"] = _payload_dict(sun_exposure)
+    out["permits"] = _payload_dict(permits)
+    out["tour_insights"] = _payload_dict(tour_insights)
+    out["buying_power"] = _payload_dict(buying_power)
+    # homeHighlightTagsInfo payload is a list of strings, NOT a dict.
+    home_tags_payload = _payload(home_tags)
+    if isinstance(home_tags_payload, list):
+        out["home_highlight_tags"] = home_tags_payload
+    elif isinstance(home_tags_payload, dict):
+        out["home_highlight_tags"] = home_tags_payload.get("homeHighlightTags") or []
+    else:
+        out["home_highlight_tags"] = []
+    out["listing_status_banner"] = _payload_dict(listing_status_banner)
+    out["avm_historical"] = _payload_dict(avm_hist)
+    out["main_house_panel"] = _payload_dict(main_panel)
     if include_raw:
         out["raw"] = {
             "initial": p_initial, "above": p_above, "below": p_below,
