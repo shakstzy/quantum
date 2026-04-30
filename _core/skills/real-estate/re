@@ -12,11 +12,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 if [[ $# -lt 1 ]]; then
-    echo "usage: re <redfin|zillow|lookup|rent-estimate> [args...]" >&2
+    echo "usage: re <redfin|zillow|lookup|rent-estimate|batch|cad> [args...]" >&2
     exit 2
 fi
 VERB="$1"
 shift
-# Map kebab-case verbs to underscored module names.
-MODULE="${VERB//-/_}"
-exec uv run --quiet python "scripts/${MODULE}.py" "$@"
+# Package-style verbs run via -m; flat scripts run directly.
+case "$VERB" in
+    cad)
+        exec uv run --quiet python -m scripts.cad.cli "$@"
+        ;;
+    *)
+        MODULE="${VERB//-/_}"
+        exec uv run --quiet python "scripts/${MODULE}.py" "$@"
+        ;;
+esac
