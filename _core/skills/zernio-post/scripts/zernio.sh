@@ -61,7 +61,7 @@ case "$cmd" in
 
   preflight)
     file="${1:?file required}"
-    platform="${2:?platform required (instagram|youtube|tiktok)}"
+    platform="${2:?platform required (instagram|youtube|tiktok|discord)}"
     surface="${3:-}"
     [[ -f "$file"  ]] || die "file not found: $file"
     [[ -s "$file"  ]] || die "file is empty: $file"
@@ -99,6 +99,26 @@ case "$cmd" in
             [[ "$size" -le "$max" ]] || die "tiktok: image size $size exceeds 20MB cap"
             ;;
           *) die "tiktok: unsupported mime: $mime" ;;
+        esac
+        ;;
+      discord)
+        # Discord caps default to 25MB. Boosted servers go up to 500MB but Zernio
+        # cannot detect boost level cheaply. Pass surface=boosted to opt into the
+        # higher cap; otherwise the conservative 25MB applies.
+        case "$mime" in
+          image/jpeg|image/png|image/gif|image/webp)
+            max=$((25*1024*1024))
+            [[ "$size" -le "$max" ]] || die "discord: image size $size exceeds 25MB cap"
+            ;;
+          video/mp4|video/quicktime|video/webm)
+            case "$surface" in
+              boosted) max=$((500*1024*1024)) ;;
+              ""|standard) max=$((25*1024*1024)) ;;
+              *) die "discord: unknown surface '$surface' (use standard|boosted)" ;;
+            esac
+            [[ "$size" -le "$max" ]] || die "discord: video size $size exceeds ${max} cap (surface=${surface:-standard}; pass 'boosted' for boosted-server cap)"
+            ;;
+          *) die "discord: unsupported mime: $mime (expected image/jpeg|png|gif|webp or video/mp4|quicktime|webm)" ;;
         esac
         ;;
       *) die "unknown platform: $platform" ;;
@@ -167,6 +187,23 @@ case "$cmd" in
     payload="${1:?payload.json required}"
     [[ -f "$payload" ]] || die "payload file not found: $payload"
     api POST /posts "$(cat "$payload")"
+    ;;
+
+  discord-channels)
+    accountId="${1:?accountId required}"
+    api GET "/accounts/${accountId}/discord-channels"
+    ;;
+
+  discord-settings)
+    accountId="${1:?accountId required}"
+    api GET "/accounts/${accountId}/discord-settings"
+    ;;
+
+  discord-settings-update)
+    accountId="${1:?accountId required}"
+    payload="${2:?payload.json required}"
+    [[ -f "$payload" ]] || die "payload file not found: $payload"
+    api PATCH "/accounts/${accountId}/discord-settings" "$(cat "$payload")"
     ;;
 
   status)
