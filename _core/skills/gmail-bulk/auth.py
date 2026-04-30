@@ -42,14 +42,30 @@ def add(email: str):
 
 def get_creds(email: str) -> Credentials:
     blob = keyring.get_password(KEYRING_SERVICE, email)
-    if not blob:
-        sys.exit(f"no token for {email}; run: python auth.py add {email}")
-    info = json.loads(blob)
-    creds = Credentials.from_authorized_user_info(info, SCOPES)
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        keyring.set_password(KEYRING_SERVICE, email, creds.to_json())
-    return creds
+    if blob:
+        info = json.loads(blob)
+        creds = Credentials.from_authorized_user_info(info, info.get("scopes", SCOPES))
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            keyring.set_password(KEYRING_SERVICE, email, creds.to_json())
+        return creds
+    # Fallback: reuse gog's existing refresh token (no re-auth required)
+    for acct in (f"token:default:{email}", f"token:{email}"):
+        gog_blob = keyring.get_password("gogcli", acct)
+        if gog_blob:
+            gog_info = json.loads(gog_blob)
+            client_cfg = _load_client_config()["installed"]
+            creds = Credentials(
+                token=None,
+                refresh_token=gog_info["refresh_token"],
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_cfg["client_id"],
+                client_secret=client_cfg["client_secret"],
+                scopes=gog_info.get("scopes", SCOPES),
+            )
+            creds.refresh(Request())
+            return creds
+    sys.exit(f"no token for {email}; run gog auth or: python auth.py add {email}")
 
 
 def list_accounts():
