@@ -22,6 +22,9 @@ raw/*/*
 # patchright persistent chrome profile — never commit; carries auth cookies
 workspaces/tinder/.profile/
 
+# downloaded match photos for visual ingest — never commit (PII)
+workspaces/tinder/bot/.photos/
+
 # tinder outbound queue — drafts contain personal context, do not commit
 workspaces/tinder/04-outbound/drafts/*
 !workspaces/tinder/04-outbound/drafts/.gitkeep
