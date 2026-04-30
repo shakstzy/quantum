@@ -3,12 +3,12 @@
 // (with both bearer + CSRF headers) AND a 2xx response, then closes.
 // Cookies persist in the profile dir; runtime verbs reuse them.
 
-import { launchContext, waitForAuthSignal, tripBreaker, isAuthChallengeUrl, detectDomChallenge } from './browser.mjs';
+import { launchContext, waitForAuthSignal, tripBreaker, isAuthChallengeUrl, detectDomChallenge, getProfileDir } from './browser.mjs';
 
 export async function runLogin({ force = false } = {}) {
   console.error('[x-read] Opening visible Chrome. Sign in to x.com (handle/email + password + 2FA).');
-  console.error('[x-read] Profile: ~/.quantum/chrome-profiles/x/ (persistent; cookies survive restart).');
-  console.error('[x-read] ToS note: this drives a real X account programmatically. Read-only, low-volume, but still surface for enforcement. Burner recommended for high-volume use; v1 is intended for occasional thread reads on your main.');
+  console.error(`[x-read] Profile: ${getProfileDir()} (persistent; cookies survive restart).`);
+  console.error('[x-read] ToS note: this drives a real X account programmatically. Read-only, low-volume, but still surface for enforcement.');
 
   const ctx = await launchContext({ force, visible: true });
   let success = false;
