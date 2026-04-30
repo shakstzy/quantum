@@ -13,8 +13,39 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL_ROOT = resolve(HERE, '..');
 const NODE_MODULES = join(SKILL_ROOT, 'node_modules');
-const PROFILE_DIR = process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/x`;
 const DEBUG = process.env.X_READ_DEBUG === '1';
+
+// --profile <name> resolves to ~/.quantum/chrome-profiles/x-<name>.
+// Resolved AND env-set BEFORE any import of browser.mjs so the profile
+// dir is correctly picked up across all calls. Default profile (no flag)
+// uses ~/.quantum/chrome-profiles/x.
+function resolveProfileDir(profileName) {
+  if (!profileName) return process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/x`;
+  if (!/^[a-z0-9][a-z0-9_-]{0,30}$/i.test(profileName)) {
+    process.stderr.write(`[x-read] invalid --profile "${profileName}"; alphanumeric/underscore/hyphen, max 31 chars.\n`);
+    process.exit(2);
+  }
+  return `${process.env.HOME}/.quantum/chrome-profiles/x-${profileName}`;
+}
+
+// Pre-scan argv for --profile before any verb dispatch. Set env var so
+// browser.mjs (which reads process.env.X_READ_PROFILE_DIR at call time)
+// picks up the right path.
+function preResolveProfile(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--profile' && argv[i + 1]) {
+      process.env.X_READ_PROFILE_DIR = resolveProfileDir(argv[i + 1]);
+      return argv[i + 1];
+    }
+    if (a.startsWith('--profile=')) {
+      const v = a.slice('--profile='.length);
+      process.env.X_READ_PROFILE_DIR = resolveProfileDir(v);
+      return v;
+    }
+  }
+  return null;
+}
 
 function die(msg, code = 1) {
   process.stderr.write(msg.endsWith('\n') ? msg : msg + '\n');
@@ -667,13 +698,22 @@ Verbs:
   status                      Profile + cookies + breaker + pidfile state.
   reset-breaker               Reset the 24h halt after manual verification.
 
+Multi-account:
+  --profile <name>            Use a non-default chrome profile dir at
+                              ~/.quantum/chrome-profiles/x-<name>. Sign in
+                              once per profile via \`login --profile <name>\`,
+                              then any verb accepts the same flag. Default
+                              (no flag) uses ~/.quantum/chrome-profiles/x.
+                              Example: \`login --profile burner1\`,
+                              \`thread <id> --profile burner1\`.
+
 Read-only contract:
   All fetches go through page.on('response') capture of the X client's organic
   GraphQL traffic. No replay HTTP from us in v1. There are no write verbs
   (post, like, follow, dm). For posting to X, use the zernio-post skill.
 
 Env:
-  X_READ_PROFILE_DIR          Override profile dir (default: ~/.quantum/chrome-profiles/x)
+  X_READ_PROFILE_DIR          Override profile dir directly (alternative to --profile)
   X_READ_DEBUG=1              Verbose logs to stderr
 `);
 }
@@ -688,6 +728,11 @@ if (!VERBS[verb]) {
   printHelp();
   process.exit(2);
 }
+
+// Resolve --profile before any verb runs so X_READ_PROFILE_DIR is set
+// before browser.mjs's getProfileDir() is called.
+const activeProfile = preResolveProfile(argvRaw);
+if (activeProfile && DEBUG) process.stderr.write(`[x-read] active profile: ${activeProfile} -> ${process.env.X_READ_PROFILE_DIR}\n`);
 
 const argv = parseArgs(argvRaw);
 

@@ -45,13 +45,14 @@ function isAlive(pid) {
 }
 
 function acquirePidfile() {
-  if (existsSync(PIDFILE)) {
-    const old = parseInt(readFileSync(PIDFILE, 'utf8').trim(), 10);
+  const pidfile = getPidfile();
+  if (existsSync(pidfile)) {
+    const old = parseInt(readFileSync(pidfile, 'utf8').trim(), 10);
     if (old && isAlive(old)) {
       throw new Error(`Profile locked by pid ${old}. Wait or kill it.`);
     }
   }
-  writeFileSync(PIDFILE, String(process.pid));
+  writeFileSync(pidfile, String(process.pid));
   process.on('exit', releasePidfile);
   process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
   process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });
@@ -59,20 +60,22 @@ function acquirePidfile() {
 
 function releasePidfile() {
   try {
-    if (existsSync(PIDFILE) && readFileSync(PIDFILE, 'utf8').trim() === String(process.pid)) {
-      unlinkSync(PIDFILE);
+    const pidfile = getPidfile();
+    if (existsSync(pidfile) && readFileSync(pidfile, 'utf8').trim() === String(process.pid)) {
+      unlinkSync(pidfile);
     }
   } catch (_) {}
 }
 
 export function readBreaker() {
-  if (!existsSync(BREAKER_FILE)) return { state: 'healthy', flagged_at: null, events: [] };
-  try { return JSON.parse(readFileSync(BREAKER_FILE, 'utf8')); }
+  const f = getBreakerFile();
+  if (!existsSync(f)) return { state: 'healthy', flagged_at: null, events: [] };
+  try { return JSON.parse(readFileSync(f, 'utf8')); }
   catch (_) { return { state: 'healthy', flagged_at: null, events: [] }; }
 }
 
 export function writeBreaker(next) {
-  writeFileSync(BREAKER_FILE, JSON.stringify(next, null, 2));
+  writeFileSync(getBreakerFile(), JSON.stringify(next, null, 2));
 }
 
 // Single-strike halt. Adithya's main is X Premium; one challenge already
@@ -113,8 +116,9 @@ export async function launchContext({ force = false, visible = false } = {}) {
     throw err;
   }
 
-  await mkdir(PROFILE_DIR, { recursive: true });
-  try { await chmod(PROFILE_DIR, 0o700); } catch (_) {}
+  const profileDir = getProfileDir();
+  await mkdir(profileDir, { recursive: true });
+  try { await chmod(profileDir, 0o700); } catch (_) {}
   acquirePidfile();
 
   // Wrap entire setup in a single try/catch so any throw between
@@ -126,7 +130,7 @@ export async function launchContext({ force = false, visible = false } = {}) {
       ? []
       : ['--window-position=-2400,-2400', '--window-size=1440,900'];
 
-    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    context = await chromium.launchPersistentContext(profileDir, {
       channel: 'chrome',
       headless: false,
       viewport: { width: 1440, height: 900 },
