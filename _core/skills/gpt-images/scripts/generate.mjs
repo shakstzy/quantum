@@ -145,48 +145,45 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
 }
 
 async function waitForGeneratedImage(page, { timeoutMs, debug }) {
+  // ChatGPT renders generated images outside the [data-message-author-role]
+  // wrapper used for text turns, so search globally for img elements whose
+  // src points at OpenAI's asset CDNs. Take the LAST such match (most
+  // recently added). The user's prompt does NOT contain images, so any new
+  // assistant-side image is the generated one.
   const deadline = Date.now() + timeoutMs;
   let last = { kind: 'init' };
   while (Date.now() < deadline) {
-    const r = await page.evaluate((sel) => {
-      // Try the canonical selector first, fall back to article-based selector
-      // that survives across ChatGPT UI revisions.
-      let msgs = document.querySelectorAll(sel);
-      if (!msgs.length) msgs = document.querySelectorAll('article[data-testid^="conversation-turn"]');
-      if (!msgs.length) msgs = document.querySelectorAll('[data-message-id]');
-      const lastMsg = msgs[msgs.length - 1];
-      if (!lastMsg) {
-        // Surface user-turn count for diagnostics: if there's no assistant
-        // message AND no user message, the submit didn't land.
-        const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
-        return { kind: 'no-message', userTurns };
-      }
-      // Look for any img inside the assistant turn that points at a real URL.
-      const imgs = Array.from(lastMsg.querySelectorAll('img'));
-      // ChatGPT renders the avatar img + the generated img; pick the one with
-      // oaiusercontent or files.oai or sdmnt host (generated assets).
-      const candidate = imgs.find(im => {
+    const r = await page.evaluate(() => {
+      const allImgs = Array.from(document.querySelectorAll('img'));
+      // Filter for "looks like a generated content image" hosts.
+      const generated = allImgs.filter(im => {
         const s = im.getAttribute('src') || im.src || '';
         if (!s) return false;
         if (s.startsWith('data:') || s.startsWith('blob:')) return false;
-        if (/oaiusercontent\.com|files\.oai|sdmntpr|sdmntp\b/.test(s)) return true;
-        // Fallback: any non-data, non-blob, non-relative img larger than 100px.
-        if (/^https?:\/\//.test(s) && !/avatar|ico|logo/.test(s) && (im.naturalWidth || 0) >= 100) return true;
-        return false;
-      }) || imgs.find(im => {
-        const s = im.getAttribute('src') || im.src || '';
-        return s && !s.startsWith('data:') && !s.startsWith('blob:') && /^https?:\/\//.test(s) && !/avatar|ico|logo/.test(s);
+        if (!/^https?:\/\//.test(s)) return false;
+        // Exclude obvious chrome (avatars, logos, sprites).
+        if (/avatar|profile-pic|logo|favicon|sprite|icon\.|emoji/i.test(s)) return false;
+        // Whitelist OpenAI asset hosts.
+        return /oaiusercontent\.com|files\.oaiusercontent|files\.oai|sdmntpr|sdmnt[a-z]+\.openai|cdn\.openai\.com|videos\.openai|assets\.oaistatic\.com\/img/i.test(s)
+          // Or any large image inline (rect width >= 200) that isn't on our exclusion list.
+          || (im.getBoundingClientRect().width >= 200 && im.getBoundingClientRect().height >= 200);
       });
-      if (!candidate) {
-        const text = (lastMsg.innerText || '').slice(0, 300);
-        return { kind: 'no-image-yet', text };
+      if (!generated.length) {
+        const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+        return { kind: 'no-image-yet', userTurns, totalImgs: allImgs.length };
       }
-      const src = candidate.getAttribute('src') || candidate.src;
-      if (!candidate.naturalWidth || !candidate.naturalHeight) {
+      const last = generated[generated.length - 1];
+      const src = last.getAttribute('src') || last.src;
+      if (!last.naturalWidth || !last.naturalHeight) {
         return { kind: 'loading', src };
       }
-      return { kind: 'ready', src, w: candidate.naturalWidth, h: candidate.naturalHeight };
-    }, ASSISTANT_MSG_SELECTOR);
+      // Stability check: image must be >= 200px in at least one dimension.
+      // Tiny tracking pixels and inline previews would slip through otherwise.
+      if (Math.max(last.naturalWidth, last.naturalHeight) < 200) {
+        return { kind: 'too-small', src, w: last.naturalWidth, h: last.naturalHeight };
+      }
+      return { kind: 'ready', src, w: last.naturalWidth, h: last.naturalHeight };
+    });
     if (debug) process.stderr.write(`[gpt-images] poll: ${JSON.stringify(r).slice(0, 200)}\n`);
     last = r;
     if (r.kind === 'ready') return r;
