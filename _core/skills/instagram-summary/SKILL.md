@@ -1,12 +1,12 @@
 ---
 name: instagram-summary
-description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Final multimodal synthesis is delegated to the `local-llm` skill (persistent local Gemma daemon). Trigger when Adithya pastes an instagram.com/p/, /reel/, /reels/, or /tv/ URL and asks to summarize, explain, or extract takeaways.
+description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Final multimodal synthesis is delegated to the `cloud-llm` skill (gemini Pro across cycled accounts → claude -p sonnet fallback). Trigger when Adithya pastes an instagram.com/p/, /reel/, /reels/, or /tv/ URL and asks to summarize, explain, or extract takeaways.
 allowed-tools: Bash
 ---
 
 # instagram-summary
 
-Posts return caption + metadata + visual analysis of the image(s). Reels additionally return an audio transcript. Both paths end in a multimodal synthesis by `Gemma 4 26B-A4B (MoE)` served via the shared `local-llm` skill (warm HTTP daemon, no per-call cold-load tax). Carousels (multi-image posts) analyze up to 10 items.
+Posts return caption + metadata + visual analysis of the image(s). Reels additionally return an audio transcript. Both paths end in a multimodal synthesis dispatched through the shared `cloud-llm` skill (gemini Pro vision across 3 cycled accounts, with claude -p sonnet as fallback). Carousels (multi-image posts) analyze up to 10 items.
 
 Implementation lives in this directory: `fetch.py` is the entrypoint. Runtime venv lives at `~/.quantum/instagram-summary/.venv/` (out of the repo, not committed).
 
@@ -27,14 +27,14 @@ Do NOT fire for:
 
 ## Prereqs
 
-1. **Local Gemma daemon up.** This skill delegates the multimodal synthesis call to `_core/skills/local-llm/SKILL.md`. Read that stub for daemon contract, lifecycle, and health checks. Posts and reels both fail fast if the daemon is unreachable; surface the error with a pointer to that skill.
+1. **Cloud LLM dispatch via cloud-llm skill.** This skill delegates the multimodal synthesis call to `_core/skills/cloud-llm/client.py`. Read that stub for engine cycle (gemini accounts + claude fallback) and behavior. Posts and reels fail fast if all engines are exhausted; surface the error with a pointer to that skill.
 2. **Whisper model cached** for reel audio (~470MB, one-time):
 
    ```
    ~/.quantum/instagram-summary/.venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('small.en')"
    ```
 
-Posts work as soon as the local-llm daemon is healthy. Reels also need Whisper.
+Posts work as soon as cloud-llm has at least one healthy engine (gemini account or claude). Reels also need Whisper.
 
 ## Procedure
 
@@ -53,7 +53,7 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 
 ## Errors
 
-- `local-llm server unreachable`: daemon not running or not healthy. Hand off to `_core/skills/local-llm/SKILL.md` (it owns status / start / restart / log inspection). Do not duplicate the recovery procedure here.
+- `cloud-llm dispatch failed`: all gemini accounts exhausted AND claude -p also failed. Hand off to `_core/skills/cloud-llm/SKILL.md` (it owns the engine cycle and account state). Likely cause: every Gemini account 429'd this week and Claude Max weekly cap also hit — wait for caps to reset.
 - `LoginRequired`: Instagram demanding auth. Run once with a burner:
 
   ```
