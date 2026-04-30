@@ -29,6 +29,15 @@ import redfin  # type: ignore
 import zillow  # type: ignore
 import zillow_parse  # type: ignore
 
+# Optional CAD layer (Travis-only at v1). Lookup tolerates the package
+# missing or the local DuckDB being empty - the CAD half just returns None.
+try:
+    from cad import resolver as _cad_resolver  # type: ignore
+    from cad import store as _cad_store  # type: ignore
+except Exception:
+    _cad_resolver = None
+    _cad_store = None
+
 # URL shape regexes
 RF_PROPERTY_RE = re.compile(r"redfin\.com/[A-Z]{2}/[^/]+/[^/]+/home/\d+")
 ZW_PROPERTY_RE = re.compile(r"zillow\.com/homedetails/[^/]+/\d+_zpid")
@@ -391,7 +400,10 @@ def lookup(address: str, *, include_raw: bool = False,
         except Exception as e:
             zw = {"error": str(e), "url": zw_url}
 
+    cad = _cad_lookup(address)
     merged = _merge_views(rf, zw)
+    if cad and not cad.get("error"):
+        merged = _merge_cad_into(merged, cad)
     # Address-match warning. Brave-search returns the closest indexed
     # listing, which may not be the exact house the user typed. Flag when
     # the resolved Redfin and Zillow addresses disagree.
@@ -411,8 +423,101 @@ def lookup(address: str, *, include_raw: bool = False,
         "address_match": addr_match,
         "redfin": rf,
         "zillow": zw,
+        "cad": cad,
         "merged": merged,
     }
+
+
+def _cad_lookup(address: str) -> dict | None:
+    """Optional 3rd source: county appraisal district bulk-data lookup.
+
+    Returns None when CAD isn't available for this address (no adapter
+    for the zip, DB not ingested, etc). Returns dict with 'error' key on
+    soft failure. Returns full parcel + improvements + land on success.
+    """
+    if _cad_resolver is None or _cad_store is None:
+        return None
+    ad = _cad_resolver.resolve_from_address(address)
+    if ad is None:
+        return None
+    try:
+        con = _cad_store.open_db()
+    except Exception as e:
+        return {"error": f"cad db open failed: {e}", "county": ad.NAME}
+    try:
+        candidates = _cad_store.lookup_address(con, address, county=ad.NAME)
+        if not candidates:
+            return {"error": "no parcel match", "county": ad.NAME, "address": address}
+        # Single best match: smallest situs_norm length wins (most specific)
+        candidates.sort(key=lambda c: len((c.get("situs_norm") or "")))
+        best = candidates[0]
+        full = _cad_store.get_property_full(
+            con, best["county"], best["prop_id"], val_year=best["val_year"],
+        )
+        if full is None:
+            return {"error": "parcel detail fetch failed", "county": ad.NAME}
+        return {
+            "county": ad.NAME,
+            "state": ad.STATE,
+            "fips": ad.FIPS,
+            "match_count": len(candidates),
+            "parcel": full["parcel"],
+            "year_built": full.get("year_built"),
+            "living_sqft": full.get("living_sqft"),
+            "improvements": full.get("improvements"),
+            "land": full.get("land"),
+        }
+    finally:
+        con.close()
+
+
+def _merge_cad_into(merged: dict, cad: dict) -> dict:
+    """Layer CAD-derived signals onto the existing Redfin+Zillow merged view.
+
+    CAD is authoritative for: owner_name, appraised_val/assessed_val,
+    legal_acreage, year_built (when sites disagree), and exemption flags.
+    Redfin/Zillow remain authoritative for: list price, listing status,
+    photos, description, comps, schools, AI summary, walk/transit/bike.
+    """
+    out = dict(merged)
+    parcel = cad.get("parcel") or {}
+    cad_owner = parcel.get("owner_name")
+    if cad_owner:
+        out.setdefault("cad_owner_name", cad_owner)
+    cad_appraised = parcel.get("appraised_val")
+    if cad_appraised is not None:
+        out["cad_appraised_val"] = cad_appraised
+    cad_assessed = parcel.get("assessed_val")
+    if cad_assessed is not None:
+        out["cad_assessed_val"] = cad_assessed
+    cad_market = parcel.get("market_val")
+    if cad_market is not None:
+        out["cad_market_val"] = cad_market
+    cad_acres = parcel.get("legal_acreage")
+    if cad_acres is not None:
+        out.setdefault("cad_legal_acreage", cad_acres)
+    cad_yr = cad.get("year_built")
+    if cad_yr:
+        out.setdefault("cad_year_built", cad_yr)
+    cad_sqft = cad.get("living_sqft")
+    if cad_sqft:
+        out.setdefault("cad_living_sqft", cad_sqft)
+    if parcel.get("hs_exempt") is not None:
+        out["cad_homestead_exempt"] = parcel["hs_exempt"]
+    if parcel.get("ov65_exempt"):
+        out["cad_over65_exempt"] = True
+    if any(parcel.get(k) for k in ("dv1_exempt","dv2_exempt","dv3_exempt","dv4_exempt")):
+        out["cad_disabled_veteran_exempt"] = True
+    if parcel.get("deed_dt"):
+        out.setdefault("cad_deed_dt", parcel["deed_dt"])
+    if parcel.get("subdivision_cd"):
+        out.setdefault("cad_subdivision_cd", parcel["subdivision_cd"])
+    if parcel.get("legal_desc"):
+        out.setdefault("cad_legal_desc", parcel["legal_desc"])
+    if parcel.get("prop_id") and parcel.get("county"):
+        out["cad_prop_id"] = parcel["prop_id"]
+        out["cad_county"] = parcel["county"]
+    return out
 
 
 # ---------------------------------------------------------------------------
