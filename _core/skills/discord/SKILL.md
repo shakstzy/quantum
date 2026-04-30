@@ -25,6 +25,7 @@ Do NOT fire for:
 - Running a Discord bot or app (events, slash commands, modals, activities). Different auth, different semantics.
 - Moderating a server (kick, ban, role management) unless explicitly asked.
 - Non-Discord services (Slack, iMessage, Telegram, Matrix).
+- Posting to a Discord SERVER channel as the Zernio managed bot. That goes to `_core/skills/zernio-post/` (`platform: "discord"`), which sends via Zernio's centralized bot via REST to channels Adithya owns or where the Zernio bot is authorized. Triggers like "post in #ann on discord", "send announcement to discord server", "publish to my discord server" route there. This skill is explicitly for Adithya's PERSONAL account (DMs, group DMs, channels Adithya is a member of, posting as Adithya). If the user phrasing is ambiguous (just "post on discord" with no other signal), ASK whether they want the Zernio bot to post or their personal account.
 
 ## Required caller inputs
 

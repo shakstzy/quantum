@@ -44,13 +44,13 @@ Before the skill runs, the caller MUST supply every field in `rules/call-shape.m
 
 | After step | Agent presents | Human decides |
 |------------|----------------|---------------|
-| 6 | Full assembled payload (all platforms, all fields, all media URLs, all AI flags) | Type `PUBLISH` to confirm, or edit a field, or abort |
+| 7 | Full assembled payload (all platforms, all fields, all media URLs, all AI flags, Discord channel + webhook identity) | Type `PUBLISH` to confirm, or edit a field, or abort |
 
 The checkpoint is mandatory unless `ZERNIO_NO_CONFIRM=1` is explicitly set in the caller's environment. This is the write-path safety rail called out by the adversarial review. Do not bypass it implicitly.
 
 ## Audit (Pattern 12)
 
-Run after step 9, before declaring done:
+Run after step 10, before declaring done:
 
 | Check | Pass condition |
 |-------|----------------|
@@ -60,6 +60,10 @@ Run after step 9, before declaring done:
 | Terminal status reached | Final `status` is `published` or `scheduled` (not `processing` or `failed`) |
 | TikTok only: `privacy_level` matched creator-info | Value was in `privacyLevels` response |
 | YouTube only: `madeForKids` matches caller input | Field is explicitly set, not defaulted |
+| Discord only: channelId in `discord-channels` response | Validated against the connected guild |
+| Discord only: forum channel has `forumThreadName` | Required for type-15 channels |
+| Discord only: poll xor media | Never both in the same payload |
+| Discord only: webhookUsername hygiene | 1-80 chars, no `clyde`/`discord` substrings |
 | No AI-disclosure surprise | `containsSyntheticMedia` / `video_made_with_ai` values match caller inputs (not skill defaults) |
 
 ## Budget
@@ -74,6 +78,7 @@ Run after step 9, before declaring done:
 - `rules/preflight.md`  -  local file validation rules, platform-specific
 - `rules/confirmation-gate.md`  -  confirmation-gate semantics, `ZERNIO_NO_CONFIRM` override
 - `rules/ai-disclosure.md`  -  caller sets AI flags per-post; skill warns, does not default
+- `references/discord.md`  -  full Discord shape: channelId, embeds, polls, forum starter posts, threads, crosspost, webhook identity overrides
 - `rules/error-taxonomy.md`  -  retryable vs fatal, partial-failure handling
 - `references/instagram.md`  -  `platformSpecificData` shape for feed/carousel/story/reel
 - `references/youtube.md`  -  title/category/visibility/madeForKids/Shorts auto-detection
