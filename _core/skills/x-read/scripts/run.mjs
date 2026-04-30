@@ -587,23 +587,10 @@ async function search(argv) {
     expectedOp: 'SearchTimeline'
   });
   try {
-    const collected = [];
     const instr = resp.body?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions
       || resp.body?.data?.search_by_raw_query?.search_timeline_v2?.timeline?.instructions
       || [];
-    for (const inst of instr) {
-      if (Array.isArray(inst.entries)) {
-        for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
-      }
-    }
-    const seen = new Set();
-    const tweets = [];
-    for (const r of collected) {
-      const t = normalizeTweet(r);
-      if (!t.id || seen.has(t.id)) continue;
-      seen.add(t.id);
-      tweets.push(t);
-    }
+    const tweets = extractTweetsFromInstructions(instr);
     console.log(JSON.stringify({
       ok: true,
       query,
