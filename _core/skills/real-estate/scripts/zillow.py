@@ -206,15 +206,27 @@ def _filter_state(*, max_price=None, min_price=None, min_beds=None, min_baths=No
                   lot_size_min=None, lot_size_max=None,
                   has_pool=None, has_garage=None, new_construction=None,
                   status=None, sort=None) -> dict[str, Any]:
-    fs: dict[str, Any] = {"sortSelection": {"value": _SORT_VALUES.get(sort or "", "globalrelevanceex")},
-                          "isAllHomes": {"value": True}}
-    if status and status in _STATUS_TO_FILTER:
+    rental = _is_rental_status(status)
+    if rental:
+        # Rentals use SHORT filterState keys (fr/fsba/etc) and a different
+        # sort taxonomy. Sale-only flags (isNewConstruction, isComingSoon)
+        # would create internally-contradictory state if mixed in. Ignore
+        # them when status=for-rent.
+        sort_key = _RENTAL_SORT_VALUES.get(sort or "", "days")
+        fs: dict[str, Any] = {"sort": {"value": sort_key}}
         fs.update(_STATUS_TO_FILTER[status])
+    else:
+        fs = {"sortSelection": {"value": _SORT_VALUES.get(sort or "", "globalrelevanceex")},
+              "isAllHomes": {"value": True}}
+        if status and status in _STATUS_TO_FILTER:
+            fs.update(_STATUS_TO_FILTER[status])
     if max_price is not None or min_price is not None:
+        # Rentals use 'mp' (monthly price) instead of 'price'.
+        price_key = "mp" if rental else "price"
         price = {}
         if max_price is not None: price["max"] = max_price
         if min_price is not None: price["min"] = min_price
-        fs["price"] = price
+        fs[price_key] = price
     if min_beds is not None:
         fs["beds"] = {"min": min_beds}
     if min_baths is not None:

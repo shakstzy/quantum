@@ -108,7 +108,7 @@ def run_codex(prompt: str) -> tuple[str, str]:
 def run_gemini(prompt: str) -> tuple[str, str]:
     try:
         res = subprocess.run(
-            ["gemini", "-p", prompt, "--approval-mode", "plan"],
+            ["gemini", "-m", "gemini-3-pro-preview", "-p", prompt, "--approval-mode", "plan"],
             capture_output=True,
             text=True,
             timeout=CLI_TIMEOUT_SEC,

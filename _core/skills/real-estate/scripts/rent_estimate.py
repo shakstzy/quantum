@@ -32,8 +32,11 @@ def _bbox_around(lat: float, lng: float, miles: float) -> tuple[float, float, fl
     """(n, e, s, w) bbox of `miles` radius around (lat, lng).
 
     Uses a flat-earth approximation: lat degrees are ~69 mi each, lng
-    degrees vary by cos(lat). Good enough for < 5 mi searches.
+    degrees vary by cos(lat). Good enough for < 5 mi searches at typical
+    US latitudes. Negative miles are clamped to 0 to avoid inverted bboxes
+    (which silently return zero results from Zillow).
     """
+    miles = max(0.0, miles)
     dlat = miles / 69.0
     dlng = miles / (69.0 * max(math.cos(math.radians(lat)), 0.05))
     return (lat + dlat, lng + dlng, lat - dlat, lng - dlng)
