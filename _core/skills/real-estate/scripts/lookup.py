@@ -232,24 +232,39 @@ def _merge_views(rf: dict, zw: dict) -> dict:
     return out
 
 
-def lookup(address: str, *, include_raw: bool = False) -> dict:
-    """The simple `address -> all the data` path.
+def lookup(address: str, *, include_raw: bool = False,
+           redfin_url: str | None = None, zillow_url: str | None = None) -> dict:
+    """Address (or URLs) -> all the data, both sites, merged.
 
-    Errors per source are caught and surfaced as `{"error": ...}` so a
-    Zillow PX block doesn't block the Redfin half.
+    Caller can short-circuit resolution by passing one or both URLs
+    directly via redfin_url / zillow_url. Useful when Brave's index
+    doesn't have the exact listing (common for new builds, off-MLS, or
+    just-listed homes) but the user knows the canonical URL.
+
+    Errors per source are caught and surfaced as {"error": ...} so a
+    Zillow failure doesn't block the Redfin half.
     """
-    rf_url = find_redfin_url(address)
-    zw_url = find_zillow_url(address)
+    rf_url = redfin_url or find_redfin_url(address)
+    zw_url = zillow_url or find_zillow_url(address)
 
-    rf: dict = {"error": "no Redfin URL found"} if not rf_url else {}
-    if rf_url:
+    rf: dict
+    if not rf_url:
+        rf = {"error": (
+            "no exact Redfin URL found via Brave (street number not in top results). "
+            "Pass --redfin-url <url> if you have it."
+        )}
+    else:
         try:
             rf = redfin.property_details(rf_url, include_raw=include_raw)
         except Exception as e:
             rf = {"error": str(e), "url": rf_url}
 
-    zw: dict = {"error": "no Zillow URL found"} if not zw_url else {}
-    if zw_url:
+    zw: dict
+    if not zw_url:
+        zw = {"error": (
+            "no exact Zillow URL found via Brave. Pass --zillow-url <url> if you have it."
+        )}
+    else:
         try:
             zw = zillow.property_details(zw_url, include_raw=include_raw)
         except Exception as e:
@@ -286,14 +301,19 @@ def lookup(address: str, *, include_raw: bool = False) -> dict:
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(prog="lookup")
-    ap.add_argument("address", help='free-text address, e.g. "9400 Shady Oaks Dr Austin TX 78729"')
+    ap.add_argument("address", help='free-text address, OR a Redfin/Zillow URL')
     ap.add_argument("--include-raw", action="store_true",
                     help="include the full nested API payloads from each source")
     ap.add_argument("--merged-only", action="store_true",
                     help="print only the merged view, not the per-source dumps")
+    ap.add_argument("--redfin-url", help="skip Brave; use this Redfin property URL directly")
+    ap.add_argument("--zillow-url", help="skip Brave; use this Zillow property URL directly")
     args = ap.parse_args(argv)
 
-    result = lookup(args.address, include_raw=args.include_raw)
+    result = lookup(
+        args.address, include_raw=args.include_raw,
+        redfin_url=args.redfin_url, zillow_url=args.zillow_url,
+    )
     if args.merged_only:
         out = result["merged"]
     else:
