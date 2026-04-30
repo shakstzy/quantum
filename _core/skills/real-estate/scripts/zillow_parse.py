@@ -138,7 +138,19 @@ def parse_property(data: dict, *, include_raw: bool = False) -> dict:
 
     addr = _d(prop.get("address"))
     reso = _d(prop.get("resoFacts"))
-    insights = _d(prop.get("homeInsights"))
+    # homeInsights is a LIST of {insights: [{phrases: [...]}]} - flatten phrases.
+    insights_raw = prop.get("homeInsights") or []
+    insight_phrases: list[str] = []
+    if isinstance(insights_raw, list):
+        for grp in insights_raw:
+            if not isinstance(grp, dict):
+                continue
+            for insight in (grp.get("insights") or []):
+                if isinstance(insight, dict):
+                    for phrase in (insight.get("phrases") or []):
+                        if isinstance(phrase, str) and phrase not in insight_phrases:
+                            insight_phrases.append(phrase)
+    insights = _d(insights_raw[0] if isinstance(insights_raw, list) and insights_raw else insights_raw)
     attribution = _d(prop.get("attributionInfo"))
     listing_provider = _d(prop.get("listingProvider"))
     photos_resp = prop.get("responsivePhotos") or prop.get("originalPhotos") or []
