@@ -19,9 +19,20 @@ const PROFILE_DIR = process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quan
 const PIDFILE = join(PROFILE_DIR, '.skill.pid');
 const BREAKER_FILE = join(PROFILE_DIR, '.breaker.json');
 
-// Allowlist of GraphQL op names we'll touch. Any op outside this set is
-// rejected at pageApi to keep the read-only contract auditable.
-const ALLOWED_OPS = new Set(['Viewer', 'TweetDetail']);
+// Allowlist of GraphQL op names we'll touch via replay (pageApi). Any op
+// outside this set is rejected to keep the read-only contract auditable.
+// v1 verbs use organic-response capture instead of pageApi, so this list
+// only matters for v2 cursor pagination work. Read-only ops only.
+const ALLOWED_OPS = new Set([
+  'TweetDetail',
+  'UserByScreenName',
+  'UserTweets',
+  'Bookmarks',
+  'accountOverviewQuery',
+  'SearchTimeline',
+  'HomeTimeline',
+  'UsersByRestIds'
+]);
 
 export function getProfileDir() { return PROFILE_DIR; }
 

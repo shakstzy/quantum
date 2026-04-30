@@ -422,6 +422,175 @@ function extractUrls(legacy, noteEntities) {
 
 // ---- Verb plumbing -----------------------------------------------------
 
+// ---- profile <handle> --------------------------------------------------
+
+async function profile(argv) {
+  let handle = argv.positional[0];
+  if (!handle) die('Usage: profile <handle>');
+  if (handle.startsWith('@')) handle = handle.slice(1);
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) die(`invalid handle "${handle}"; X handles are 1-15 alphanumeric/underscore`);
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl: `https://x.com/${handle}`,
+    expectedOp: 'UserByScreenName'
+  });
+  try {
+    const user = resp.body?.data?.user?.result || null;
+    if (!user) {
+      die(`[x-read] UserByScreenName had no data.user.result for @${handle}; user may be suspended or X shape changed.`, 5);
+    }
+    const userCore = user.core || {};
+    const legacy = user.legacy || {};
+    const profileOut = {
+      id: user.rest_id || null,
+      handle: userCore.screen_name || legacy.screen_name || null,
+      name: userCore.name || legacy.name || null,
+      bio: legacy.description || null,
+      verified: !!user.is_blue_verified,
+      premium: !!user.is_blue_verified,
+      protected: !!legacy.protected,
+      created_at: legacy.created_at || null,
+      followers: legacy.followers_count ?? null,
+      following: legacy.friends_count ?? null,
+      tweets: legacy.statuses_count ?? null,
+      location: legacy.location || null,
+      website: (legacy.entities?.url?.urls?.[0]?.expanded_url) || null
+    };
+    // UserTweets fires alongside UserByScreenName. Wait briefly to capture it.
+    let recentTweets = [];
+    const userTweetsResp = await ctx.waitForResponse('UserTweets', { timeoutMs: 8000 });
+    if (userTweetsResp && userTweetsResp.ok && userTweetsResp.body) {
+      const collected = [];
+      const instr = userTweetsResp.body?.data?.user?.result?.timeline?.timeline?.instructions
+        || userTweetsResp.body?.data?.user?.result?.timeline_v2?.timeline?.instructions
+        || [];
+      for (const inst of instr) {
+        if (Array.isArray(inst.entries)) {
+          for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
+        }
+        collectEntriesDeep(inst, []); // no-op for shapes already covered
+      }
+      const seen = new Set();
+      for (const r of collected) {
+        const t = normalizeTweet(r);
+        if (!t.id || seen.has(t.id)) continue;
+        seen.add(t.id);
+        recentTweets.push(t);
+      }
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      profile: profileOut,
+      recent_tweets: recentTweets,
+      count: recentTweets.length,
+      truncated_note: 'recent_tweets is the first page of UserTweets only; cursor pagination not walked in v1.',
+      fetched_at: new Date().toISOString()
+    }, null, 2));
+  } finally { await ctx.close(); }
+}
+
+// ---- bookmarks ---------------------------------------------------------
+
+async function bookmarks(argv) {
+  const limit = Math.min(Number(argv.flags.limit || 50), 200);
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl: 'https://x.com/i/bookmarks',
+    expectedOp: 'Bookmarks'
+  });
+  try {
+    const collected = [];
+    const instr = resp.body?.data?.bookmark_timeline_v2?.timeline?.instructions || [];
+    for (const inst of instr) {
+      if (Array.isArray(inst.entries)) {
+        for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
+      }
+    }
+    const seen = new Set();
+    const tweets = [];
+    for (const r of collected) {
+      const t = normalizeTweet(r);
+      if (!t.id || seen.has(t.id)) continue;
+      seen.add(t.id);
+      tweets.push(t);
+      if (tweets.length >= limit) break;
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      count: tweets.length,
+      tweets,
+      truncated_note: 'first page of bookmarks only; cursor pagination not walked in v1.',
+      fetched_at: new Date().toISOString()
+    }, null, 2));
+  } finally { await ctx.close(); }
+}
+
+// ---- analytics (Premium) -----------------------------------------------
+
+async function analytics(argv) {
+  // Account-level overview. Tweet-specific analytics live behind a
+  // different route; v1 surfaces account-overview only.
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl: 'https://x.com/i/account_analytics',
+    expectedOp: 'accountOverviewQuery'
+  });
+  try {
+    const v = resp.body?.data?.viewer_v2;
+    if (!v) {
+      die('[x-read] accountOverviewQuery had no data.viewer_v2; X shape may have changed or your account does not have Premium analytics enabled.', 5);
+    }
+    // Surface raw shape — analytics fields churn faster than tweet shape.
+    // Caller can decide what to mine.
+    console.log(JSON.stringify({
+      ok: true,
+      data: v,
+      fetched_at: new Date().toISOString(),
+      note: 'analytics schema is X-internal and rotates more often than tweet shape; surfacing raw viewer_v2 verbatim. Mine fields you need; if a key disappears, run `node scripts/diag.mjs --target=analytics` to rediscover.'
+    }, null, 2));
+  } finally { await ctx.close(); }
+}
+
+// ---- search <query> ----------------------------------------------------
+
+async function search(argv) {
+  const query = argv.positional.join(' ').trim();
+  if (!query) die('Usage: search <query...>  (use --product=Top|Latest|People|Photos|Videos to switch tab; default Top)');
+  const product = (argv.flags.product || 'Top');
+  const validProducts = new Set(['Top', 'Latest', 'People', 'Photos', 'Videos']);
+  if (!validProducts.has(product)) die(`invalid --product "${product}"; valid: ${Array.from(validProducts).join(', ')}`);
+  const navUrl = `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=${product === 'Top' ? 'top' : product.toLowerCase()}`;
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl,
+    expectedOp: 'SearchTimeline'
+  });
+  try {
+    const collected = [];
+    const instr = resp.body?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions
+      || resp.body?.data?.search_by_raw_query?.search_timeline_v2?.timeline?.instructions
+      || [];
+    for (const inst of instr) {
+      if (Array.isArray(inst.entries)) {
+        for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
+      }
+    }
+    const seen = new Set();
+    const tweets = [];
+    for (const r of collected) {
+      const t = normalizeTweet(r);
+      if (!t.id || seen.has(t.id)) continue;
+      seen.add(t.id);
+      tweets.push(t);
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      query,
+      product,
+      count: tweets.length,
+      tweets,
+      truncated_note: 'first page of SearchTimeline only; cursor pagination not walked in v1.',
+      fetched_at: new Date().toISOString()
+    }, null, 2));
+  } finally { await ctx.close(); }
+}
+
 async function login(argv) {
   ensureDeps();
   const { runLogin } = await import('./login.mjs');
@@ -461,6 +630,10 @@ const VERBS = {
   login,
   whoami,
   thread,
+  profile,
+  bookmarks,
+  analytics,
+  search,
   status,
   'reset-breaker': resetBreaker
 };
@@ -473,8 +646,12 @@ Usage:
 
 Verbs:
   login                       One-time visible browser login. Cookies persist to profile dir.
-  whoami                      Capture Viewer op + return the logged-in user object.
-  thread <url-or-id>          Fetch tweet + visible replies. Pass x.com/<handle>/status/<id> URL or bare numeric ID.
+  whoami                      Return the logged-in user object (id, handle, name, premium, follower counts, bio).
+  thread <url-or-id>          Fetch tweet + visible replies. Accepts x.com/<handle>/status/<id> URL or bare numeric ID.
+  profile <handle>            User profile + first page of recent tweets.
+  bookmarks [--limit=N]       Your bookmarks (Premium has unlimited). Default limit 50, max 200.
+  analytics                   Premium account-overview analytics (impressions/engagements/profile visits etc).
+  search <query...>           SearchTimeline. Flags: --product=Top|Latest|People|Photos|Videos (default Top).
   status                      Profile + cookies + breaker + pidfile state.
   reset-breaker               Reset the 24h halt after manual verification.
 
