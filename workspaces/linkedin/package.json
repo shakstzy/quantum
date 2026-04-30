@@ -15,6 +15,7 @@
     "send-connect": "node scripts/cli/send-connect.mjs",
     "list-threads": "node scripts/cli/list-threads.mjs",
     "list-invites": "node scripts/cli/list-invites.mjs",
+    "get-conversation": "node scripts/cli/get-conversation.mjs",
     "accept-invite": "node scripts/cli/accept-invite.mjs",
     "withdraw-invite": "node scripts/cli/withdraw-invite.mjs",
     "search-people": "node scripts/cli/search-people.mjs",

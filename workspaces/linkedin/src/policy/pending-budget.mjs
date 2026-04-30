@@ -1,45 +1,56 @@
-// Pending-invite ceiling enforcement. Per Gemini-Flash adversarial review fix #4: LinkedIn
-// 2026 drops the ban hammer when sent-pending exceeds ~500. We force-withdraw the oldest
-// invitations once the count crosses our soft limit, before sending any new connect.
+// Pending-invite ceiling enforcement. Per Gemini-Flash adversarial review fix #4:
+// LinkedIn 2026 drops the ban hammer at the ratio level (sent-pending > ~500), not just volume.
+// We count outstanding sent invites by visiting /mynetwork/invitation-manager/sent/ and reading
+// the inbox-like list. If we exceed the soft ceiling (default 400), force-withdraw the oldest
+// up to a small batch before we send any new connect.
 
 import { loadCaps } from "../runtime/caps.mjs";
-import { listPendingInvites, withdrawInvite, pendingSentCount } from "../linkedin/voyager/connections.mjs";
-import { logAction } from "../runtime/logger.mjs";
-import { interActionSpacing } from "../runtime/humanize.mjs";
 
-export async function enforcePendingCeiling(client, { dryRun = true } = {}) {
+// Count outstanding sent invites. Approximate — counts aria-label-tagged rows.
+export async function countOutstandingSentInvites(page) {
+  await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/sent/", {
+    waitUntil: "domcontentloaded",
+    timeout: 30_000,
+  });
+  await page.waitForTimeout(2000);
+  // Heuristic: count list items with a Withdraw control inside them.
+  return await page.evaluate(() => {
+    const rows = document.querySelectorAll(
+      'main li:has(button[aria-label*="Withdraw"]), main [data-test-id*="invitation"]:has(button[aria-label*="Withdraw"])'
+    );
+    return rows.length || null;
+  }).catch(() => null);
+}
+
+export async function enforcePendingCeiling(page, ext, { dryRun = true } = {}) {
   const caps = await loadCaps();
-  const ceiling = caps.pending_ceiling;
-  const total = await pendingSentCount(client);
-  if (total === null || total === undefined) {
-    return { skipped: true, reason: "pending_count_unavailable" };
-  }
-  if (total < ceiling.force_withdraw_when_above) {
-    return { ok: true, total, action: "noop" };
-  }
+  const ceiling = caps.pending_ceiling ?? { force_withdraw_when_above: 400, force_withdraw_batch_size: 25 };
+  const total = await countOutstandingSentInvites(page);
+  if (total === null) return { skipped: true, reason: "count_unavailable" };
+  if (total < ceiling.force_withdraw_when_above) return { ok: true, total, action: "noop" };
 
-  const sent = await listPendingInvites(client, { direction: "sent", limit: 100 });
-  // Sort oldest first.
-  sent.sort((a, b) => (a.sentAt ?? 0) - (b.sentAt ?? 0));
-  const minAgeMs = ceiling.force_withdraw_min_age_days * 86400_000;
-  const cutoff = Date.now() - minAgeMs;
-  const candidates = sent.filter((inv) => (inv.sentAt ?? 0) <= cutoff)
-    .slice(0, ceiling.force_withdraw_batch_size);
+  if (dryRun) return { ok: true, total, action: "would_withdraw_oldest", batch: ceiling.force_withdraw_batch_size };
 
-  if (dryRun) {
-    return { ok: true, total, action: "would_withdraw", count: candidates.length };
-  }
+  // Withdraw oldest N. Read each sent-row's username, then call ext.withdrawInvite per username.
+  const usernames = await page.evaluate((batch) => {
+    const cards = Array.from(document.querySelectorAll('main li:has(button[aria-label*="Withdraw"])'));
+    const out = [];
+    for (const card of cards.slice(-batch)) { // assume oldest is at the bottom of the rendered list
+      const a = card.querySelector('a[href*="/in/"]');
+      if (!a) continue;
+      const m = (a.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
+      if (m) out.push(m[1]);
+    }
+    return out;
+  }, ceiling.force_withdraw_batch_size).catch(() => []);
 
   let withdrawn = 0;
-  for (const inv of candidates) {
+  for (const u of usernames) {
     try {
-      await withdrawInvite(client, { invitationUrn: inv.invitationUrn });
-      await logAction({ action: "withdraw_invite", target: inv.invitationUrn, success: true, reason: "pending_ceiling" });
-      withdrawn += 1;
-    } catch (err) {
-      await logAction({ action: "withdraw_invite", target: inv.invitationUrn, success: false, error: String(err.message ?? err) });
-    }
-    await interActionSpacing();
+      const r = await ext.withdrawInvite(u, { dryRun: false });
+      if (r.ok) withdrawn += 1;
+    } catch { /* skip */ }
+    await page.waitForTimeout(1500);
   }
   return { ok: true, total, action: "withdrew", count: withdrawn };
 }

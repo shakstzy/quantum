@@ -1,13 +1,9 @@
 #!/usr/bin/env node
-// One-time interactive login. Launches the persistent Chrome profile headful, waits up to
-// 5 minutes for the user to complete login by hand, then sanity-checks via Voyager.
-//
-// We do NOT auto-fill credentials. 2FA + checkpoints + comply gates need a human.
+// One-time interactive login. Headful Chrome; user types creds + handles 2FA / captcha / comply.
 
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { ensureLoggedIn } from "../src/linkedin/session.mjs";
-import { LinkedInClient } from "../src/linkedin/client.mjs";
-import { getSelfProfile } from "../src/linkedin/voyager/profile.mjs";
+import { LinkedInExtractor } from "../src/linkedin/extractor.mjs";
 import { abortIfHalted, isHalted } from "../src/runtime/halt.mjs";
 
 if (await isHalted()) {
@@ -21,11 +17,20 @@ const { ctx, page } = await launchPersistent({ headless: false });
 let exitCode = 0;
 try {
   await ensureLoggedIn(page, { allowInteractive: true, interactiveTimeoutMs: 5 * 60_000 });
-  console.log("[login] /feed reached. Verifying Voyager session via getSelfProfile…");
-  const client = new LinkedInClient({ ctx, page });
-  const me = await getSelfProfile(client);
-  console.log("[login] OK. Self profile:");
-  console.log(JSON.stringify({ urn: me.urn, publicId: me.publicIdentifier, fullName: me.fullName, headline: me.headline }, null, 2));
+  console.log("[login] /feed reached. Reading own profile via extractor as a sanity check…");
+  const ext = new LinkedInExtractor(page);
+  // Visit /me/ so we land on the canonical profile URL, then extract the displayed name + URN.
+  await page.goto("https://www.linkedin.com/me/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  const url = page.url();
+  const match = url.match(/\/in\/([^/?#]+)/);
+  if (match) {
+    const me = await ext.getPersonProfile(match[1]);
+    console.log("[login] OK. Self profile:");
+    console.log(JSON.stringify({ url: me.url, displayName: me.displayName, profileUrn: me.profileUrn, mainTextLen: (me.sections.main_profile || "").length }, null, 2));
+  } else {
+    console.log("[login] OK but could not derive own /in/ slug from", url);
+  }
 } catch (err) {
   console.error(`[login] failed: ${err.code ?? "ERR"} ${err.message}`);
   exitCode = 1;
