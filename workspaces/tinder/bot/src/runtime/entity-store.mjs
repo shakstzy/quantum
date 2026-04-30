@@ -100,22 +100,22 @@ function parseFrontmatter(text) {
 }
 
 function splitSections(body) {
-  const sections = { profile: "", conversation: "", outbound: "", profile_changes: "" };
-  const re = /##\s+(Profile changes|Profile|Conversation|Outbound log)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
+  const sections = { profile: "", conversation: "", outbound: "", profile_changes: "", visual: "" };
+  const re = /##\s+(Profile changes|Profile|Conversation|Outbound log|Visual)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
   let m;
   while ((m = re.exec(body)) !== null) {
     const heading = m[1].toLowerCase();
     let key;
     if (heading === "profile changes") key = "profile_changes";
     else if (heading === "outbound log") key = "outbound";
-    else key = heading; // "profile" | "conversation"
+    else key = heading; // "profile" | "conversation" | "visual"
     sections[key] = m[2].trim();
   }
   return sections;
 }
 
-function renderEntity({ meta, profile, conversation, outbound, profile_changes = "" }) {
-  return [
+function renderEntity({ meta, profile, conversation, outbound, profile_changes = "", visual = "" }) {
+  const lines = [
     fmYaml(meta),
     "",
     "## Profile",
@@ -126,6 +126,13 @@ function renderEntity({ meta, profile, conversation, outbound, profile_changes =
     "",
     profile_changes.trim() || "(none yet)",
     "",
+  ];
+  // Visual section is optional — only render if there's content (visualize.mjs writes
+  // it directly via raw file edit, but if it's already loaded we preserve it).
+  if (visual && visual.trim()) {
+    lines.push("## Visual", "", visual.trim(), "");
+  }
+  lines.push(
     "## Conversation",
     "",
     conversation.trim() || "(no messages yet)",
@@ -134,7 +141,8 @@ function renderEntity({ meta, profile, conversation, outbound, profile_changes =
     "",
     outbound.trim() || "(none)",
     "",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 function profileToMarkdown(profile) {
@@ -277,9 +285,9 @@ export async function loadEntity(slug) {
   return { slug, path, meta, ...sections };
 }
 
-export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "" }) {
+export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "", visual = "" }) {
   const path = resolve(RAW_DIR, `${slug}.md`);
-  await atomicWrite(path, renderEntity({ meta, profile, conversation, outbound, profile_changes }));
+  await atomicWrite(path, renderEntity({ meta, profile, conversation, outbound, profile_changes, visual }));
   return path;
 }
 
