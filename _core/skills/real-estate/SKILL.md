@@ -32,6 +32,10 @@ None. Both sites are scraped from public HTML. The first request per session war
 From repo root:
 
 ```bash
+# Estimate rent from nearby Zillow rental comps (within 1 mile, exact bed match)
+_core/skills/real-estate/re rent-estimate "6326 River Place Blvd Austin TX 78732"
+_core/skills/real-estate/re rent-estimate "<address>" --radius-miles 1.5 --beds-tolerance 1
+
 # THE simple "address -> all the info" path (queries BOTH sites + merges)
 _core/skills/real-estate/re lookup "9400 Shady Oaks Dr Austin TX 78729"
 
@@ -243,6 +247,35 @@ _core/skills/real-estate/re lookup "5509 Casco Walk Austin TX 78724" \
 ```
 
 You can also pass a full URL as the `address` arg directly; the resolver auto-detects it.
+
+## Rent estimate
+
+`re rent-estimate "<address>"` resolves the target via `lookup` (lat/lng/sqft/beds), searches Zillow rentals in a bbox around the target, filters comps by distance + bed match + valid price/sqft, computes median and trimmed-mean dollars-per-sqft, and applies that to the target's sqft.
+
+Cost: 1 Redfin lookup hit + 1 Zillow lookup hit + 1 Zillow rental search hit = ~3 hits per call. Honest "no comps" when fewer than 3 valid rentals match.
+
+Flags:
+- `--radius-miles` (default 1.0)
+- `--beds-tolerance` (default 0 = exact bed match). Bumps allow ±N bed difference.
+- `--target-lat`, `--target-lng`, `--target-sqft`, `--target-beds` to skip the lookup entirely (you already have the data).
+- `--redfin-url`, `--zillow-url` if Brave can't resolve the address.
+
+Output:
+```jsonc
+{
+  "address": "...",
+  "target": { "lat", "lng", "sqft", "beds", "zip" },
+  "radius_miles": 1.5,
+  "comp_count": 6,
+  "median_price_per_sqft": 1.29,
+  "trimmed_mean_price_per_sqft": 1.33,
+  "estimated_rent_low": 4651,
+  "estimated_rent_mid": 5034,
+  "estimated_rent_high": 7133,
+  "estimated_rent_trimmed": 5211,
+  "comps": [{ "address","price","beds","sqft","distance_miles","price_per_sqft","url" }, ...]
+}
+```
 
 ## Cross-source dedupe
 
