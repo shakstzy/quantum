@@ -135,41 +135,91 @@ async function openSessionAndCapture({ navUrl, expectedOp }) {
 }
 
 async function whoami() {
-  const { ctx, resp } = await openSessionAndCapture({
-    navUrl: 'https://x.com/home',
-    expectedOp: 'Viewer'
-  });
+  // X 2026 doesn't fire a single "Viewer" op anymore. We use a different
+  // strategy: parse the user's rest_id from the `twid` cookie (deterministic;
+  // cookie format is `u%3D<rest_id>`), then walk any response that contains
+  // user_results.result for our rest_id. HomeTimeline always fires on /home
+  // and embeds users.
+  const { launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker } = await import('./browser.mjs');
+  const ctx = await launchContext({ visible: false });
   try {
-    // Viewer's user_results.result is User-shaped, not Tweet-shaped, so we do
-    // NOT unwrapVisibilityResult here (round 2 finding).
-    const viewer = resp.body?.data?.viewer || resp.body?.data?.viewer_v2 || resp.body?.data;
-    const userResult = viewer?.user_results?.result || viewer?.user_result?.result;
-    const legacy = userResult?.legacy || {};
-    const id = userResult?.rest_id || null;
-    const handle = legacy.screen_name || null;
-    if (!id || !handle) {
-      const out = {
-        ok: false,
-        error: 'Viewer payload did not contain rest_id + legacy.screen_name. X response shape may have changed; check raw_keys to debug.',
-        raw_keys: Object.keys(resp.body?.data || {}),
-        viewer_keys: Object.keys(viewer || {}),
-        user_result_keys: Object.keys(userResult || {})
-      };
-      console.log(JSON.stringify(out, null, 2));
-      process.exitCode = 5;
+    if (DEBUG) process.stderr.write('[x-read] navigating to https://x.com/home\n');
+    await ctx.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 1500));
+    const url = ctx.page.url();
+    if (isAuthChallengeUrl(url)) {
+      tripBreaker(`challenge-url:${url}`);
+      die(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`login\` after verifying the account.`, 3);
+    }
+    const dom = await detectDomChallenge(ctx.page).catch(() => null);
+    if (dom) {
+      tripBreaker(`dom-challenge:${dom}`);
+      die(`[x-read] DOM challenge detected (${dom}). Breaker tripped.`, 3);
+    }
+    // Parse twid cookie for rest_id.
+    const cookies = await ctx.context.cookies();
+    const twid = cookies.find(c => c.name === 'twid');
+    let restId = null;
+    if (twid) {
+      const m = decodeURIComponent(twid.value).match(/u=(\d+)/);
+      if (m) restId = m[1];
+    }
+    // Wait for HomeTimeline (fires reliably on /home in 2026 X).
+    const resp = await ctx.waitForResponse('HomeTimeline', { timeoutMs: 30000 });
+    if (!resp) {
+      const ops = ctx.listCapturedResponses();
+      die(`[x-read] no HomeTimeline response within 30s. Captured: [${ops.join(', ')}]. Session may need re-login.`, 3);
+    }
+    if (resp.status === 401 || resp.status === 403) {
+      tripBreaker(`response-${resp.status}:HomeTimeline`);
+      die(`[x-read] ${resp.status} from HomeTimeline; session expired. Run \`login\`.`, 3);
+    }
+    // Walk response recursively for our user.
+    const ourUser = restId ? findUserByRestId(resp.body, restId) : null;
+    if (!ourUser) {
+      // Fall back to just rest_id from cookie.
+      console.log(JSON.stringify({
+        ok: !!restId,
+        id: restId,
+        handle: null,
+        name: null,
+        note: restId
+          ? 'authenticated (rest_id from twid cookie); could not locate own user object in HomeTimeline response. Run `thread <url>` against any tweet to confirm session works end-to-end.'
+          : 'twid cookie missing; not authenticated. Run `login`.'
+      }, null, 2));
+      if (!restId) process.exitCode = 3;
       return;
     }
-    const out = {
+    const legacy = ourUser?.legacy || {};
+    console.log(JSON.stringify({
       ok: true,
-      id,
-      handle,
+      id: ourUser?.rest_id || restId,
+      handle: legacy.screen_name || null,
       name: legacy.name || null,
-      verified: !!(userResult?.is_blue_verified ?? legacy.verified),
+      verified: !!(ourUser?.is_blue_verified ?? legacy.verified),
+      premium: !!ourUser?.is_blue_verified,
       followers: legacy.followers_count ?? null,
       following: legacy.friends_count ?? null
-    };
-    console.log(JSON.stringify(out, null, 2));
+    }, null, 2));
   } finally { await ctx.close(); }
+}
+
+// Recursively find a user_results.result with the given rest_id.
+function findUserByRestId(node, restId, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 14) return null;
+  if (Array.isArray(node)) {
+    for (const x of node) { const hit = findUserByRestId(x, restId, depth + 1); if (hit) return hit; }
+    return null;
+  }
+  if (node.user_results && node.user_results.result && node.user_results.result.rest_id === restId) {
+    return node.user_results.result;
+  }
+  // Some responses use `core.user_results.result` shape. Tested above is enough.
+  for (const k of Object.keys(node)) {
+    const hit = findUserByRestId(node[k], restId, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 async function thread(argv) {

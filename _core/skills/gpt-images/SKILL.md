@@ -104,6 +104,24 @@ node scripts/run.mjs reset-breaker
 - `scripts/diag.mjs` — selector-survey + screenshot tool for debugging UI drift
 - `package.json` — patchright as the only dep; `postinstall` pins Chrome channel
 
+## When this breaks: self-heal protocol
+
+ChatGPT's UI shifts every few months. When a run fails ("Composer not found", "No image produced", or output is a tiny / corrupt file), Claude does NOT report back to Adithya for selector help. Claude reproduces, diagnoses, patches, re-tests, all autonomously. The playbook:
+
+1. **Reproduce.** Re-run the failing command. If a `failure.png` + `failure-dom.json` were dropped in the run dir, read those first.
+2. **Diag.** `node scripts/diag.mjs` opens chatgpt.com with the persistent profile and dumps:
+   - composer-survey.json (which selectors match `#prompt-textarea` / `[contenteditable="true"]` / `textarea` and their dimensions)
+   - send-button-survey.json (`[data-testid="send-button"]` and 4 fallbacks)
+   - message-survey.json (after a test prompt is sent: which DOM shape wraps the assistant turn and the generated image)
+   - screenshots at each stage
+3. **Read the diag output.** Find the new selector / DOM shape from the empirical evidence. Update `COMPOSER_SELECTOR`, the `sendSelectors` array, or the host allow-list in `waitForGeneratedImage` accordingly.
+4. **Re-test live.** Same prompt as the failing run. Confirm a REAL artifact (magic-byte-validated PNG, dimensions sane).
+5. **Codex round on the patch.** `codex exec --skip-git-repo-check --sandbox read-only` against the diff, fix P0/P1 hits.
+6. **Re-test once more on a different prompt.** Single-prompt success is anecdote.
+7. **Update this SKILL.md** if the procedure section's selectors / steps changed.
+
+Full pattern in `raw/learnings/2026-04-30-live-test-and-fix-browser-skills.md`. Same rule applies to higgsfield, discord, tinder, and future browser skills.
+
 ## Hardenings (codex-reviewed)
 
 - **Pre-submit image snapshot** prevents reporting a prior image in the same conversation as a new success.
