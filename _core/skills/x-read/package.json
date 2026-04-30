@@ -1,0 +1,16 @@
+{
+  "name": "quantum-x-read-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QUANTUM skill: read-only X/Twitter primitives as user (Adithya). Patchright Chrome session, all calls replayed from inside the page context using request templates captured from X's own client.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome"
+  }
+}
