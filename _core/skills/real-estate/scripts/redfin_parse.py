@@ -232,6 +232,7 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
              or cache_entry(ctx, "/stingray/api/home/details/belowTheFold")
              or {})
     avm = cache_entry(ctx, "/stingray/api/home/details/avm") or {}
+    avm_hist = cache_entry(ctx, "/stingray/api/home/details/avmHistoricalData") or {}
     rental = cache_entry(ctx, "/stingray/api/home/details/rental-estimate") or {}
     similars = cache_entry(ctx, "/stingray/api/home/details/similars/listings") or {}
     schools_resp = (cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/schoolsAndDistrictsInfo")
@@ -239,6 +240,27 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
     risk = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/riskFactorData") or {}
     # Listing agent + photos commonly sit on aboveTheFold or main listing info.
     main_house = cache_entry(ctx, "/stingray/api/home/details/main") or {}
+    main_panel = cache_entry(ctx, "/stingray/api/home/details/mainHouseInfoPanelInfo") or {}
+    ai_summary = cache_entry(ctx, "/stingray/api/home/details/aiSummary") or {}
+    ai_details = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/aiPropertyDetailsInfo") or {}
+    commute = cache_entry(ctx, "/stingray/api/home/details/commute/commuteInfo") or {}
+    market_insights = cache_entry(ctx, "/stingray/api/home/details/marketInsightsInfo") or {}
+    weather = cache_entry(ctx, "/stingray/api/home/details/monthly-weather-averages") or {}
+    nearby_oh = cache_entry(ctx, "/stingray/api/home/details/nearbyOpenHouses") or {}
+    neighborhood_stats = cache_entry(ctx, "/stingray/api/home/details/neighborhoodStats/statsInfo") or {}
+    newest_nearby = cache_entry(ctx, "/stingray/api/home/details/newest-listings-nearby") or {}
+    parcel_boundaries = cache_entry(ctx, "/stingray/api/home/details/parcel-boundaries") or {}
+    parcel_info = cache_entry(ctx, "/stingray/api/home/details/propertyParcelInfo") or {}
+    zoning = cache_entry(ctx, "/stingray/api/home/details/web/parcel-zoning") or {}
+    popularity = cache_entry(ctx, "/stingray/api/home/details/popularityInfo") or {}
+    price_drop = cache_entry(ctx, "/stingray/api/home/details/priceDropInfo") or {}
+    location_score = cache_entry(ctx, "/stingray/api/v1/home/details/location-score") or {}
+    sun_exposure = cache_entry(ctx, "/stingray/api/v1/home/details/sun-exposure") or {}
+    permits = cache_entry(ctx, "/stingray/api/v2/home/details/permits") or {}
+    tour_insights = cache_entry(ctx, "/stingray/api/home/details/tourInsights") or {}
+    buying_power = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/buyingPowerInfo") or {}
+    home_tags = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/homeHighlightTagsInfo") or {}
+    listing_status_banner = cache_entry(ctx, "/stingray/api/home/details/listingStatusBannerInfo/v1") or {}
 
     p_initial = initial.get("payload") or {}
     p_above = above.get("payload") or {}
@@ -324,6 +346,35 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         "photo_count": photo_count or len(photos) or None,
         "open_houses": (p_above.get("openHouseInfo") or {}).get("openHouseList") or [],
     }
+    # Add the new high-value fields. Most live under .payload of their cache entry.
+    out["ai_summary"] = (ai_summary.get("payload") or {}).get("summary") or (ai_summary.get("payload") or {})
+    out["ai_property_details"] = ai_details.get("payload") or {}
+    out["commute"] = commute.get("payload") or {}
+    out["market_insights"] = market_insights.get("payload") or {}
+    out["weather"] = weather.get("payload") or {}
+    out["nearby_open_houses"] = (nearby_oh.get("payload") or {}).get("openHouses") or []
+    out["neighborhood_stats"] = neighborhood_stats.get("payload") or {}
+    out["newest_listings_nearby"] = ((newest_nearby.get("payload") or {}).get("homes")) or []
+    out["parcel_boundaries"] = parcel_boundaries.get("payload") or {}
+    out["parcel_info"] = parcel_info.get("payload") or {}
+    out["zoning"] = zoning.get("payload") or {}
+    out["popularity"] = popularity.get("payload") or {}
+    out["price_drop"] = price_drop.get("payload") or {}
+    out["location_score"] = location_score.get("payload") or {}
+    # Walk / transit / bike: surface as flat ints when location_score has them.
+    ls = out["location_score"]
+    if isinstance(ls, dict):
+        out["walk_score"] = ls.get("walkScore") or (ls.get("walkability") or {}).get("score")
+        out["transit_score"] = ls.get("transitScore") or (ls.get("transit") or {}).get("score")
+        out["bike_score"] = ls.get("bikeScore") or (ls.get("bike") or {}).get("score")
+    out["sun_exposure"] = sun_exposure.get("payload") or {}
+    out["permits"] = permits.get("payload") or {}
+    out["tour_insights"] = tour_insights.get("payload") or {}
+    out["buying_power"] = buying_power.get("payload") or {}
+    out["home_highlight_tags"] = (home_tags.get("payload") or {}).get("homeHighlightTags") or []
+    out["listing_status_banner"] = listing_status_banner.get("payload") or {}
+    out["avm_historical"] = avm_hist.get("payload") or {}
+    out["main_house_panel"] = main_panel.get("payload") or {}
     if include_raw:
         out["raw"] = {
             "initial": p_initial, "above": p_above, "below": p_below,
