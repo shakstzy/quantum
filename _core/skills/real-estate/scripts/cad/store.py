@@ -189,21 +189,36 @@ def _stream_records(path: Path, fields: list, county: str, batch: int = 50_000) 
 KEEP_PROP_TYPES = {"R", "MH"}
 
 
+_PARCEL_COLUMNS = [
+    "county", "prop_id", "prop_type_cd", "val_year", "geo_id", "owner_name",
+    "mail_addr_line1", "mail_addr_line2", "mail_addr_city", "mail_addr_state", "mail_addr_zip",
+    "situs_street_prefix", "situs_street", "situs_street_suffix", "situs_city", "situs_zip",
+    "situs_full", "situs_norm",
+    "legal_desc", "legal_acreage", "subdivision_cd", "block", "tract_or_lot",
+    "land_hstd_val", "land_non_hstd_val", "imprv_hstd_val", "imprv_non_hstd_val",
+    "ag_use_val", "ag_market_val", "market_val", "appraised_val", "ten_pct_cap", "assessed_val",
+    "deed_book_id", "deed_book_page", "deed_dt", "mortgage_co_name",
+    "hs_exempt", "ov65_exempt", "dp_exempt",
+    "dv1_exempt", "dv2_exempt", "dv3_exempt", "dv4_exempt", "ex_exempt",
+    "arb_protest",
+]
+
+
 def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                    *, val_year: int, progress: bool = True) -> int:
-    """Ingest PROP.TXT for a county/year via DuckDB Appender (fast path).
+    """Ingest PROP.TXT for a county/year via PyArrow + INSERT INTO SELECT.
 
     Replaces existing slice for that (county, val_year). Filters to real
     property only - skips P (business equipment), MN (mineral), AU (auto).
     """
     con.execute("DELETE FROM parcels WHERE county = ? AND val_year = ?", [county, val_year])
 
-    # Column order MUST match table declaration; Appender is positional.
-    appender = con.appender("parcels")
     total = 0
     skipped = 0
     t0 = time.monotonic()
     for batch in _stream_records(path, PROPERTY_FIELDS, county, batch=100_000):
+        # Per-column accumulators - pyarrow.Table.from_pydict wants column-orientation.
+        cd: dict[str, list] = {c: [] for c in _PARCEL_COLUMNS}
         for r in batch:
             ptc = (r.get("prop_type_cd") or "").upper()
             if ptc not in KEEP_PROP_TYPES:
@@ -218,98 +233,142 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             land = (r.get("land_hstd_val") or 0) + (r.get("land_non_hstd_val") or 0)
             imprv = (r.get("imprv_hstd_val") or 0) + (r.get("imprv_non_hstd_val") or 0)
             market = land + imprv if (land or imprv) else None
-            appender.append_row(
-                r.get("county"), str(r.get("prop_id")), ptc, r.get("val_year") or val_year,
-                r.get("geo_id"), r.get("owner_name"),
-                r.get("mail_addr_line1"), r.get("mail_addr_line2"), r.get("mail_addr_city"),
-                r.get("mail_addr_state"), r.get("mail_addr_zip"),
-                r.get("situs_street_prefix"), r.get("situs_street"), r.get("situs_street_suffix"),
-                r.get("situs_city"), r.get("situs_zip"),
-                full, norm,
-                r.get("legal_desc"), r.get("legal_acreage"), r.get("subdivision_cd"),
-                r.get("block"), r.get("tract_or_lot"),
-                r.get("land_hstd_val"), r.get("land_non_hstd_val"),
-                r.get("imprv_hstd_val"), r.get("imprv_non_hstd_val"),
-                r.get("ag_use_val"), r.get("ag_market_val"), market,
-                r.get("appraised_val"), r.get("ten_pct_cap"), r.get("assessed_val"),
-                r.get("deed_book_id"), r.get("deed_book_page"), r.get("deed_dt"),
-                r.get("mortgage_co_name"),
-                r.get("hs_exempt"), r.get("ov65_exempt"), r.get("dp_exempt"),
-                r.get("dv1_exempt"), r.get("dv2_exempt"), r.get("dv3_exempt"), r.get("dv4_exempt"),
-                r.get("ex_exempt"), r.get("arb_protest"),
-                None,  # ingested_at takes default at flush; Appender requires every column
-            )
-            total += 1
+            cd["county"].append(r.get("county"))
+            cd["prop_id"].append(str(r.get("prop_id")))
+            cd["prop_type_cd"].append(ptc)
+            cd["val_year"].append(r.get("val_year") or val_year)
+            cd["geo_id"].append(r.get("geo_id"))
+            cd["owner_name"].append(r.get("owner_name"))
+            cd["mail_addr_line1"].append(r.get("mail_addr_line1"))
+            cd["mail_addr_line2"].append(r.get("mail_addr_line2"))
+            cd["mail_addr_city"].append(r.get("mail_addr_city"))
+            cd["mail_addr_state"].append(r.get("mail_addr_state"))
+            cd["mail_addr_zip"].append(r.get("mail_addr_zip"))
+            cd["situs_street_prefix"].append(r.get("situs_street_prefix"))
+            cd["situs_street"].append(r.get("situs_street"))
+            cd["situs_street_suffix"].append(r.get("situs_street_suffix"))
+            cd["situs_city"].append(r.get("situs_city"))
+            cd["situs_zip"].append(r.get("situs_zip"))
+            cd["situs_full"].append(full)
+            cd["situs_norm"].append(norm)
+            cd["legal_desc"].append(r.get("legal_desc"))
+            cd["legal_acreage"].append(r.get("legal_acreage"))
+            cd["subdivision_cd"].append(r.get("subdivision_cd"))
+            cd["block"].append(r.get("block"))
+            cd["tract_or_lot"].append(r.get("tract_or_lot"))
+            cd["land_hstd_val"].append(r.get("land_hstd_val"))
+            cd["land_non_hstd_val"].append(r.get("land_non_hstd_val"))
+            cd["imprv_hstd_val"].append(r.get("imprv_hstd_val"))
+            cd["imprv_non_hstd_val"].append(r.get("imprv_non_hstd_val"))
+            cd["ag_use_val"].append(r.get("ag_use_val"))
+            cd["ag_market_val"].append(r.get("ag_market_val"))
+            cd["market_val"].append(market)
+            cd["appraised_val"].append(r.get("appraised_val"))
+            cd["ten_pct_cap"].append(r.get("ten_pct_cap"))
+            cd["assessed_val"].append(r.get("assessed_val"))
+            cd["deed_book_id"].append(r.get("deed_book_id"))
+            cd["deed_book_page"].append(r.get("deed_book_page"))
+            cd["deed_dt"].append(r.get("deed_dt"))
+            cd["mortgage_co_name"].append(r.get("mortgage_co_name"))
+            cd["hs_exempt"].append(r.get("hs_exempt"))
+            cd["ov65_exempt"].append(r.get("ov65_exempt"))
+            cd["dp_exempt"].append(r.get("dp_exempt"))
+            cd["dv1_exempt"].append(r.get("dv1_exempt"))
+            cd["dv2_exempt"].append(r.get("dv2_exempt"))
+            cd["dv3_exempt"].append(r.get("dv3_exempt"))
+            cd["dv4_exempt"].append(r.get("dv4_exempt"))
+            cd["ex_exempt"].append(r.get("ex_exempt"))
+            cd["arb_protest"].append(r.get("arb_protest"))
+        n = _bulk_insert(con, "parcels", _PARCEL_COLUMNS, cd)
+        total += n
         if progress:
             elapsed = time.monotonic() - t0
             sys.stderr.write(
                 f"\r  parcels: {total:,} kept / {skipped:,} skipped  ({total/elapsed:.0f}/s)"
             )
             sys.stderr.flush()
-    appender.close()
-    # Backfill ingested_at on the rows we just inserted
-    con.execute(
-        "UPDATE parcels SET ingested_at = CURRENT_TIMESTAMP WHERE ingested_at IS NULL AND county = ? AND val_year = ?",
-        [county, val_year],
-    )
     if progress:
         sys.stderr.write("\n")
     return total
+
+
+_IMPRV_COLUMNS = [
+    "county", "prop_id", "val_year", "imprv_id", "imprv_det_id",
+    "imprv_det_type_cd", "imprv_det_type_desc", "imprv_det_class_cd",
+    "yr_built", "depreciation_yr", "imprv_det_area", "imprv_det_val",
+]
 
 
 def ingest_improvements_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                                 *, val_year: int, progress: bool = True) -> int:
     con.execute("DELETE FROM improvements_detail WHERE county = ? AND val_year = ?", [county, val_year])
-    appender = con.appender("improvements_detail")
     total = 0
     t0 = time.monotonic()
     for batch in _stream_records(path, IMPROVEMENT_DETAIL_FIELDS, county, batch=200_000):
+        cd: dict[str, list] = {c: [] for c in _IMPRV_COLUMNS}
         for r in batch:
             if not r.get("prop_id"):
                 continue
-            appender.append_row(
-                r.get("county"), str(r.get("prop_id")), r.get("val_year") or val_year,
-                str(r.get("imprv_id")) if r.get("imprv_id") is not None else None,
-                str(r.get("imprv_det_id")) if r.get("imprv_det_id") is not None else None,
-                r.get("imprv_det_type_cd"), r.get("imprv_det_type_desc"), r.get("imprv_det_class_cd"),
-                r.get("yr_built"), r.get("depreciation_yr"),
-                r.get("imprv_det_area"), r.get("imprv_det_val"),
-            )
-            total += 1
+            cd["county"].append(r.get("county"))
+            cd["prop_id"].append(str(r.get("prop_id")))
+            cd["val_year"].append(r.get("val_year") or val_year)
+            cd["imprv_id"].append(str(r.get("imprv_id")) if r.get("imprv_id") is not None else None)
+            cd["imprv_det_id"].append(str(r.get("imprv_det_id")) if r.get("imprv_det_id") is not None else None)
+            cd["imprv_det_type_cd"].append(r.get("imprv_det_type_cd"))
+            cd["imprv_det_type_desc"].append(r.get("imprv_det_type_desc"))
+            cd["imprv_det_class_cd"].append(r.get("imprv_det_class_cd"))
+            cd["yr_built"].append(r.get("yr_built"))
+            cd["depreciation_yr"].append(r.get("depreciation_yr"))
+            cd["imprv_det_area"].append(r.get("imprv_det_area"))
+            cd["imprv_det_val"].append(r.get("imprv_det_val"))
+        total += _bulk_insert(con, "improvements_detail", _IMPRV_COLUMNS, cd)
         if progress:
             elapsed = time.monotonic() - t0
             sys.stderr.write(f"\r  imprv_det: {total:,} rows  ({total/elapsed:.0f}/s)")
             sys.stderr.flush()
-    appender.close()
     if progress:
         sys.stderr.write("\n")
     return total
 
 
+_LAND_COLUMNS = [
+    "county", "prop_id", "val_year", "land_seg_id",
+    "land_type_cd", "land_type_desc", "state_cd", "is_homesite",
+    "size_acres", "size_sqft", "effective_front", "effective_depth",
+    "land_seg_mkt_val", "ag_apply", "ag_value",
+]
+
+
 def ingest_land_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                        *, val_year: int, progress: bool = True) -> int:
     con.execute("DELETE FROM land_detail WHERE county = ? AND val_year = ?", [county, val_year])
-    appender = con.appender("land_detail")
     total = 0
     t0 = time.monotonic()
     for batch in _stream_records(path, LAND_DETAIL_FIELDS, county, batch=200_000):
+        cd: dict[str, list] = {c: [] for c in _LAND_COLUMNS}
         for r in batch:
             if not r.get("prop_id"):
                 continue
-            appender.append_row(
-                r.get("county"), str(r.get("prop_id")), r.get("val_year") or val_year,
-                str(r.get("land_seg_id")) if r.get("land_seg_id") is not None else None,
-                r.get("land_type_cd"), r.get("land_type_desc"), r.get("state_cd"), r.get("is_homesite"),
-                r.get("size_acres"), r.get("size_sqft"),
-                r.get("effective_front"), r.get("effective_depth"),
-                r.get("land_seg_mkt_val"), r.get("ag_apply"), r.get("ag_value"),
-            )
-            total += 1
+            cd["county"].append(r.get("county"))
+            cd["prop_id"].append(str(r.get("prop_id")))
+            cd["val_year"].append(r.get("val_year") or val_year)
+            cd["land_seg_id"].append(str(r.get("land_seg_id")) if r.get("land_seg_id") is not None else None)
+            cd["land_type_cd"].append(r.get("land_type_cd"))
+            cd["land_type_desc"].append(r.get("land_type_desc"))
+            cd["state_cd"].append(r.get("state_cd"))
+            cd["is_homesite"].append(r.get("is_homesite"))
+            cd["size_acres"].append(r.get("size_acres"))
+            cd["size_sqft"].append(r.get("size_sqft"))
+            cd["effective_front"].append(r.get("effective_front"))
+            cd["effective_depth"].append(r.get("effective_depth"))
+            cd["land_seg_mkt_val"].append(r.get("land_seg_mkt_val"))
+            cd["ag_apply"].append(r.get("ag_apply"))
+            cd["ag_value"].append(r.get("ag_value"))
+        total += _bulk_insert(con, "land_detail", _LAND_COLUMNS, cd)
         if progress:
             elapsed = time.monotonic() - t0
             sys.stderr.write(f"\r  land:      {total:,} rows  ({total/elapsed:.0f}/s)")
             sys.stderr.flush()
-    appender.close()
     if progress:
         sys.stderr.write("\n")
     return total
