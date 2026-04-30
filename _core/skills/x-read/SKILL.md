@@ -54,9 +54,9 @@ If any required input is missing, stop and ask.
 | Breaker file | `~/.quantum/chrome-profiles/x/.breaker.json` |
 | Breaker policy | Single strike (any auth challenge -> 24h halt) |
 | Auth probe | Captured `Viewer` GraphQL response body from organic page traffic |
-| Write verbs | None. The replay helper (`pageApi`, kept for v2) hard-rejects non-GET methods, ops outside an allowlist, and non-X URLs. v1 verbs do not call replay at all — they parse the X client's organic response bodies. |
+| Write verbs | None. The replay helper (`pageApi`, kept for v2) hard-rejects non-GET methods, ops outside an allowlist, and non-X URLs. v1 verbs do not call replay at all  -  they parse the X client's organic response bodies. |
 
-Output destination: stdout JSON. The skill does NOT write to `raw/` itself — the caller decides whether a fetched thread is signal (promote to `raw/x/`) or bulk (keep ephemeral). This matches the higgsfield pattern: skills emit to stdout/skill-output, workspaces own `raw/` deposits.
+Output destination: stdout JSON. The skill does NOT write to `raw/` itself  -  the caller decides whether a fetched thread is signal (promote to `raw/x/`) or bulk (keep ephemeral). This matches the higgsfield pattern: skills emit to stdout/skill-output, workspaces own `raw/` deposits.
 
 ## First-time setup (once)
 
@@ -128,10 +128,10 @@ X may move read GraphQL operations between GET and POST without warning. v1 does
 
 ## Files
 
-- `package.json` — patchright dep, ESM
-- `scripts/browser.mjs` — patchright launcher, CDP capture of full request templates, breaker, pidfile, GET-only `pageApi`, rate-limit-reset Unix-timestamp conversion
-- `scripts/login.mjs` — visible login flow with single-strike breaker on challenge
-- `scripts/run.mjs` — CLI: `login | whoami | thread | status | reset-breaker`
-- `references/graphql-endpoints.md` — capture/replay strategy, cursor pagination caveats
-- `references/detection-mitigation.md` — what's mitigated, what's not, what trips the breaker
-- `rules/read-only.md` — read-only contract enforced at helper + verb + skill layers
+- `package.json`  -  patchright dep, ESM
+- `scripts/browser.mjs`  -  patchright launcher, CDP capture of full request templates, breaker, pidfile, GET-only `pageApi`, rate-limit-reset Unix-timestamp conversion
+- `scripts/login.mjs`  -  visible login flow with single-strike breaker on challenge
+- `scripts/run.mjs`  -  CLI: `login | whoami | thread | status | reset-breaker`
+- `references/graphql-endpoints.md`  -  capture/replay strategy, cursor pagination caveats
+- `references/detection-mitigation.md`  -  what's mitigated, what's not, what trips the breaker
+- `rules/read-only.md`  -  read-only contract enforced at helper + verb + skill layers

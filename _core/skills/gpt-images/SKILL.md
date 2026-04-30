@@ -5,7 +5,7 @@ description: Generate images on chatgpt.com using Adithya's existing ChatGPT pla
 
 # gpt-images Skill
 
-UI-driven image generation via chatgpt.com. Mirrors the discord/higgsfield pattern: persistent Chrome profile with one-time visible login, off-screen runtime Chrome for actual generation. No OpenAI API key, no separate billing — uses Adithya's ChatGPT Plus/Pro plan.
+UI-driven image generation via chatgpt.com. Mirrors the discord/higgsfield pattern: persistent Chrome profile with one-time visible login, off-screen runtime Chrome for actual generation. No OpenAI API key, no separate billing  -  uses Adithya's ChatGPT Plus/Pro plan.
 
 ## When this fires
 
@@ -68,13 +68,13 @@ node scripts/run.mjs reset-breaker
 ## Procedure (generate)
 
 1. **Boot.** Off-screen patchright Chrome, persistent profile, atomic pidfile (`openSync wx`), breaker check.
-2. **Probe session.** `GET https://chatgpt.com/api/auth/session` — die early with a clear message if logged out.
+2. **Probe session.** `GET https://chatgpt.com/api/auth/session`  -  die early with a clear message if logged out.
 3. **Cloudflare check.** Read body text for "verify you are human" / "just a moment". If present, trip breaker, halt.
 4. **Pre-submit snapshot.** Capture existing `<img>` src set in `<main>` and current user-turn count. Used to require a NEW image (rules out stale prior outputs) and verify submission landed.
-5. **Submit prompt.** Wait for `#prompt-textarea`, click, type `Please generate an image: <prompt>`. Wait up to 5s for an enabled send button (`[data-testid="send-button"]` and 4 fallback selectors), click it. If no button surfaces, fall back once to `Cmd+Enter` (ProseMirror's submit shortcut). Plain Enter is unsafe — it inserts a hard break in ChatGPT's editor.
-6. **Verify submission.** Poll for the user-turn count to increment within 10s. If not, the click was a no-op — fail fast instead of waiting the full image-poll timeout.
+5. **Submit prompt.** Wait for `#prompt-textarea`, click, type `Please generate an image: <prompt>`. Wait up to 5s for an enabled send button (`[data-testid="send-button"]` and 4 fallback selectors), click it. If no button surfaces, fall back once to `Cmd+Enter` (ProseMirror's submit shortcut). Plain Enter is unsafe  -  it inserts a hard break in ChatGPT's editor.
+6. **Verify submission.** Poll for the user-turn count to increment within 10s. If not, the click was a no-op  -  fail fast instead of waiting the full image-poll timeout.
 7. **Poll for new image.** Search `<main>` for `<img>` whose src is not in the pre-submit set, hosted on an OpenAI asset domain (`oaiusercontent.com`, `files.oai*`, `sdmnt*`, `chatgpt.com/backend-api/estuary|files`) OR rendered ≥ 200×200. Stability gate: require **two consecutive polls** with the same src + naturalWidth/Height before declaring ready, so a low-res placeholder doesn't get downloaded before it swaps to full-res.
-8. **Download + validate.** `context.request.get(src)` (inherits browser cookies). Reject responses < 512 bytes. Magic-byte sniff (PNG/JPEG/WebP/GIF) — if the body is HTML or empty, fail with a clear error so a Cloudflare interstitial returning 200 is not silently saved as `image-1.png`.
+8. **Download + validate.** `context.request.get(src)` (inherits browser cookies). Reject responses < 512 bytes. Magic-byte sniff (PNG/JPEG/WebP/GIF)  -  if the body is HTML or empty, fail with a clear error so a Cloudflare interstitial returning 200 is not silently saved as `image-1.png`.
 9. **Metadata.** `metadata.json` with `run_id`, `prompt`, `full_prompt`, `image_url` (signature/token query params redacted), `image_path`, `width`/`height`, `bytes`, `user` (email or id), `page_url`, `created_at`.
 10. **Output.** Run dir absolute path on stdout. Errors on stderr. Failures also drop `failure.png` + `failure-dom.json` into the run dir for selector-drift diagnosis.
 
@@ -97,12 +97,12 @@ node scripts/run.mjs reset-breaker
 
 ## Files
 
-- `scripts/run.mjs` — CLI dispatcher (entry for every verb)
-- `scripts/login.mjs` — one-time visible login
-- `scripts/generate.mjs` — chat-UI driver + DOM polling + asset download
-- `scripts/browser.mjs` — patchright launcher, profile dir, atomic pidfile, breaker, session probe
-- `scripts/diag.mjs` — selector-survey + screenshot tool for debugging UI drift
-- `package.json` — patchright as the only dep; `postinstall` pins Chrome channel
+- `scripts/run.mjs`  -  CLI dispatcher (entry for every verb)
+- `scripts/login.mjs`  -  one-time visible login
+- `scripts/generate.mjs`  -  chat-UI driver + DOM polling + asset download
+- `scripts/browser.mjs`  -  patchright launcher, profile dir, atomic pidfile, breaker, session probe
+- `scripts/diag.mjs`  -  selector-survey + screenshot tool for debugging UI drift
+- `package.json`  -  patchright as the only dep; `postinstall` pins Chrome channel
 
 ## When this breaks: self-heal protocol
 
@@ -129,6 +129,6 @@ Full pattern in `raw/learnings/2026-04-30-live-test-and-fix-browser-skills.md`. 
 - **Stability gate** (two consecutive matching polls) avoids downloading the low-res placeholder.
 - **Magic-byte sniff** rejects HTML challenge pages and empty bodies that returned HTTP 200.
 - **Atomic pidfile** (`openSync wx` with stale-pid recovery) prevents two concurrent runs on the same profile.
-- **Storage-state restore is idempotent** — only re-injects cookies when the persistent context has none, so a stale snapshot can't poison a working session.
-- **Login timeout no longer trips the bot-detection breaker** — only Cloudflare/captcha signals do.
+- **Storage-state restore is idempotent**  -  only re-injects cookies when the persistent context has none, so a stale snapshot can't poison a working session.
+- **Login timeout no longer trips the bot-detection breaker**  -  only Cloudflare/captcha signals do.
 - **Signed-URL credentials** (`sig=`, `signature=`, `X-Amz-Signature`, `token`) are redacted in saved `metadata.json`.
