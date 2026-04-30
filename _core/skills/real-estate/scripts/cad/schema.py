@@ -28,18 +28,25 @@ PROPERTY_FIELDS: list[tuple[int, int, str, str]] = [
     (874,  50, "str",   "mail_addr_city"),
     (924,  50, "str",   "mail_addr_state"),
     (979,   5, "str",   "mail_addr_zip"),
-    # Situs (the actual property address)
+    # Situs (the actual property address). The street NUMBER lives at 4460,
+    # not in the prefix - this is a quirk of the True Prodigy schema. We pull
+    # both ranges and combine into situs_full at ingest time.
     (1040, 10, "str",   "situs_street_prefix"),
     (1050, 50, "str",   "situs_street"),
     (1100, 10, "str",   "situs_street_suffix"),
     (1110, 30, "str",   "situs_city"),
     (1140, 10, "str",   "situs_zip"),
+    (4460, 15, "str",   "situs_num"),
+    (4475,  5, "str",   "situs_unit"),
     # Legal
     (1150, 255, "str",  "legal_desc"),
     (1660, 16, "float", "legal_acreage"),
     (1676, 10, "str",   "subdivision_cd"),
     (1696, 50, "str",   "block"),
     (1746, 50, "str",   "tract_or_lot"),
+    (2772, 20, "float", "land_acres_sum"),    # sum of land segments (more reliable than legal_acreage)
+    (4136, 40, "str",   "dba"),
+    (4214, 14, "int",   "market_value_pretax"),  # pre-computed market value (prop tax basis)
     # Values
     (1796, 15, "int",   "land_hstd_val"),
     (1811, 15, "int",   "land_non_hstd_val"),

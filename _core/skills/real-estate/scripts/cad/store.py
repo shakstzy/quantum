@@ -78,18 +78,23 @@ def _migrate(con: duckdb.DuckDBPyConnection) -> None:
             mail_addr_city VARCHAR,
             mail_addr_state VARCHAR,
             mail_addr_zip VARCHAR,
+            situs_num VARCHAR,
+            situs_unit VARCHAR,
             situs_street_prefix VARCHAR,
             situs_street VARCHAR,
             situs_street_suffix VARCHAR,
             situs_city VARCHAR,
             situs_zip VARCHAR,
-            situs_full VARCHAR,           -- prefix + street + suffix, single string
+            situs_full VARCHAR,           -- num + prefix + street + suffix + unit
             situs_norm VARCHAR,           -- lowercase, no punctuation, for LIKE
             legal_desc VARCHAR,
             legal_acreage DOUBLE,
+            land_acres_sum DOUBLE,
             subdivision_cd VARCHAR,
             block VARCHAR,
             tract_or_lot VARCHAR,
+            dba VARCHAR,
+            market_value_pretax BIGINT,
             land_hstd_val BIGINT,
             land_non_hstd_val BIGINT,
             imprv_hstd_val BIGINT,
@@ -160,14 +165,29 @@ def _migrate(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_land_prop ON land_detail(county, prop_id, val_year)")
 
 
-def _norm_situs(prefix: str | None, street: str | None, suffix: str | None) -> tuple[str, str]:
-    """Build situs_full (display) and situs_norm (lookup key)."""
-    parts = [p for p in [prefix, street, suffix] if p and p.strip()]
+_DIRECTIONAL_EXPAND = {
+    "n": "north", "s": "south", "e": "east", "w": "west",
+    "ne": "northeast", "nw": "northwest", "se": "southeast", "sw": "southwest",
+}
+_DIRECTIONAL_CONTRACT = {v: k for k, v in _DIRECTIONAL_EXPAND.items()}
+
+
+def _norm_situs(num: str | None, prefix: str | None, street: str | None,
+                suffix: str | None, unit: str | None = None) -> tuple[str, str]:
+    """Build situs_full (display) and situs_norm (lookup key).
+
+    situs_norm contains the canonical short-form of every word: directionals
+    are stored as their abbreviation (north -> n) so LIKE queries work
+    regardless of whether the user typed "South Lamar" or "S Lamar".
+    """
+    parts = [p for p in [num, prefix, street, suffix] if p and p.strip()]
     full = " ".join(p.strip() for p in parts)
-    # Normalize: lowercase, collapse whitespace, drop punctuation
-    norm = "".join(c.lower() if c.isalnum() else " " for c in full)
-    norm = " ".join(norm.split())
-    return full, norm
+    if unit and unit.strip():
+        full = f"{full} #{unit.strip()}"
+    # Normalize: lowercase, collapse whitespace, drop punctuation, contract directionals
+    bare = "".join(c.lower() if c.isalnum() else " " for c in full)
+    tokens = [_DIRECTIONAL_CONTRACT.get(t, t) for t in bare.split()]
+    return full, " ".join(tokens)
 
 
 def _stream_records(path: Path, fields: list, county: str, batch: int = 50_000) -> Iterator[list[dict]]:
@@ -200,9 +220,12 @@ KEEP_PROP_TYPES = {"R", "MH"}
 _PARCEL_COLUMNS = [
     "county", "prop_id", "prop_type_cd", "val_year", "geo_id", "owner_name",
     "mail_addr_line1", "mail_addr_line2", "mail_addr_city", "mail_addr_state", "mail_addr_zip",
+    "situs_num", "situs_unit",
     "situs_street_prefix", "situs_street", "situs_street_suffix", "situs_city", "situs_zip",
     "situs_full", "situs_norm",
-    "legal_desc", "legal_acreage", "subdivision_cd", "block", "tract_or_lot",
+    "legal_desc", "legal_acreage", "land_acres_sum",
+    "subdivision_cd", "block", "tract_or_lot",
+    "dba", "market_value_pretax",
     "land_hstd_val", "land_non_hstd_val", "imprv_hstd_val", "imprv_non_hstd_val",
     "ag_use_val", "ag_market_val", "market_val", "appraised_val", "ten_pct_cap", "assessed_val",
     "deed_book_id", "deed_book_page", "deed_dt", "mortgage_co_name",
