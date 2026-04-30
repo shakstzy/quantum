@@ -17,18 +17,19 @@ export async function launchPersistent({
 } = {}) {
   await fs.mkdir(PROFILE_DIR, { recursive: true });
 
-  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
+  const launchOpts = {
     headless,
     slowMo,
     viewport,
-    userAgent,
     args: [
       "--disable-blink-features=AutomationControlled",
       "--disable-features=IsolateOrigins,site-per-process",
       "--no-first-run",
       "--no-default-browser-check",
     ],
-  });
+  };
+  if (userAgent) launchOpts.userAgent = userAgent;
+  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, launchOpts);
 
   // Tab hygiene per QUANTUM feedback memory: close stragglers on launch.
   if (closeStraggler) {
