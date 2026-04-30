@@ -31,6 +31,7 @@ try {
   let conversationUrn = args.thread ?? null;
   let slug = null;
   let publicId = null;
+  let domFallbackTaken = false;
 
   if (!conversationUrn) {
     publicId = urlOrIdToPublicId(args.profile);
@@ -47,14 +48,14 @@ try {
       if (!conversationUrn && r.dom) {
         // DOM fallback path: composer is now visible. Caller can integrate dom/compose later.
         console.log(`[send-dm] DOM compose required (not implemented in v0). Aborting safely.`);
-        return;
+        domFallbackTaken = true;
       }
     }
   } else if (dryRun) {
     console.log(`[dry-run] would send into thread ${conversationUrn}: ${args.text}`);
   }
 
-  if (!dryRun && conversationUrn) {
+  if (!dryRun && !domFallbackTaken && conversationUrn) {
     const r = await sendMessage(client, { conversationUrn, mailboxUrn: me.urn, text: args.text });
     console.log(`[send-message] status=${r._status}`);
     await record(action, { target: publicId ?? conversationUrn });
