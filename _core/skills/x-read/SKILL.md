@@ -67,15 +67,27 @@ node scripts/run.mjs login
 
 A visible Chrome window opens at `x.com/login`. Sign in (handle + password + 2FA). The script waits up to 15 minutes for an authenticated GraphQL call to fire from X's own client; once captured, it closes the browser. Cookies persist in the profile dir.
 
-## Procedure
+## Procedure (v1: organic-response capture, no replay)
 
 1. **Resolve verb.** `whoami` for identity probe; `thread <url-or-id>` for conversation fetch.
-2. **Boot session.** `launchContext({ visible: false })` from `browser.mjs` opens patchright Chrome with the persistent profile, attaches a CDP `Network.requestWillBeSent` listener for `/i/api/graphql/*` requests, navigates to a warm-up URL.
-3. **Warm-up.** For `whoami`, navigate to `x.com/home` (X client fires `Viewer`). For `thread`, navigate to `x.com/i/status/<id>` (X client fires `TweetDetail` for the focal tweet). Wait up to 30s for the required op to land in the template map.
-4. **Replay.** `pageApi(page, opName, template, { variables })` rebuilds the GET URL with merged variables, runs `fetch` from inside the x.com page context with the captured headers, returns `{status, ok, body, rateLimit}`. Method is forced to GET.
-5. **Parse.** For `thread`, walk `data.threaded_conversation_with_injections_v2.instructions[].entries[]`, normalize each tweet result (handle Note Tweets, tombstones, media, author).
-6. **Output.** Single JSON object to stdout.
+2. **Boot session.** `launchContext({ visible: false })` opens patchright Chrome with the persistent profile, attaches both a CDP `Network.requestWillBeSent` listener (templates) and a Playwright `page.on('response')` listener (parsed response bodies) for `/i/api/graphql/*`.
+3. **Navigate.** For `whoami`, go to `x.com/home` (X client fires `Viewer`). For `thread <id>`, go to `x.com/i/status/<id>` (X client fires `TweetDetail` for the focal tweet).
+4. **Capture.** `ctx.waitForResponse(opName, { timeoutMs: 30000 })` resolves with the first matching response's parsed body (no replay HTTP from us). Status 401/403/429 trip the breaker before returning.
+5. **Parse.** For `thread`, recursively walk `data.threaded_conversation_with_injections_v2.instructions[].entries[]` (and any other instruction shape carrying entries), recursively extract every `tweet_results.result`, normalize (unwrap `TweetWithVisibilityResults`, handle tombstones, note tweets, retweets, quotes).
+6. **Output.** Single JSON object to stdout. Non-zero exit code on parse failure or root-mismatch.
 7. **Close.** Tear down patchright context. Pidfile released.
+
+### Why organic capture over replay (v1)
+
+- Zero extra HTTP from us means lower account-risk surface (no double-fire of the same op against X's anti-abuse).
+- Avoids a whole class of bugs around getting browser-managed headers (cookie, referer, sec-ch-*) right.
+- The replay path is fragile to X's `x-client-transaction-id` rotation; the page already minted a valid one for its own request and we just observe the response.
+
+The replay path (`pageApi`) is retained in `browser.mjs` for v2 (cursor-paginated "show more replies" walks need a way to issue a follow-up call with a new cursor variable). It enforces method=GET, op-allowlist, host=x.com/twitter.com, and trips the breaker on 401/403.
+
+### GET-only fragility
+
+X may move read GraphQL operations between GET and POST without warning. v1 doesn't replay so this never bites. v2 will need to revisit the GET-only enforcement when it adds cursor walking; if `TweetDetail` ever moves to POST, the right fix is to widen the helper to allow POST for explicitly read-only allowlisted ops, not to lift the allowlist.
 
 ## Failure modes (handled)
 
@@ -102,18 +114,17 @@ A visible Chrome window opens at `x.com/login`. Sign in (handle + password + 2FA
 
 | Check | Pass condition |
 |-------|----------------|
-| Replay returned 200 | `res.ok === true` |
-| Output has root | `out.root.id` matches the requested tweet ID |
+| Captured response is 2xx JSON | `resp.status` was in 200-299, `resp.parseError` was null, `resp.body` was an object |
+| Output has root | `out.root.id` matches the requested tweet ID, OR root is a tombstone with the focal ID |
 | Output has at least 0 replies | `out.replies` is an array (may be empty for solo tweets) |
-| `pageApi` rejected non-GET | trivially true; helper enforces |
 | Breaker still healthy | `readBreaker().state === 'healthy'` |
 | Truncation note present | output contains `truncated_note` so caller knows replies may be partial |
 
 ## Budget
 
 - Sessions per minute: avoid more than 4. Each verb invocation cold-boots Chrome (~5-10s) and tears down. Bursting will trip account-level heuristics regardless of fingerprint quality.
-- Replay calls per session: 1-2 in v1 (warm-up nav + optional explicit replay).
-- No retry loop. If a replay fails, surface the error; don't auto-retry. (Future work: bounded retry on 429 only.)
+- Replay HTTP per session: 0 in v1 (we only consume the X client's organic responses).
+- No retry loop. If response capture fails, surface the error; don't auto-retry. (Future work: bounded retry on 429 only.)
 
 ## Files
 

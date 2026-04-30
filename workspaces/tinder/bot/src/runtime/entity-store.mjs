@@ -148,25 +148,39 @@ export function profileFromMarkdown(markdown) {
   return out;
 }
 
+// Lowercase basics/lifestyle keys so fresh-scraped (e.g. "Love Style") and
+// markdown-parsed (e.g. "love_style") shapes diff correctly. Also lowercase + trim
+// interests for set comparison stability.
+function normalizeProfile(p) {
+  if (!p) return {};
+  const norm = { ...p, basics: {}, lifestyle: {} };
+  const keyize = (k) => String(k).toLowerCase().replace(/\s+/g, "_");
+  for (const [k, v] of Object.entries(p.basics || {})) norm.basics[keyize(k)] = v;
+  for (const [k, v] of Object.entries(p.lifestyle || {})) norm.lifestyle[keyize(k)] = v;
+  if (Array.isArray(p.interests)) norm.interests = p.interests.map(s => String(s).trim()).filter(Boolean);
+  return norm;
+}
+
 // Computes a diff between previously-stored profile (from markdown) and a freshly
 // scraped one. Returns null if no changes worth flagging, else { added, removed,
 // changed } with field paths and from/to values.
 export function computeProfileDiff(oldP, newP) {
   if (!oldP || Object.keys(oldP).length === 0) return null; // first scrape, no diff
+  const a = normalizeProfile(oldP);
+  const b = normalizeProfile(newP);
   const diff = { added: {}, removed: {}, changed: {} };
   const scalarKeys = ["age", "distance_mi", "bio", "looking_for", "dream_job", "photos_count"];
   for (const k of scalarKeys) {
-    const a = oldP[k] ?? null;
-    const b = newP[k] ?? null;
-    if (a === b) continue;
-    if (a == null && b != null) diff.added[k] = b;
-    else if (a != null && b == null) diff.removed[k] = a;
-    else diff.changed[k] = { from: a, to: b };
+    const av = a[k] ?? null;
+    const bv = b[k] ?? null;
+    if (av === bv) continue;
+    if (av == null && bv != null) diff.added[k] = bv;
+    else if (av != null && bv == null) diff.removed[k] = av;
+    else diff.changed[k] = { from: av, to: bv };
   }
-  // Basics + lifestyle are nested objects
   for (const grp of ["basics", "lifestyle"]) {
-    const oldG = oldP[grp] || {};
-    const newG = newP[grp] || {};
+    const oldG = a[grp] || {};
+    const newG = b[grp] || {};
     for (const k of Object.keys(newG)) {
       if (!(k in oldG)) diff.added[`${grp}.${k}`] = newG[k];
       else if (oldG[k] !== newG[k]) diff.changed[`${grp}.${k}`] = { from: oldG[k], to: newG[k] };
@@ -175,9 +189,8 @@ export function computeProfileDiff(oldP, newP) {
       if (!(k in newG)) diff.removed[`${grp}.${k}`] = oldG[k];
     }
   }
-  // Interests: compute set diffs
-  const oldI = new Set(oldP.interests || []);
-  const newI = new Set(newP.interests || []);
+  const oldI = new Set(a.interests || []);
+  const newI = new Set(b.interests || []);
   const addedI = [...newI].filter(x => !oldI.has(x));
   const removedI = [...oldI].filter(x => !newI.has(x));
   if (addedI.length) diff.added.interests = addedI;

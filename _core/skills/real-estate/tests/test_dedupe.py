@@ -78,6 +78,22 @@ class TestApproxMatchAddrFallback(unittest.TestCase):
         r = {"source": "redfin", "address": "123 Main St", "zip": "78705", "beds": 3, "sqft": 1500}
         self.assertFalse(dedupe._approx_match(z, r))
 
+    def test_one_zip_missing_rejects(self):
+        # Same street, but one side has no zip -> can't disambiguate.
+        z = {"address": "123 Main St", "beds": 3, "sqft": 1500}
+        r = {"address": "123 Main St", "zip": "78704", "beds": 3, "sqft": 1500}
+        self.assertFalse(dedupe._approx_match(z, r))
+
+    def test_both_zips_missing_rejects(self):
+        z = {"address": "123 Main St", "beds": 3, "sqft": 1500}
+        r = {"address": "123 Main St", "beds": 3, "sqft": 1500}
+        self.assertFalse(dedupe._approx_match(z, r))
+
+    def test_empty_addresses_reject(self):
+        z = {"address": "", "zip": "78704", "beds": 3, "sqft": 1500}
+        r = {"address": "", "zip": "78704", "beds": 3, "sqft": 1500}
+        self.assertFalse(dedupe._approx_match(z, r))
+
     def test_unit_normalized_match(self):
         z = {"source": "zillow", "address": "123 Main St Apt 4", "zip": "78704", "beds": 2, "sqft": 1000}
         r = {"source": "redfin", "address": "123 MAIN STREET #4", "zip": "78704", "beds": 2, "sqft": 1000}

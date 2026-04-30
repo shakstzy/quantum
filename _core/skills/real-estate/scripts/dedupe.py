@@ -114,12 +114,15 @@ def _approx_match(a: dict, b: dict, *, max_meters: float = 25.0) -> bool:
         # Both sides have coords but they're far apart -> definitely not same house.
         return False
     # Missing coords on at least one side; fall back to address-norm + zip.
+    # Both address AND zip must be present and matching - "123 Main St" exists
+    # in countless cities, so address alone is not enough.
     addr_a = normalize_address(a.get("address"))
     addr_b = normalize_address(b.get("address"))
     if not addr_a or not addr_b or addr_a != addr_b:
         return False
-    za, zb = a.get("zip"), b.get("zip")
-    if za and zb and za != zb:
+    za = str(a.get("zip") or "").strip()
+    zb = str(b.get("zip") or "").strip()
+    if not za or not zb or za != zb:
         return False
     return True
 

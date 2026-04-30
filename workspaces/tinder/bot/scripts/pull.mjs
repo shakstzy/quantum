@@ -28,7 +28,8 @@ try {
     try {
       const r = await scrapeThread(page, m.matchId, { name: m.name });
       opened += 1;
-      console.log(`thread ${m.name || "?"} -> ${r.slug || "?"} (${r.messages_new}/${r.messages_total} new)`);
+      const diffStr = r.profile_diff ? ` diff(+${Object.keys(r.profile_diff.added||{}).length}/~${Object.keys(r.profile_diff.changed||{}).length}/-${Object.keys(r.profile_diff.removed||{}).length})` : "";
+      console.log(`thread ${m.name || "?"} -> ${r.slug || "?"} (${r.messages_new}/${r.messages_total} new)${diffStr}`);
     } catch (e) {
       console.error(`thread_failed ${m.matchId}: ${e.message}`);
       if (/HALTED/.test(e.message)) break;

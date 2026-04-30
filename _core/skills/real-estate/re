@@ -15,4 +15,6 @@ if [[ $# -lt 1 ]]; then
 fi
 MODULE="$1"
 shift
-exec uv run --quiet python -m "scripts.$MODULE" "$@"
+# Run the script directly (not as a package) so scripts/ becomes sys.path[0]
+# and sibling modules like `redfin_parse` import without `from .` boilerplate.
+exec uv run --quiet python "scripts/${MODULE}.py" "$@"
