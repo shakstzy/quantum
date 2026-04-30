@@ -395,7 +395,7 @@ export class LinkedInExtractor {
     // Find the withdraw control. As of 2026-04-30 LinkedIn uses an <a> tag with
     // aria-label="Withdraw invitation sent to <Name>" — NOT a <button> with aria-label "Withdraw".
     // We anchor on the withdraw <a> and walk up to find the matching /in/<username>/ link.
-    // Fallbacks: legacy button[aria-label*=Withdraw], then innerText match.
+    // Capture the exact aria-label so we can verify the withdraw worked (uniquely-identifying).
     const rowFound = await this.page.evaluate((u) => {
       // Strategy 1 (NEW): a[aria-label^="Withdraw invitation"]
       const withdrawAnchors = Array.from(document.querySelectorAll('a[aria-label^="Withdraw invitation"]'));
@@ -403,7 +403,11 @@ export class LinkedInExtractor {
         let node = trigger;
         for (let depth = 0; depth < 15 && node; depth++) {
           const inLink = node.querySelector(`a[href*="/in/${u}/"]`);
-          if (inLink) { trigger.click(); return { ok: true, strategy: "a_aria_withdraw" }; }
+          if (inLink) {
+            const triggerAria = trigger.getAttribute("aria-label") || "";
+            trigger.click();
+            return { ok: true, strategy: "a_aria_withdraw", triggerAria };
+          }
           node = node.parentElement;
         }
       }
@@ -413,10 +417,14 @@ export class LinkedInExtractor {
         const a = card.querySelector(`a[href*="/in/${u}/"]`);
         if (!a) continue;
         const ariaBtn = card.querySelector('button[aria-label*="Withdraw"]');
-        if (ariaBtn) { ariaBtn.click(); return { ok: true, strategy: "button_aria_legacy" }; }
+        if (ariaBtn) {
+          const triggerAria = ariaBtn.getAttribute("aria-label") || "";
+          ariaBtn.click();
+          return { ok: true, strategy: "button_aria_legacy", triggerAria };
+        }
         const textBtn = Array.from(card.querySelectorAll("button, a"))
           .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
-        if (textBtn) { textBtn.click(); return { ok: true, strategy: "innertext_match" }; }
+        if (textBtn) { textBtn.click(); return { ok: true, strategy: "innertext_match", triggerAria: null }; }
       }
       return { ok: false };
     }, username).catch(() => ({ ok: false }));
@@ -445,21 +453,23 @@ export class LinkedInExtractor {
       }
       await this.page.waitForSelector(DIALOG_SELECTOR, { state: "hidden", timeout: 6000 }).catch(() => {});
     }
-    // Verify by re-reading the page: the user's withdraw anchor should be gone.
-    await sleep(jitter(800, 1400));
-    const stillPending = await this.page.evaluate((u) => {
-      // Check if the user's /in/<u>/ link is still adjacent to a Withdraw trigger.
-      const inLinks = document.querySelectorAll(`a[href*="/in/${u}/"]`);
-      for (const a of inLinks) {
-        let node = a;
-        for (let d = 0; d < 12 && node; d++) {
-          if (node.querySelector('a[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]')) return true;
-          node = node.parentElement;
-        }
-      }
-      return false;
-    }, username).catch(() => null);
-    return { url, status: stillPending ? "send_failed" : "withdrawn", ok: !stillPending, strategy: rowFound.strategy, confirmed };
+    // Verify by re-reading the page: the EXACT trigger we clicked (matched by aria-label)
+    // should no longer exist. This is precise — no walking-up false positives.
+    await sleep(jitter(1200, 2000));
+    let stillPending = false;
+    if (rowFound.triggerAria) {
+      stillPending = await this.page.evaluate((aria) => {
+        return !!document.querySelector(`a[aria-label="${aria.replace(/"/g, '\\"')}"]`);
+      }, rowFound.triggerAria).catch(() => null);
+    }
+    return {
+      url,
+      status: stillPending ? "send_failed" : "withdrawn",
+      ok: !stillPending,
+      strategy: rowFound.strategy,
+      confirmed,
+      triggerAria: rowFound.triggerAria,
+    };
   }
 
   // Send a message via the magic compose URL (requires profile URN — we read it from the profile page).
