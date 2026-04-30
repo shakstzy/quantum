@@ -4,7 +4,7 @@
 # Usage:
 #   zernio.sh accounts                           List connected accounts (JSON array).
 #   zernio.sh creator-info <accountId> [type]    TikTok creator-info precheck. type=video (default) or photo.
-#   zernio.sh preflight <file> <platform> [surface]  Local file checks. surface = feed|story|reels|carousel (optional, IG-specific). No network. Exit 0 on pass.
+#   zernio.sh preflight <file> <platform> [surface]  Local file checks. surface = feed|story|reels|carousel (IG) | standard|boosted (Discord). No network. Exit 0 on pass.
 #   zernio.sh presign <file>                     Get {uploadUrl, publicUrl, expires} for a local file.
 #   zernio.sh upload <file>                      Presign, PUT bytes, return {publicUrl}. Guards against expired presigned URLs.
 #   zernio.sh post <payload.json>                POST /posts with payload. Returns response JSON.

@@ -44,7 +44,8 @@ def dump(name: str, obj) -> Path:
 
 
 def capture_redfin_property(url: str) -> None:
-    from redfin import _fetch_html, _initial_context  # type: ignore
+    from redfin import _fetch_html  # type: ignore
+    from redfin_parse import initial_context as _initial_context  # type: ignore
     html = _fetch_html(url)
     dump("redfin-property.html", html)
     ctx = _initial_context(html)
@@ -58,7 +59,8 @@ def capture_redfin_property(url: str) -> None:
 
 
 def capture_redfin_search(query: str) -> None:
-    from redfin import _fetch_html, _initial_context, resolve_region  # type: ignore
+    from redfin import _fetch_html, resolve_region  # type: ignore
+    from redfin_parse import initial_context as _initial_context  # type: ignore
     region = resolve_region(query)
     url = region["url"]
     html = _fetch_html(url)
