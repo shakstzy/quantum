@@ -1,25 +1,14 @@
-// browser.mjs -- patchright launcher + CDP capture of FULL X GraphQL request
-// templates. Used by login (visible) and runtime verbs (off-screen).
+// browser.mjs -- patchright launcher + capture of X GraphQL request templates
+// AND organic response bodies.
 //
-// Auth strategy: we never construct request headers ourselves. We attach a CDP
-// Network listener BEFORE navigating to x.com. For every request to
-// /i/api/graphql/<queryId>/<OperationName>, we record the method, URL, full
-// header bag, and post body. After the page settles we have a live "template
-// map" keyed by OperationName. To run our own auth'd call we look up the
-// captured template, swap in our variables, and replay the request via
-// page.evaluate(fetch) from inside the x.com origin so the browser signs it
-// with the same Client Hints / cookies the page already uses.
-//
-// Differences from the discord skill:
-//   - X needs many more decorated headers (x-client-transaction-id,
-//     x-twitter-auth-type, x-twitter-active-user, x-twitter-client-language,
-//     bearer, csrf, sec-ch-*) so we capture and replay full templates instead
-//     of just one Authorization header.
-//   - No storage-state snapshot/restore. Discord's pattern resurrects stale
-//     ct0 cookies on X and breaks CSRF. We let Chrome's own cookie store own
-//     persistence.
-//   - GET-only at the helper layer. pageApi rejects any other method.
-//   - Single-strike breaker (Adithya's account is X Premium; fail closed).
+// Strategy (v1):
+//   - Attach a CDP listener for /i/api/graphql/* requests so we have a live
+//     map of request templates (URL, headers, queryId) keyed by OperationName.
+//     This is kept for future replay (cursor pagination, etc).
+//   - Attach a Playwright page.on('response') listener that captures parsed
+//     response bodies for the same requests, also keyed by OperationName.
+//   - v1 verbs use the response-body path (zero extra HTTP from us). The
+//     replay path (pageApi) is available but unused by v1.
 
 import { chromium } from 'patchright';
 import { chmod, mkdir } from 'node:fs/promises';
@@ -29,6 +18,10 @@ import { join } from 'node:path';
 const PROFILE_DIR = process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/x`;
 const PIDFILE = join(PROFILE_DIR, '.skill.pid');
 const BREAKER_FILE = join(PROFILE_DIR, '.breaker.json');
+
+// Allowlist of GraphQL op names we'll touch. Any op outside this set is
+// rejected at pageApi to keep the read-only contract auditable.
+const ALLOWED_OPS = new Set(['Viewer', 'TweetDetail']);
 
 export function getProfileDir() { return PROFILE_DIR; }
 
@@ -67,8 +60,8 @@ export function writeBreaker(next) {
   writeFileSync(BREAKER_FILE, JSON.stringify(next, null, 2));
 }
 
-// Single strike halts. Adithya's main is Premium; one captcha/checkpoint
-// already represents account-risk we don't want to compound.
+// Single-strike halt. Adithya's main is X Premium; one challenge already
+// represents account-risk we don't want to compound.
 export function tripBreaker(reason) {
   const now = Date.now();
   const b = readBreaker();
@@ -109,29 +102,35 @@ export async function launchContext({ force = false, visible = false } = {}) {
   try { await chmod(PROFILE_DIR, 0o700); } catch (_) {}
   acquirePidfile();
 
-  const windowArgs = visible
-    ? []
-    : ['--window-position=-2400,-2400', '--window-size=1440,900'];
+  let context;
+  try {
+    const windowArgs = visible
+      ? []
+      : ['--window-position=-2400,-2400', '--window-size=1440,900'];
 
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    channel: 'chrome',
-    headless: false,
-    viewport: { width: 1440, height: 900 },
-    deviceScaleFactor: 2,
-    colorScheme: 'dark',
-    locale: 'en-US',
-    timezoneId: 'America/Chicago',
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--no-default-browser-check',
-      '--no-first-run',
-      '--restore-last-session=false',
-      ...windowArgs
-    ]
-  });
+    context = await chromium.launchPersistentContext(PROFILE_DIR, {
+      channel: 'chrome',
+      headless: false,
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 2,
+      colorScheme: 'dark',
+      locale: 'en-US',
+      timezoneId: 'America/Chicago',
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-default-browser-check',
+        '--no-first-run',
+        '--restore-last-session=false',
+        ...windowArgs
+      ]
+    });
+  } catch (e) {
+    releasePidfile();
+    throw e;
+  }
 
-  // Open a fresh page rather than reusing the about:blank tab; init scripts
-  // and cookie state apply more reliably to new pages (Playwright #28692).
+  // Open a fresh page rather than reusing about:blank; init scripts and
+  // cookie state apply more reliably to new pages (Playwright #28692).
   const page = await context.newPage();
   for (const p of context.pages()) {
     if (p !== page && p.url() === 'about:blank') {
@@ -139,9 +138,20 @@ export async function launchContext({ force = false, visible = false } = {}) {
     }
   }
 
-  // Template map keyed by OperationName. Updated every time the X client
-  // emits a /i/api/graphql/* request. Last-write-wins per op.
+  // Template map (request side) and response map (body side), both keyed by
+  // OperationName. Last-write-wins for templates (refresh on every request);
+  // response map is one-shot per op per launch (we only need the first).
   const templates = new Map();
+  const responses = new Map();
+  const responseWaiters = new Map(); // op -> [resolve...]
+
+  function isXGraphqlUrl(url) {
+    return /^https?:\/\/(x|twitter)\.com\/i\/api\/graphql\/[^\/]+\/[^?]+/.test(url);
+  }
+  function parseOpFromUrl(url) {
+    const m = url.match(/\/i\/api\/graphql\/([^\/]+)\/([^?]+)/);
+    return m ? { queryId: m[1], op: m[2] } : null;
+  }
 
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
@@ -150,18 +160,13 @@ export async function launchContext({ force = false, visible = false } = {}) {
       const req = e?.request;
       if (!req) return;
       const url = req.url || '';
-      // Match both x.com and twitter.com; X migrated but old paths persist in
-      // some flows.
-      if (!/https?:\/\/(x|twitter)\.com\/i\/api\/graphql\//.test(url)) return;
-      // /i/api/graphql/<queryId>/<OperationName>?<query>
-      const m = url.match(/\/i\/api\/graphql\/([^\/]+)\/([^?]+)/);
-      if (!m) return;
-      const queryId = m[1];
-      const operationName = m[2];
-      templates.set(operationName, {
+      if (!isXGraphqlUrl(url)) return;
+      const parsed = parseOpFromUrl(url);
+      if (!parsed) return;
+      templates.set(parsed.op, {
         method: req.method,
         url,
-        queryId,
+        queryId: parsed.queryId,
         headers: { ...req.headers },
         postData: req.postData ?? null,
         capturedAt: Date.now()
@@ -169,19 +174,83 @@ export async function launchContext({ force = false, visible = false } = {}) {
     } catch (_) {}
   });
 
+  // Response capture via Playwright. Buffer the JSON body for the first
+  // matching response per op. Resolve any waiters.
+  page.on('response', async (resp) => {
+    try {
+      const url = resp.url();
+      if (!isXGraphqlUrl(url)) return;
+      const parsed = parseOpFromUrl(url);
+      if (!parsed) return;
+      // Only capture the first response per op. If callers want a fresh one,
+      // they must navigate again.
+      if (responses.has(parsed.op)) return;
+      let body = null;
+      let parseErr = null;
+      try {
+        const text = await resp.text();
+        try { body = text ? JSON.parse(text) : null; }
+        catch (e) { body = text; parseErr = e.message; }
+      } catch (e) {
+        parseErr = e.message;
+      }
+      const captured = {
+        op: parsed.op,
+        queryId: parsed.queryId,
+        url,
+        status: resp.status(),
+        ok: resp.ok(),
+        rateLimit: {
+          limit: resp.headers()['x-rate-limit-limit'] || null,
+          remaining: resp.headers()['x-rate-limit-remaining'] || null,
+          reset: resp.headers()['x-rate-limit-reset'] || null
+        },
+        body,
+        parseError: parseErr,
+        capturedAt: Date.now()
+      };
+      responses.set(parsed.op, captured);
+      const waiters = responseWaiters.get(parsed.op) || [];
+      responseWaiters.delete(parsed.op);
+      for (const w of waiters) w(captured);
+    } catch (_) {
+      // Swallow; never let response listener crash the run.
+    }
+  });
+
   return {
     context,
     page,
     cdp,
     getTemplate: (op) => templates.get(op) || null,
+    getResponse: (op) => responses.get(op) || null,
     listCapturedOps: () => Array.from(templates.keys()),
+    listCapturedResponses: () => Array.from(responses.keys()),
+    // Wait for the first organic response for `op`. Returns the captured
+    // entry or null on timeout. Resolves immediately if already captured.
+    async waitForResponse(op, { timeoutMs = 30000 } = {}) {
+      const existing = responses.get(op);
+      if (existing) return existing;
+      return await new Promise(resolve => {
+        const arr = responseWaiters.get(op) || [];
+        const timer = setTimeout(() => {
+          const filtered = (responseWaiters.get(op) || []).filter(f => f !== handler);
+          if (filtered.length) responseWaiters.set(op, filtered); else responseWaiters.delete(op);
+          resolve(null);
+        }, timeoutMs);
+        const handler = (entry) => { clearTimeout(timer); resolve(entry); };
+        arr.push(handler);
+        responseWaiters.set(op, arr);
+      });
+    },
     async close() {
       try { await context.close(); } finally { releasePidfile(); }
     }
   };
 }
 
-// Wait until the named operation has been captured at least once.
+// Wait until the named operation's TEMPLATE has been captured at least once.
+// (Distinct from waitForResponse, which waits for the body.)
 export async function waitForTemplate(ctx, opName, { timeoutMs = 30000, probeEveryMs = 250 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -192,60 +261,84 @@ export async function waitForTemplate(ctx, opName, { timeoutMs = 30000, probeEve
   return null;
 }
 
-// Wait until any auth-shaped GraphQL request has been captured. Used by the
-// login flow as a session-ready signal.
+// Wait for an authenticated GraphQL response from any auth-shaped op. Used
+// by login as the session-ready signal.
+//
+// Auth-ready definition:
+//   - An expected op fires (Viewer / AccountSettings / HomeTimeline /
+//     HomeLatestTimeline / NotificationsTimeline)
+//   - Status is 2xx
+//   - The captured TEMPLATE has BOTH `authorization` and `x-csrf-token`
+//     headers (Codex round-1: bearer alone is not sufficient evidence of
+//     a working CSRF state for replay)
 export async function waitForAuthSignal(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 1000 } = {}) {
   const deadline = Date.now() + timeoutMs;
-  // X may emit Viewer, AccountSettings, HomeTimeline, or NotificationsTimeline
-  // depending on the route. Any of them with an authorization header counts.
   const candidates = ['Viewer', 'AccountSettings', 'HomeTimeline', 'HomeLatestTimeline', 'NotificationsTimeline'];
   while (Date.now() < deadline) {
     for (const op of candidates) {
-      const t = ctx.getTemplate(op);
-      if (t && (t.headers.authorization || t.headers.Authorization)) return t;
+      const tpl = ctx.getTemplate(op);
+      const resp = ctx.getResponse(op);
+      if (!tpl || !resp) continue;
+      const hdrs = tpl.headers || {};
+      const hasAuth = !!(hdrs.authorization || hdrs.Authorization);
+      const hasCsrf = !!(hdrs['x-csrf-token'] || hdrs['X-Csrf-Token'] || hdrs['X-CSRF-Token']);
+      if (hasAuth && hasCsrf && resp.ok) return { op, template: tpl, response: resp };
     }
     await new Promise(r => setTimeout(r, probeEveryMs));
   }
   return null;
 }
 
-// Replay a captured GraphQL request from inside the x.com page context. We
-// deep-merge new variables into the captured ones, preserving features and
-// fieldToggles exactly as the page sent them.
+// Replay a captured GraphQL request from inside the x.com page context.
+// v1 verbs DO NOT use this path; they parse the organic response captured
+// by waitForResponse. pageApi is kept for v2 (cursor pagination, etc).
 //
-// method MUST be 'GET'. Anything else is rejected at this layer to enforce
-// the read-only contract documented in rules/read-only.md.
+// Method MUST be GET. Op name MUST be in ALLOWED_OPS. URL host MUST be
+// x.com or twitter.com and path MUST be /i/api/graphql/<queryId>/<opName>.
 export async function pageApi(page, opName, template, { variables = null } = {}) {
   if (!template) {
     throw new Error(`pageApi: no template for op "${opName}". Run session warm-up first.`);
   }
+  if (!ALLOWED_OPS.has(opName)) {
+    throw Object.assign(new Error(`E_OP_NOT_ALLOWED: op "${opName}" is not in the read-only allowlist`), { code: 'E_OP_NOT_ALLOWED' });
+  }
   if (template.method !== 'GET') {
-    // The captured template's method is whatever X emitted. Most read ops are
-    // GET; some are POST. We refuse non-GET to keep the skill read-only even
-    // if X someday switches a read op to POST. Caller must explicitly handle.
     throw Object.assign(new Error(`E_METHOD_NOT_ALLOWED: op "${opName}" was captured as ${template.method}, only GET is allowed`), { code: 'E_METHOD_NOT_ALLOWED' });
   }
+  let urlObj;
+  try { urlObj = new URL(template.url); } catch { throw new Error(`pageApi: malformed template URL`); }
+  const okHost = urlObj.hostname === 'x.com' || urlObj.hostname === 'twitter.com';
+  const okPath = new RegExp(`^/i/api/graphql/[^/]+/${opName}$`).test(urlObj.pathname);
+  if (!okHost || !okPath) {
+    throw new Error(`pageApi: template URL ${template.url} does not match expected /i/api/graphql/<queryId>/${opName} on x.com/twitter.com`);
+  }
 
-  // Build replay URL. Captured URL has variables/features/fieldToggles in the
-  // querystring for GET ops. We parse, merge variables, leave the rest alone.
-  const u = new URL(template.url);
   if (variables) {
     let captured = {};
-    try { captured = JSON.parse(u.searchParams.get('variables') || '{}'); } catch (_) {}
+    try { captured = JSON.parse(urlObj.searchParams.get('variables') || '{}'); } catch (_) {}
     const merged = { ...captured, ...variables };
-    u.searchParams.set('variables', JSON.stringify(merged));
+    urlObj.searchParams.set('variables', JSON.stringify(merged));
   }
-  const replayUrl = u.toString();
+  const replayUrl = urlObj.toString();
 
-  // Headers we replay: drop browser-managed pseudo-headers (CDP sometimes
-  // surfaces these and the fetch API rejects them). Keep everything else
-  // including bearer, csrf, x-client-transaction-id, x-twitter-* decorations.
-  const banned = new Set([':method', ':path', ':scheme', ':authority', 'host', 'content-length', 'connection']);
+  // Filter to app-level headers we're allowed to set via fetch(). Browser
+  // forbids setting cookie/host/origin/referer/sec-* etc. on cross-origin
+  // fetch (well, x.com fetch from x.com is same-origin; even so, browser
+  // overrides these). credentials:'include' brings cookies. We keep only
+  // the X-specific decoration we actually need.
+  const KEEP = new Set([
+    'authorization',
+    'x-csrf-token',
+    'x-twitter-auth-type',
+    'x-twitter-active-user',
+    'x-twitter-client-language',
+    'x-client-transaction-id',
+    'x-client-uuid',
+    'accept'
+  ]);
   const headers = {};
-  for (const [k, v] of Object.entries(template.headers)) {
-    const lk = k.toLowerCase();
-    if (banned.has(lk)) continue;
-    headers[k] = v;
+  for (const [k, v] of Object.entries(template.headers || {})) {
+    if (KEEP.has(k.toLowerCase())) headers[k] = v;
   }
 
   return await page.evaluate(async ({ replayUrl, headers }) => {
@@ -253,7 +346,6 @@ export async function pageApi(page, opName, template, { variables = null } = {})
     const text = await r.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-    // Surface x-rate-limit-* headers so caller can react if X exposes them.
     const rl = {
       limit: r.headers.get('x-rate-limit-limit'),
       remaining: r.headers.get('x-rate-limit-remaining'),
@@ -263,22 +355,46 @@ export async function pageApi(page, opName, template, { variables = null } = {})
   }, { replayUrl, headers });
 }
 
-// Convert X's Unix-epoch x-rate-limit-reset to a clamped sleep in ms.
+// Convert X's Unix-epoch x-rate-limit-reset to seconds-from-now (uncapped).
 // Per docs: x-rate-limit-reset is seconds since epoch, NOT a relative wait.
-// We convert and cap at 5 minutes to avoid pathological waits.
-export function rateLimitSleepMs(resetHeader) {
+// Source: https://docs.x.com/resources/fundamentals/rate-limits
+export function rateLimitResetSeconds(resetHeader) {
   if (!resetHeader) return 0;
   const reset = parseInt(resetHeader, 10);
   if (!Number.isFinite(reset)) return 0;
   const nowSec = Math.floor(Date.now() / 1000);
-  const wait = Math.max(0, reset - nowSec);
-  return Math.min(wait, 300) * 1000;
+  return Math.max(0, reset - nowSec);
 }
 
-// Detect login/checkpoint URL patterns. Used by login flow + runtime probes.
+// What we'd actually sleep — capped at 5 minutes regardless of header.
+export function rateLimitSleepMs(resetHeader) {
+  return Math.min(rateLimitResetSeconds(resetHeader), 300) * 1000;
+}
+
+// URL-based challenge detection.
 export function isAuthChallengeUrl(url) {
   if (!url) return false;
   return /\/i\/flow\/(login|account_access)/.test(url)
     || /\/account\/access(_revoked)?/.test(url)
     || /\/account\/locked/.test(url);
+}
+
+// DOM-based challenge detection. Run after warm-up nav settles. Returns a
+// short string label if a challenge is on screen, else null. Best-effort —
+// any locator failure returns null (not a challenge).
+export async function detectDomChallenge(page) {
+  const probes = [
+    { sel: 'iframe[src*="arkoselabs"]', label: 'arkose-iframe' },
+    { sel: 'iframe[src*="funcaptcha"]', label: 'funcaptcha-iframe' },
+    { sel: '[data-testid="LoginForm_Login_Button"]', label: 'login-form' },
+    { sel: '[data-testid="ocfEnterTextTextInput"]', label: 'ocf-text-challenge' },
+    { sel: '[data-testid="confirmation_sheet_confirm"]', label: 'confirmation-sheet' }
+  ];
+  for (const p of probes) {
+    try {
+      const count = await page.locator(p.sel).count();
+      if (count > 0) return p.label;
+    } catch (_) { /* ignore */ }
+  }
+  return null;
 }
