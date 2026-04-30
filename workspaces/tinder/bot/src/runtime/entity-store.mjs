@@ -15,11 +15,37 @@
 
 import { readFile, writeFile, readdir, rename, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import lockfile from "proper-lockfile";
 import { RAW_DIR } from "./paths.mjs";
 import { resolveCity } from "./city.mjs";
 import { firstName, buildSlug, uniqueSlug } from "./slug.mjs";
 
 await mkdir(RAW_DIR, { recursive: true });
+
+// CODEX-CRIT-4+5: serialize all entity mutations behind a single global lock.
+// Per-slug locking would be ideal but is racy when slug allocation itself depends
+// on listing the dir (slug collision detection). One global lock is correct +
+// dirt-cheap: bot loops are slow human-paced (seconds between operations), so
+// contention is negligible.
+const LOCK_PATH = resolve(RAW_DIR, ".entity-store.lock");
+async function withEntityLock(fn) {
+  // Ensure lock target file exists (lockfile attaches lock to a real path)
+  try { await writeFile(LOCK_PATH, "", { flag: "ax" }); } catch { /* exists */ }
+  const release = await lockfile.lock(LOCK_PATH, {
+    retries: { retries: 50, minTimeout: 50, maxTimeout: 500, factor: 1.4 },
+    stale: 30000,
+  });
+  try { return await fn(); }
+  finally { try { await release(); } catch { /* already released */ } }
+}
+
+// Atomic file write — temp + rename so a crash mid-write doesn't truncate a
+// well-formed entity file.
+async function atomicWrite(path, content) {
+  const tmp = `${path}.tmp.${process.pid}`;
+  await writeFile(tmp, content);
+  await rename(tmp, path);
+}
 
 function fmYaml(meta) {
   const lines = ["---"];

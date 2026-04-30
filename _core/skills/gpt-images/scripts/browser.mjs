@@ -97,8 +97,14 @@ export function breakerAllowsLaunch(force = false) {
 }
 
 async function restoreStorageState(context) {
+  // The persistent profile dir is the source of truth. Only restore from
+  // snapshot if the live context lacks chatgpt.com cookies entirely; this
+  // covers the Playwright-#36139 case (session cookies dropped) without
+  // overwriting valid cookies with stale snapshot ones.
   if (!existsSync(STORAGE_STATE)) return;
   try {
+    const live = await context.cookies('https://chatgpt.com/');
+    if (live && live.length > 0) return; // persistent profile has cookies; trust it
     const state = JSON.parse(readFileSync(STORAGE_STATE, 'utf8'));
     if (state.cookies && state.cookies.length) {
       await context.addCookies(state.cookies);

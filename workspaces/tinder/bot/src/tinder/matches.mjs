@@ -68,6 +68,15 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
   await openThread(page, matchId);
   await scanForHalts(page);
 
+  // CODEX-CRIT-1: assert URL settled on the right matchId before reading anything.
+  // Tinder's SPA can silently redirect on unmatched/expired matches; without this
+  // we'd attribute the previous match's profile + messages to the new matchId.
+  const settledUrl = page.url();
+  if (!settledUrl.endsWith(matchId)) {
+    console.error(`scrapeThread: thread_redirect for ${matchId}, ended on ${settledUrl}; skipping`);
+    return { matchId, slug: null, messages_total: 0, messages_new: 0, url_redirected: true };
+  }
+
   // Name MUST be passed in (from the matches list anchor text). The thread page header
   // is unreliable — picks up "You" from the side nav, "Messages" from the heading, etc.
   if (!name) {
@@ -77,23 +86,48 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
 
   // Capture the profile pane (bio, age, distance, interests, basics, lifestyle).
   // If the caller already passed a profile (e.g. from card-stack swipe) prefer that.
+  // CODEX-IMP-6: a failed read returns null (not {}) so we can distinguish
+  // "capture failed" from "captured empty profile" downstream.
   let scraped = profile;
   if (!scraped) {
-    try { scraped = await readThreadProfile(page); }
-    catch (e) { console.error(`readThreadProfile failed for ${matchId}: ${e.message}`); scraped = {}; }
+    try {
+      scraped = await readThreadProfile(page);
+      // Sanity check: if we got NO scalar fields AT ALL (no name, no age, no bio,
+      // no distance, no basics/lifestyle/interests entries) treat as failed read.
+      const nothing = !scraped.name && !scraped.age && !scraped.bio && !scraped.distance_mi
+        && (!scraped.basics || !Object.keys(scraped.basics).length)
+        && (!scraped.lifestyle || !Object.keys(scraped.lifestyle).length)
+        && (!Array.isArray(scraped.interests) || scraped.interests.length === 0);
+      if (nothing) scraped = null;
+    } catch (e) { console.error(`readThreadProfile failed for ${matchId}: ${e.message}`); scraped = null; }
+  }
+  // CODEX-CRIT-2: profile pane name should match the matches-list name. If not,
+  // refuse to persist — likely a stale pane or wrong-recipient situation.
+  if (scraped?.name) {
+    const paneFirst = String(scraped.name).split(/\s+/)[0]?.toLowerCase() || "";
+    const expectedFirst = String(name).split(/\s+/)[0]?.toLowerCase() || "";
+    if (paneFirst && expectedFirst && paneFirst !== expectedFirst) {
+      console.error(`scrapeThread: pane name "${scraped.name}" != expected "${name}" for ${matchId}; refusing profile write`);
+      scraped = null;
+    }
   }
 
-  const entityResult = await upsertMatch({ matchId, personId: null, name, source: "tinder", profile: scraped || {} });
+  // CODEX-IMP-6: pass null when capture failed; entity-store will skip diff path
+  // and preserve existing stored profile rather than wiping it to "(no profile yet)".
+  const entityResult = await upsertMatch({ matchId, personId: null, name, source: "tinder", profile: scraped });
 
   const { els } = await pickAll(page, sels.thread_messages);
   const messages = [];
-  // Filter out Tinder's "You Matched with X — Achievement unlocked!" banner that
-  // surfaces in [role='log'] alongside real chat messages on freshly-matched threads.
-  const BANNER_RE = /(you matched with|achievement unlocked|tinder gold|gold subscription|message blocked|profile blocked)/i;
+  // CODEX-IMP-15: anchor banner detection on the literal "You Matched with " prefix
+  // (always at start, exact case+space) rather than a broad substring regex that
+  // would drop legitimate replies like "you matched with my mom haha".
+  const isBanner = (text) => /^You Matched with\b/.test(text)
+    || /Achievement unlocked!?$/.test(text)
+    || /^Looking for/.test(text); // Tinder shows this in chat header occasionally
   for (const el of els) {
     const text = (await el.textContent())?.trim();
     if (!text) continue;
-    if (BANNER_RE.test(text)) continue;
+    if (isBanner(text)) continue;
     const cls = await el.getAttribute("class") || "";
     const direction = /out|sent|from-me|self/i.test(cls) ? "out" : "in";
     messages.push({ direction, text, ts: null });

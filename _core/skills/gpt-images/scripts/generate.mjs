@@ -48,6 +48,17 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
       throw new Error('Composer not found within 30s. ChatGPT UI may have changed (selector: ' + COMPOSER_SELECTOR + '). Run with --debug to inspect.');
     }
 
+    // Snapshot pre-submit state: existing image src set + user-turn count.
+    // Used to (a) require a NEW image (not a stale prior one), (b) verify
+    // that submission actually landed.
+    const preSubmit = await ctx.page.evaluate(() => {
+      const root = document.querySelector('main') || document.body;
+      const imgSrcs = Array.from(root.querySelectorAll('img')).map(im => im.getAttribute('src') || im.src || '').filter(Boolean);
+      const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+      return { imgSrcs, userTurns };
+    });
+    if (debug) process.stderr.write(`[gpt-images] pre-submit: ${preSubmit.imgSrcs.length} imgs, ${preSubmit.userTurns} user turns\n`);
+
     const fullPrompt = `Please generate an image: ${prompt}`;
     await composer.click();
     await ctx.page.keyboard.type(fullPrompt, { delay: 8 });
@@ -92,8 +103,17 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
       await ctx.page.keyboard.press('Meta+Enter');
     }
 
-    // Poll for image in newest assistant message.
-    const result = await waitForGeneratedImage(ctx.page, { timeoutMs, debug });
+    // Verify the submission actually landed: user-turn count must increment
+    // within 10s. If not, the click was a no-op and we'd wait the full
+    // image-poll timeout for nothing.
+    const submitted = await waitForUserTurnIncrement(ctx.page, preSubmit.userTurns, 10000);
+    if (!submitted) {
+      throw new Error(`Submit did not register: user-turn count stayed at ${preSubmit.userTurns} for 10s after click+enter. Composer click may have missed.`);
+    }
+    if (debug) process.stderr.write('[gpt-images] submission landed (user turn appeared)\n');
+
+    // Poll for a NEW image (not present in preSubmit.imgSrcs).
+    const result = await waitForGeneratedImage(ctx.page, { timeoutMs, debug, excludeSrcs: new Set(preSubmit.imgSrcs) });
 
     if (result.kind !== 'ready') {
       const summary = JSON.stringify(result).slice(0, 500);
@@ -145,7 +165,17 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
   return { runDir, metadata };
 }
 
-async function waitForGeneratedImage(page, { timeoutMs, debug }) {
+async function waitForUserTurnIncrement(page, beforeCount, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const now = await page.evaluate(() => document.querySelectorAll('[data-message-author-role="user"]').length);
+    if (now > beforeCount) return true;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
+async function waitForGeneratedImage(page, { timeoutMs, debug, excludeSrcs = new Set() }) {
   // ChatGPT renders generated images outside the [data-message-author-role]
   // wrapper used for text turns. Scope search to <main> to avoid sidebar
   // chrome / hero images, then filter to OpenAI asset hosts OR sufficiently
@@ -157,12 +187,14 @@ async function waitForGeneratedImage(page, { timeoutMs, debug }) {
   let stableHits = 0;
   let stableSig = '';
   while (Date.now() < deadline) {
-    const r = await page.evaluate(() => {
+    const r = await page.evaluate(({ excludeArr }) => {
+      const exclude = new Set(excludeArr);
       const root = document.querySelector('main') || document.body;
       const allImgs = Array.from(root.querySelectorAll('img'));
       const generated = allImgs.filter(im => {
         const s = im.getAttribute('src') || im.src || '';
         if (!s) return false;
+        if (exclude.has(s)) return false; // pre-submit image, not new
         if (s.startsWith('data:') || s.startsWith('blob:')) return false;
         if (!/^https?:\/\//.test(s)) return false;
         if (/avatar|profile-pic|logo|favicon|sprite|icon\.|emoji/i.test(s)) return false;
@@ -181,7 +213,7 @@ async function waitForGeneratedImage(page, { timeoutMs, debug }) {
         return { kind: 'too-small', src, w: last.naturalWidth, h: last.naturalHeight };
       }
       return { kind: 'candidate', src, w: last.naturalWidth, h: last.naturalHeight };
-    });
+    }, { excludeArr: Array.from(excludeSrcs) });
     if (debug) process.stderr.write(`[gpt-images] poll: ${JSON.stringify(r).slice(0, 200)}\n`);
     last = r;
     if (r.kind === 'candidate') {
