@@ -28,16 +28,24 @@ from .schema import (
 
 
 def _bulk_insert(con: duckdb.DuckDBPyConnection, table: str, columns: list[str],
-                 col_data: dict[str, list]) -> int:
-    """Fast bulk insert via pyarrow registration. Returns rows inserted."""
+                 col_data: dict[str, list], *, on_conflict: str | None = None) -> int:
+    """Fast bulk insert via pyarrow registration. Returns rows inserted.
+
+    `on_conflict`: a clause like "(county, prop_id, prop_type_cd, val_year) DO NOTHING"
+    to silently drop duplicates (UDI multi-owner parcels collapse to first-seen).
+    """
     if not col_data or not col_data[columns[0]]:
         return 0
     tbl = pa.Table.from_pydict(col_data)
     con.register("__bulk_in", tbl)
     try:
-        con.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(columns)} FROM __bulk_in"
+        sql = (
+            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"SELECT {', '.join(columns)} FROM __bulk_in"
         )
+        if on_conflict:
+            sql += f" ON CONFLICT {on_conflict}"
+        con.execute(sql)
     finally:
         con.unregister("__bulk_in")
     return len(col_data[columns[0]])
@@ -279,7 +287,9 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             cd["dv4_exempt"].append(r.get("dv4_exempt"))
             cd["ex_exempt"].append(r.get("ex_exempt"))
             cd["arb_protest"].append(r.get("arb_protest"))
-        n = _bulk_insert(con, "parcels", _PARCEL_COLUMNS, cd)
+        # UDI parcels (multi-owner real property) yield duplicate PK; first-wins.
+        n = _bulk_insert(con, "parcels", _PARCEL_COLUMNS, cd,
+                         on_conflict="(county, prop_id, prop_type_cd, val_year) DO NOTHING")
         total += n
         if progress:
             elapsed = time.monotonic() - t0
@@ -289,7 +299,13 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             sys.stderr.flush()
     if progress:
         sys.stderr.write("\n")
-    return total
+    # The on_conflict path inflates `total` by candidates submitted, not rows inserted.
+    # Recompute from DB so the final count is honest.
+    actual = con.execute(
+        "SELECT COUNT(*) FROM parcels WHERE county = ? AND val_year = ?",
+        [county, val_year],
+    ).fetchone()
+    return actual[0] if actual else total
 
 
 _IMPRV_COLUMNS = [
