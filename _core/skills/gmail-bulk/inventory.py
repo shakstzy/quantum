@@ -26,7 +26,7 @@ def _service(email: str):
     return build("gmail", "v1", credentials=get_creds(email), cache_discovery=False)
 
 
-def _list_ids(svc, query: str):
+def _list_ids(svc, query: str, limit: int | None = None):
     ids = []
     page_token = None
     while True:
@@ -35,6 +35,8 @@ def _list_ids(svc, query: str):
         ).execute()
         for m in resp.get("messages", []):
             ids.append((m["id"], m["threadId"]))
+            if limit and len(ids) >= limit:
+                return ids
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
