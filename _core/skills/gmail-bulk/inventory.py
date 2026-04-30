@@ -11,6 +11,7 @@ list_unsubscribe, list_unsubscribe_post.
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,9 +22,20 @@ from auth import get_creds
 
 SKILL_DIR = Path(__file__).resolve().parent
 
+# httplib2 (used by googleapiclient) is not thread-safe; one service per thread.
+_TLS = threading.local()
+
 
 def _service(email: str):
     return build("gmail", "v1", credentials=get_creds(email), cache_discovery=False)
+
+
+def _thread_svc(email: str):
+    svc = getattr(_TLS, "svc", None)
+    if svc is None:
+        svc = _service(email)
+        _TLS.svc = svc
+    return svc
 
 
 def _list_ids(svc, query: str, limit: int | None = None):
@@ -48,7 +60,8 @@ def _extract_headers(payload: dict) -> dict:
     return headers
 
 
-def _get_metadata(svc, mid: str, retries: int = 3):
+def _get_metadata(email: str, mid: str, retries: int = 3):
+    svc = _thread_svc(email)
     for attempt in range(retries):
         try:
             return svc.users().messages().get(
@@ -79,7 +92,7 @@ def inventory(email: str, query: str, out_path: Path, fetch_metadata: bool = Tru
     t0 = time.time()
     with out_path.open("w") as f:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            future_map = {ex.submit(_get_metadata, svc, mid): (mid, tid) for mid, tid in ids}
+            future_map = {ex.submit(_get_metadata, email, mid): (mid, tid) for mid, tid in ids}
             for fut in as_completed(future_map):
                 msg = fut.result()
                 mid, tid = future_map[fut]
