@@ -33,9 +33,25 @@ RF_PROPERTY_RE = re.compile(r"redfin\.com/[A-Z]{2}/[^/]+/[^/]+/home/\d+")
 ZW_PROPERTY_RE = re.compile(r"zillow\.com/homedetails/[^/]+/\d+_zpid")
 
 
-def _brave_first_url(query: str, site: str) -> str | None:
-    """Run brave-search and return the first URL whose host matches `site`
+_STREET_NUM_RE = re.compile(r"^\s*(\d+)\b")
+
+
+def _street_number(address: str) -> str | None:
+    """Pull the leading street number from a free-text address."""
+    m = _STREET_NUM_RE.match(address)
+    return m.group(1) if m else None
+
+
+def _brave_first_url(query: str, site: str, *, require_street_num: str | None = None) -> str | None:
+    """Run brave-search and return the best URL whose host matches `site`
     AND whose path matches the property-URL shape.
+
+    When `require_street_num` is given, we ONLY accept URLs whose path
+    contains that exact street number. Returns None if no result has it.
+    Brave's index for new-build / off-MLS listings is patchy: a search for
+    '5509 Casco Walk' may rank '5501 Casco Walk' (the indexed neighbor)
+    above the actual 5509. Returning the neighbor would silently mislead
+    the user. None is honest; the caller surfaces "no exact match".
     """
     here = os.path.dirname(os.path.abspath(__file__))
     brave = os.path.normpath(os.path.join(here, "..", "..", "brave-search", "search.sh"))
@@ -43,7 +59,7 @@ def _brave_first_url(query: str, site: str) -> str | None:
         return None
     full_q = f"site:{site} {query}"
     try:
-        out = subprocess.check_output([brave, full_q, "8"], timeout=20).decode()
+        out = subprocess.check_output([brave, full_q, "10"], timeout=20).decode()
     except Exception:
         return None
     try:
@@ -54,17 +70,50 @@ def _brave_first_url(query: str, site: str) -> str | None:
     pattern = RF_PROPERTY_RE if site == "redfin.com" else ZW_PROPERTY_RE
     for r in results:
         url = r.get("url") or ""
-        if pattern.search(url):
-            return url
+        if not pattern.search(url):
+            continue
+        if require_street_num and not _url_has_street_num(url, require_street_num):
+            continue
+        return url
     return None
 
 
-def find_redfin_url(address: str) -> str | None:
-    return _brave_first_url(address, "redfin.com")
+def _url_has_street_num(url: str, num: str) -> bool:
+    """True if the URL's address slug contains `<num>-` as a street-number
+    boundary. Avoids false positives like '5501' matching '5'.
+    """
+    return bool(re.search(rf"/{re.escape(num)}-", url))
 
 
-def find_zillow_url(address: str) -> str | None:
-    return _brave_first_url(address, "zillow.com")
+def _is_redfin_property_url(s: str) -> bool:
+    return bool(RF_PROPERTY_RE.search(s or ""))
+
+
+def _is_zillow_property_url(s: str) -> bool:
+    return bool(ZW_PROPERTY_RE.search(s or ""))
+
+
+def find_redfin_url(address_or_url: str) -> str | None:
+    """Resolve to a Redfin property URL. Accepts:
+      - a full Redfin property URL -> returned as-is
+      - a free-text address -> brave-search, filtered by exact street number
+    """
+    if _is_redfin_property_url(address_or_url):
+        return address_or_url
+    return _brave_first_url(
+        address_or_url, "redfin.com",
+        require_street_num=_street_number(address_or_url),
+    )
+
+
+def find_zillow_url(address_or_url: str) -> str | None:
+    """Resolve to a Zillow property URL. Same shape as find_redfin_url."""
+    if _is_zillow_property_url(address_or_url):
+        return address_or_url
+    return _brave_first_url(
+        address_or_url, "zillow.com",
+        require_street_num=_street_number(address_or_url),
+    )
 
 
 def _merge_views(rf: dict, zw: dict) -> dict:
