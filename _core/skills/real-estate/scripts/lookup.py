@@ -51,6 +51,12 @@ def _zillow_slug(address: str) -> str | None:
 
 
 _STREET_NUM_RE = re.compile(r"^\s*(\d+)\b")
+_STREET_TYPE_TOKENS = {
+    "st", "street", "ave", "avenue", "blvd", "boulevard", "rd", "road",
+    "dr", "drive", "ln", "lane", "ct", "court", "pl", "place", "cir",
+    "circle", "trl", "trail", "hwy", "highway", "pkwy", "parkway",
+    "ter", "terrace", "way", "cv", "cove", "loop", "sq", "square", "walk",
+}
 
 
 def _street_number(address: str) -> str | None:
@@ -59,16 +65,51 @@ def _street_number(address: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _brave_first_url(query: str, site: str, *, require_street_num: str | None = None) -> str | None:
-    """Run brave-search and return the best URL whose host matches `site`
-    AND whose path matches the property-URL shape.
+def _street_name_token(address: str) -> str | None:
+    """Pull the FIRST street-name word from a free-text address.
 
-    When `require_street_num` is given, we ONLY accept URLs whose path
-    contains that exact street number. Returns None if no result has it.
+    For '5509 Casco Walk Austin TX 78724' -> 'casco'.
+    Skips the leading number, returns the next non-direction-non-type word.
+    """
+    if not address:
+        return None
+    s = re.sub(r"[,]+", " ", address).lower()
+    tokens = s.split()
+    if not tokens:
+        return None
+    # Drop leading street number(s)
+    start = 0
+    while start < len(tokens) and re.fullmatch(r"\d+", tokens[start]):
+        start += 1
+    # Optionally drop leading direction tokens (N, S, E, W, North, etc.)
+    directions = {"n", "s", "e", "w", "ne", "nw", "se", "sw",
+                  "north", "south", "east", "west",
+                  "northeast", "northwest", "southeast", "southwest"}
+    while start < len(tokens) and tokens[start] in directions:
+        start += 1
+    if start >= len(tokens):
+        return None
+    name = tokens[start]
+    # If first token is itself a street type (rare), skip it
+    if name in _STREET_TYPE_TOKENS and start + 1 < len(tokens):
+        name = tokens[start + 1]
+    # Strip trailing punctuation (keep alnum)
+    name = re.sub(r"[^a-z0-9]+", "", name)
+    return name or None
+
+
+def _brave_first_url(query: str, site: str, *,
+                     require_street_num: str | None = None,
+                     require_street_name: str | None = None) -> str | None:
+    """Run brave-search; return only a URL whose path matches BOTH the
+    street number AND the street-name token (when supplied).
+
     Brave's index for new-build / off-MLS listings is patchy: a search for
-    '5509 Casco Walk' may rank '5501 Casco Walk' (the indexed neighbor)
-    above the actual 5509. Returning the neighbor would silently mislead
-    the user. None is honest; the caller surfaces "no exact match".
+    '5509 Casco Walk' often ranks '5501 Casco Walk' (an indexed neighbor)
+    or even '5509 Hibiscus Dr' (different street, same number) above the
+    actual 5509 Casco Walk. Returning either would silently mislead the
+    user. Requiring number AND street-name is the pragmatic fix without a
+    real reverse-geocoder.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     brave = os.path.normpath(os.path.join(here, "..", "..", "brave-search", "search.sh"))
@@ -91,15 +132,21 @@ def _brave_first_url(query: str, site: str, *, require_street_num: str | None = 
             continue
         if require_street_num and not _url_has_street_num(url, require_street_num):
             continue
+        if require_street_name and not _url_has_street_name(url, require_street_name):
+            continue
         return url
     return None
 
 
 def _url_has_street_num(url: str, num: str) -> bool:
-    """True if the URL's address slug contains `<num>-` as a street-number
-    boundary. Avoids false positives like '5501' matching '5'.
-    """
+    """True if URL contains `/<num>-` as a street-number boundary."""
     return bool(re.search(rf"/{re.escape(num)}-", url))
+
+
+def _url_has_street_name(url: str, name: str) -> bool:
+    """True if URL's address slug contains the street-name token (case-
+    insensitive). Looks for '-<name>-' or '-<name>$' (end of segment)."""
+    return bool(re.search(rf"-{re.escape(name)}(?:-|/|$)", url, re.IGNORECASE))
 
 
 def _is_redfin_property_url(s: str) -> bool:
