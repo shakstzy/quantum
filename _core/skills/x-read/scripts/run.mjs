@@ -135,72 +135,63 @@ async function openSessionAndCapture({ navUrl, expectedOp }) {
 }
 
 async function whoami() {
-  // X 2026 doesn't fire a single "Viewer" op anymore. We use a different
-  // strategy: parse the user's rest_id from the `twid` cookie (deterministic;
-  // cookie format is `u%3D<rest_id>`), then walk any response that contains
-  // user_results.result for our rest_id. HomeTimeline always fires on /home
-  // and embeds users.
+  // Read rest_id from the twid cookie (deterministic), then navigate to
+  // /i/user/<rest_id> which X redirects to the profile URL and fires
+  // UserByScreenName for us. That response contains the full user object
+  // including the new core.{screen_name,name} fields.
   const { launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker } = await import('./browser.mjs');
   const ctx = await launchContext({ visible: false });
   try {
-    if (DEBUG) process.stderr.write('[x-read] navigating to https://x.com/home\n');
-    await ctx.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const cookies = await ctx.context.cookies();
+    const twid = cookies.find(c => c.name === 'twid');
+    if (!twid) {
+      die(`[x-read] twid cookie missing; not authenticated. Run \`login\`.`, 3);
+    }
+    const m = decodeURIComponent(twid.value).match(/u=(\d+)/);
+    const restId = m ? m[1] : null;
+    if (!restId) {
+      die(`[x-read] could not parse rest_id from twid cookie. Run \`login\`.`, 3);
+    }
+    if (DEBUG) process.stderr.write(`[x-read] restId=${restId}; navigating to /i/user/${restId}\n`);
+    await ctx.page.goto(`https://x.com/i/user/${restId}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await new Promise(r => setTimeout(r, 1500));
     const url = ctx.page.url();
     if (isAuthChallengeUrl(url)) {
       tripBreaker(`challenge-url:${url}`);
-      die(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`login\` after verifying the account.`, 3);
+      die(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`login\` after verifying.`, 3);
     }
     const dom = await detectDomChallenge(ctx.page).catch(() => null);
     if (dom) {
       tripBreaker(`dom-challenge:${dom}`);
       die(`[x-read] DOM challenge detected (${dom}). Breaker tripped.`, 3);
     }
-    // Parse twid cookie for rest_id.
-    const cookies = await ctx.context.cookies();
-    const twid = cookies.find(c => c.name === 'twid');
-    let restId = null;
-    if (twid) {
-      const m = decodeURIComponent(twid.value).match(/u=(\d+)/);
-      if (m) restId = m[1];
-    }
-    // Wait for HomeTimeline (fires reliably on /home in 2026 X).
-    const resp = await ctx.waitForResponse('HomeTimeline', { timeoutMs: 30000 });
+    const resp = await ctx.waitForResponse('UserByScreenName', { timeoutMs: 30000 });
     if (!resp) {
       const ops = ctx.listCapturedResponses();
-      die(`[x-read] no HomeTimeline response within 30s. Captured: [${ops.join(', ')}]. Session may need re-login.`, 3);
+      die(`[x-read] no UserByScreenName response within 30s. Captured: [${ops.join(', ')}]. Session may need re-login.`, 3);
     }
     if (resp.status === 401 || resp.status === 403) {
-      tripBreaker(`response-${resp.status}:HomeTimeline`);
-      die(`[x-read] ${resp.status} from HomeTimeline; session expired. Run \`login\`.`, 3);
+      tripBreaker(`response-${resp.status}:UserByScreenName`);
+      die(`[x-read] ${resp.status} from UserByScreenName. Run \`login\`.`, 3);
     }
-    // Walk response recursively for our user.
-    const ourUser = restId ? findUserByRestId(resp.body, restId) : null;
-    if (!ourUser) {
-      // Fall back to just rest_id from cookie.
-      console.log(JSON.stringify({
-        ok: !!restId,
-        id: restId,
-        handle: null,
-        name: null,
-        note: restId
-          ? 'authenticated (rest_id from twid cookie); could not locate own user object in HomeTimeline response. Run `thread <url>` against any tweet to confirm session works end-to-end.'
-          : 'twid cookie missing; not authenticated. Run `login`.'
-      }, null, 2));
-      if (!restId) process.exitCode = 3;
-      return;
+    const user = resp.body?.data?.user?.result || null;
+    if (!user) {
+      die(`[x-read] UserByScreenName payload had no data.user.result; X shape may have changed.`, 5);
     }
-    const userCore = ourUser?.core || {};
-    const legacy = ourUser?.legacy || {};
+    const userCore = user.core || {};
+    const legacy = user.legacy || {};
     console.log(JSON.stringify({
       ok: true,
-      id: ourUser?.rest_id || restId,
+      id: user.rest_id || restId,
       handle: userCore.screen_name || legacy.screen_name || null,
       name: userCore.name || legacy.name || null,
-      verified: !!(ourUser?.is_blue_verified ?? legacy.verified),
-      premium: !!ourUser?.is_blue_verified,
+      verified: !!(user.is_blue_verified ?? legacy.verified),
+      premium: !!user.is_blue_verified,
       followers: legacy.followers_count ?? null,
-      following: legacy.friends_count ?? null
+      following: legacy.friends_count ?? null,
+      tweets: legacy.statuses_count ?? null,
+      bio: legacy.description ?? null,
+      profile_url: ctx.page.url()
     }, null, 2));
   } finally { await ctx.close(); }
 }

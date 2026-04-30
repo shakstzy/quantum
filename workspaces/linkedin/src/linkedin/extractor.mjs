@@ -133,8 +133,21 @@ export class LinkedInExtractor {
       throw new Error(`getConversation: did not land on /messaging/thread/, got ${this.page.url()}`);
     }
     await scrollMainScrollable(this.page, { attempts: 3, pauseMs: 500, position: "top" });
-    const text = await this.getMainText();
-    return { url: this.page.url(), sections: { conversation: text } };
+    // Scope to the active thread pane only. LinkedIn's messaging page uses the
+    // scaffold-layout__list-detail pattern: .scaffold-layout__list is the inbox sidebar,
+    // .scaffold-layout__detail is the active thread. Inside detail, .msg-thread is the
+    // actual conversation container. Fall back to .scaffold-layout__detail then to main.
+    const text = await this.page.evaluate(() => {
+      const candidates = [".msg-thread", ".scaffold-layout__detail", "main"];
+      for (const sel of candidates) {
+        const el = document.querySelector(sel);
+        if (el && (el.innerText || "").trim().length > 0) {
+          return { selector: sel, text: el.innerText };
+        }
+      }
+      return { selector: null, text: document.body?.innerText || "" };
+    }).catch(() => ({ selector: null, text: "" }));
+    return { url: this.page.url(), sections: { conversation: text.text }, scopedTo: text.selector };
   }
 
   async _searchInboxAndOpen(username) {
