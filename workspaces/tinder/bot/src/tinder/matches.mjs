@@ -69,12 +69,14 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
   await scanForHalts(page);
 
   // CODEX-CRIT-1 + GEMINI-CRIT-R2-2: assert URL settled on the right matchId.
-  // Use pathname-segment match (split('/').pop()) instead of .endsWith() so that
-  // (a) prefix collisions can't pass (matchId="abc" wouldn't match ".../xyzabc")
-  // and (b) trailing query params or fragments don't false-fail.
+  // Pathname-segment match — strip trailing slash before split (else last segment
+  // is "" and we'd false-fail on URLs like .../messages/abc/).
   const settledUrl = page.url();
   let lastSegment = "";
-  try { lastSegment = new URL(settledUrl).pathname.split("/").pop() || ""; } catch { lastSegment = ""; }
+  try {
+    const path = new URL(settledUrl).pathname.replace(/\/+$/, "");
+    lastSegment = path.split("/").pop() || "";
+  } catch { lastSegment = ""; }
   if (lastSegment !== matchId) {
     console.error(`scrapeThread: thread_redirect for ${matchId}, last_segment=${lastSegment}, url=${settledUrl}; skipping`);
     return { matchId, slug: null, messages_total: 0, messages_new: 0, url_redirected: true };

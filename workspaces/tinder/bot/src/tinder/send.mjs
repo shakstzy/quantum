@@ -24,10 +24,13 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   await scanForHalts(page);
 
   // C3 GUARD + GEMINI-CRIT-R2-2: verify URL settled. Pathname-segment match
-  // (not endsWith) to avoid prefix collisions and tolerate query params.
+  // (not endsWith); strip trailing slash before split.
   const settledUrl = page.url();
   let settledLast = "";
-  try { settledLast = new URL(settledUrl).pathname.split("/").pop() || ""; } catch {}
+  try {
+    const path = new URL(settledUrl).pathname.replace(/\/+$/, "");
+    settledLast = path.split("/").pop() || "";
+  } catch {}
   if (settledLast !== matchId) {
     throw new Error(`thread_redirect: expected matchId=${matchId}, last_segment=${settledLast}, url=${settledUrl}. Aborting send to prevent wrong-recipient.`);
   }
@@ -57,7 +60,10 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   // C3 GUARD + GEMINI-CRIT-R2-2: re-check URL right before send.
   const finalUrl = page.url();
   let finalLast = "";
-  try { finalLast = new URL(finalUrl).pathname.split("/").pop() || ""; } catch {}
+  try {
+    const path = new URL(finalUrl).pathname.replace(/\/+$/, "");
+    finalLast = path.split("/").pop() || "";
+  } catch {}
   if (finalLast !== matchId) {
     throw new Error(`thread_drift: url changed to ${finalUrl} during compose. Not sending.`);
   }

@@ -98,23 +98,20 @@ export async function readThreadProfile(page) {
     // Photos count
     out.photos_count = pane.querySelectorAll("img[src*='gotinder.com']").length;
 
-    // GEMINI-CRIT-R2-1: walk up only as far as the next-H2 boundary. Old approach
-    // (walk until text > heading+2) overshot for short content (e.g. bio="Hi"),
-    // climbing all the way to the pane root and capturing every section's text.
-    // New approach: the section container is the highest ancestor that does NOT
-    // contain ANY OTHER H2. This gives us the H2's exclusive subtree.
+    // GEMINI-CRIT-R2-1: walk up only as far as the next-H2 boundary. The section
+    // container is the highest ancestor whose subtree contains ONLY this H2 (no
+    // other H2 siblings within). Edge case: if H2 is direct child of pane, we
+    // never enter the loop body to update `last`, so cap `last` to h2 itself
+    // rather than ever returning the pane root (which would capture everything).
     const h2List = [...pane.querySelectorAll("h2")];
     function sectionContainerFor(h2) {
       let cur = h2;
-      let last = h2.parentElement;
+      let last = (h2.parentElement && h2.parentElement !== pane) ? h2.parentElement : h2;
       while (cur.parentElement) {
         const parent = cur.parentElement;
         if (parent === pane) break;
         const otherH2s = [...parent.querySelectorAll("h2")].filter(o => o !== h2);
-        if (otherH2s.length > 0) {
-          // parent contains another section's heading — stop, return previous
-          return last;
-        }
+        if (otherH2s.length > 0) return last;
         last = parent;
         cur = parent;
       }
