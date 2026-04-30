@@ -53,19 +53,23 @@ export async function readVisibleProfile(page) {
   return { name, age: null, distance_mi: null, bio: null };
 }
 
-// Reads the profile pane from the open thread page. The pane is rendered into
-// the DOM eagerly on desktop (no click needed). Returns a structured snapshot.
-// All fields default to null/empty arrays/0 — caller can diff against stored
-// markdown profile to detect changes.
+// Reads the profile pane from the open thread page using DOM-level section
+// walking (not text-slicing). Robust to bios/dream-jobs that contain literal
+// section headings like "Basics is overrated".
 //
-// Verified against fixture probe 2026-04-30: container=[class*='profileContent'],
-// name+age concatenated in H1, distance as "<n> miles away" in body text,
-// Basics/Lifestyle as H3 (heading, value) pairs, About me / Looking for / dream job
-// as H2 sections with text content following.
+// Pane structure (verified 2026-04-30):
+//   profileContent
+//     ├─ H1 "<Name><age>"   (concatenated)
+//     ├─ section{ H2 "Looking for" }   followed by sibling div with "<emoji><value>"
+//     ├─ section{ H2 "About me" }      followed by sibling div with bio text
+//     ├─ section{ H2 "Essentials" }    contains "Photo Verified" + "<n> miles away"
+//     ├─ section{ H2 "My dream job is…" } followed by sibling div with text
+//     ├─ section{ H2 "Basics" }        H3 children + value siblings
+//     ├─ section{ H2 "Lifestyle" }     H3 children + value siblings
+//     └─ section{ H2 "Interests" }     pill list
 export async function readThreadProfile(page) {
-  // Wait briefly for pane to populate (thread navigation already triggered domcontentloaded)
   try { await page.waitForSelector("[class*='profileContent']", { timeout: 6000 }); }
-  catch { /* fall through; evaluate will return empty profile */ }
+  catch { /* fall through; evaluate returns empty profile */ }
 
   return await page.evaluate(() => {
     const empty = {
@@ -74,127 +78,136 @@ export async function readThreadProfile(page) {
       basics: {}, lifestyle: {}, interests: [],
       photos_count: 0,
     };
-    const pane = document.querySelector("[class*='profileContent']");
+    // CODEX-CRIT-2: scope to the most-visible profileContent (skips stale/hidden
+    // panes). On desktop there's only one rendered, but be defensive.
+    const allPanes = [...document.querySelectorAll("[class*='profileContent']")];
+    const pane = allPanes.find(p => p.offsetParent !== null) || allPanes[0];
     if (!pane) return empty;
     const out = { ...empty };
 
-    // Name + age from H1 ("Zoe25" -> name="Zoe", age=25)
+    // Name + age from H1
     const h1 = pane.querySelector("h1");
     if (h1) {
       const t = (h1.textContent || "").trim();
-      const m = t.match(/^([A-Za-z][A-Za-z\s'\-]*?)(\d{2,3})$/);
+      // CODEX-MIN-19: Unicode-aware
+      const m = t.match(/^(\p{L}[\p{L}\s'\-]*?)(\d{2,3})$/u);
       if (m) { out.name = m[1].trim(); out.age = parseInt(m[2], 10); }
       else out.name = t || null;
     }
 
-    // Distance — appears literally as "<n> miles away" or "<n> mi away"
-    const fullText = pane.textContent || "";
-    const dm = fullText.match(/(\d+)\s*(?:miles?|mi)\s*away/i);
-    if (dm) out.distance_mi = parseInt(dm[1], 10);
-
-    // Photos: imgs sourced from gotinder image hosts
+    // Photos count
     out.photos_count = pane.querySelectorAll("img[src*='gotinder.com']").length;
 
-    // H3 (heading, value) pairs — Basics + Lifestyle live here.
-    // Strategy: each H3's parent contains "<heading><value>" concatenated.
-    // Determine which H2 section the H3 belongs to by walking up to find the
-    // nearest preceding H2 in DOM order.
-    const h2s = [...pane.querySelectorAll("h2")];
-    const h2Texts = h2s.map(h => (h.textContent || "").trim().toLowerCase());
-    const sectionOfH3 = (h3) => {
-      // walk previous siblings + ancestors looking for a preceding H2
-      const all = [...pane.querySelectorAll("h1, h2, h3")];
-      const idx = all.indexOf(h3);
-      for (let i = idx - 1; i >= 0; i--) {
-        if (all[i].tagName === "H2") return (all[i].textContent || "").trim().toLowerCase();
+    // CODEX-IMP-8+9: build a section model by walking H2s. Each H2 lives inside a
+    // wrapper div; the section CONTENT is the H2's wrapper's container's other
+    // children (typically the H2's grandparent). Concretely: H2 is in
+    // <div class="D(f) Ai(c) Mb(...)"> (the heading row), and the section's value
+    // children are siblings of THAT row inside the section's outer container.
+    const h2List = [...pane.querySelectorAll("h2")];
+    // For each H2, find its "section container" = the nearest ancestor that ALSO
+    // contains the value content. We walk up until the ancestor's text length
+    // exceeds the heading's text length by a meaningful margin.
+    function sectionContainerFor(h2) {
+      const headingText = (h2.textContent || "").trim();
+      let cur = h2.parentElement;
+      for (let i = 0; i < 6 && cur; i++) {
+        const t = (cur.textContent || "").trim();
+        // The section container has more text than just the heading.
+        if (t.length > headingText.length + 2) return cur;
+        cur = cur.parentElement;
       }
-      return null;
-    };
-    for (const h3 of pane.querySelectorAll("h3")) {
-      const heading = (h3.textContent || "").trim();
-      if (!heading) continue;
-      const parent = h3.parentElement;
-      const parentText = (parent?.textContent || "").trim();
-      const value = parentText.replace(heading, "").trim();
-      if (!value) continue;
-      const section = sectionOfH3(h3);
-      const bucket = section === "basics" ? out.basics : section === "lifestyle" ? out.lifestyle : null;
-      if (bucket) bucket[heading] = value;
+      return h2.parentElement || null;
+    }
+    function sectionContentText(h2) {
+      const container = sectionContainerFor(h2);
+      if (!container) return null;
+      // Clone container, remove the heading, return remaining text trimmed.
+      const clone = container.cloneNode(true);
+      // Remove ALL h2/h3 inside (heading + sub-headings)
+      // For Basics/Lifestyle we don't want this — those are extracted differently.
+      // For About me / Looking for / Dream job: container has h2 + value div only.
+      const headings = clone.querySelectorAll("h2, h3");
+      for (const h of headings) h.remove();
+      return (clone.textContent || "").trim().replace(/\s+/g, " ") || null;
+    }
+    // Helpers for distance (lives inside Essentials section)
+    function distanceFromSection(h2) {
+      const container = sectionContainerFor(h2);
+      if (!container) return null;
+      const m = (container.textContent || "").match(/(\d+)\s*(?:miles?|mi)\s*away/i);
+      return m ? parseInt(m[1], 10) : null;
+    }
+    function findH2(label) {
+      const norm = label.toLowerCase();
+      return h2List.find(h => (h.textContent || "").trim().toLowerCase() === norm) || null;
     }
 
-    // H2-section text extractors. For "About me", "Looking for", "My dream job is…",
-    // the content is a sibling block after the heading section. We slice the pane's
-    // full text by the known section boundaries and extract.
-    // Using indexOf on textContent — robust to className changes.
-    const slicedSection = (label, nextLabels) => {
-      const start = fullText.indexOf(label);
-      if (start < 0) return null;
-      let end = fullText.length;
-      for (const next of nextLabels) {
-        const i = fullText.indexOf(next, start + label.length);
-        if (i >= 0 && i < end) end = i;
+    // Looking for: typically prefixed with an emoji
+    const lookingFor = findH2("Looking for");
+    if (lookingFor) {
+      let v = sectionContentText(lookingFor);
+      if (v) v = v.replace(/^[\u{1F300}-\u{1FAFF}☀-➿\u{2700}-\u{27BF}]+\s*/u, "").trim();
+      out.looking_for = v || null;
+    }
+
+    // About me (bio)
+    const aboutMe = findH2("About me");
+    if (aboutMe) {
+      const v = sectionContentText(aboutMe);
+      // CODEX-IMP-18: strip badge prefixes if Tinder includes them at the start.
+      // Use specific known badges only — never strip generic words.
+      const cleaned = v ? v.replace(/^(Photo Verified|Verified|Selected|Boost)\s*/i, "").trim() : null;
+      out.bio = cleaned || null;
+    }
+
+    // Dream job (Essentials sub-question)
+    const dreamJob = findH2("My dream job is…");
+    if (dreamJob) {
+      out.dream_job = sectionContentText(dreamJob);
+    }
+
+    // Distance lives inside Essentials section
+    const essentials = findH2("Essentials");
+    if (essentials) out.distance_mi = distanceFromSection(essentials);
+    if (out.distance_mi == null) {
+      // Fallback: anywhere in pane
+      const m = (pane.textContent || "").match(/(\d+)\s*(?:miles?|mi)\s*away/i);
+      if (m) out.distance_mi = parseInt(m[1], 10);
+    }
+
+    // Basics + Lifestyle: H3 (heading, value) pairs scoped to their H2 section
+    function extractH3Pairs(h2) {
+      const container = sectionContainerFor(h2);
+      if (!container) return {};
+      const out = {};
+      for (const h3 of container.querySelectorAll("h3")) {
+        const heading = (h3.textContent || "").trim();
+        if (!heading) continue;
+        const parent = h3.parentElement;
+        const parentText = (parent?.textContent || "").trim();
+        const value = parentText.replace(heading, "").trim();
+        if (value) out[heading] = value;
       }
-      const raw = fullText.slice(start + label.length, end).trim();
-      // Normalize whitespace
-      return raw.replace(/\s+/g, " ").trim() || null;
-    };
-    // Order of section labels as they appear in the pane.
-    // "Essentials" appears between "About me" and "My dream job is…".
-    const sectionOrder = [
-      "Looking for", "About me", "Essentials", "My dream job is…",
-      "Basics", "Lifestyle", "Interests", "Frequently Used",
-    ];
-    const after = (label) => sectionOrder.slice(sectionOrder.indexOf(label) + 1);
+      return out;
+    }
+    const basics = findH2("Basics");
+    if (basics) out.basics = extractH3Pairs(basics);
+    const lifestyle = findH2("Lifestyle");
+    if (lifestyle) out.lifestyle = extractH3Pairs(lifestyle);
 
-    out.looking_for = slicedSection("Looking for", after("Looking for"));
-    out.bio = slicedSection("About me", after("About me"));
-    out.dream_job = slicedSection("My dream job is…", after("My dream job is…"));
-
-    // Strip leading non-text artifacts. "Looking for" content can have a leading emoji
-    // (e.g. "💘Long-term partner"). Remove single leading emoji-like char if present.
-    const stripLeadingEmoji = (s) => s ? s.replace(/^[\u{1F300}-\u{1FAFF}☀-➿\u{2700}-\u{27BF}]+/u, "").trim() : s;
-    out.looking_for = stripLeadingEmoji(out.looking_for);
-
-    // Bio cleanup — "Essentials" stripped; sometimes pane includes "Photo Verified" before bio.
-    if (out.bio && /^Photo Verified/i.test(out.bio)) out.bio = out.bio.replace(/^Photo Verified\s*/i, "").trim() || null;
-
-    // Interests: between "Interests" and "Frequently Used" (or end). Comma/list separated.
-    const interestsRaw = slicedSection("Interests", after("Interests"));
-    if (interestsRaw) {
-      // Tinder concatenates interests with no separator. Walk the DOM under Interests
-      // h2's section container instead — much more reliable than text splitting.
-      const intH2 = h2s.find(h => /^interests$/i.test((h.textContent || "").trim()));
-      if (intH2) {
-        // Find the closest ancestor that contains the interests pills
-        let cur = intH2.parentElement;
-        // Walk forward looking for sibling div containing many short text nodes
-        let interestsContainer = null;
-        for (let lvl = 0; lvl < 5 && cur; lvl++) {
-          // Look at next sibling
-          let sib = cur.nextElementSibling;
-          while (sib) {
-            if (sib.querySelectorAll("span, div").length > 2) { interestsContainer = sib; break; }
-            sib = sib.nextElementSibling;
-          }
-          if (interestsContainer) break;
-          cur = cur.parentElement;
-        }
-        if (interestsContainer) {
-          // Each interest is a leaf element with 1-30 chars of text
-          const leaves = [...interestsContainer.querySelectorAll("span, div")]
-            .filter(el => el.children.length === 0)
-            .map(el => (el.textContent || "").trim())
-            .filter(t => t && t.length <= 40)
-            .filter(t => !/^[\d\s]*$/.test(t));
-          // Dedupe in order
-          const seen = new Set();
-          for (const t of leaves) { if (!seen.has(t)) { seen.add(t); out.interests.push(t); } }
-        } else {
-          // Fallback: split the raw interests text on capital letter boundaries
-          // (Tinder pills concatenated like "ConcertsMindfulnessRoad Trips").
-          const tokens = interestsRaw.match(/[A-Z][a-z]+(?:\s[A-Z][a-z]+)*(?:\s(?:TV\s?shows?))?/g) || [];
-          out.interests = tokens.slice(0, 20);
-        }
+    // Interests: walk the section container, find leaf-text descendants
+    const interestsH2 = findH2("Interests");
+    if (interestsH2) {
+      const container = sectionContainerFor(interestsH2);
+      if (container) {
+        const headingText = (interestsH2.textContent || "").trim();
+        const leaves = [...container.querySelectorAll("span, div, li")]
+          .filter(el => el.children.length === 0)
+          .map(el => (el.textContent || "").trim())
+          .filter(t => t && t.length <= 40 && t !== headingText)
+          .filter(t => !/^[\d\s]*$/.test(t));
+        const seen = new Set();
+        for (const t of leaves) { if (!seen.has(t)) { seen.add(t); out.interests.push(t); } }
       }
     }
 
