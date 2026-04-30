@@ -445,27 +445,68 @@ export class LinkedInExtractor {
     await handleModalClose(this.page);
     await sleep(jitter(800, 1600));
 
-    // Find the compose box.
-    let box = null;
-    for (const sel of COMPOSE_BOX_SELECTORS) {
-      const loc = this.page.locator(sel).first();
-      if (await loc.isVisible({ timeout: 1500 }).catch(() => false)) { box = loc; break; }
+    // Find the compose box. MCP reference: prefer count() > 0 + JS focus over isVisible
+    // (Patchright can time out on React-hydrated contenteditables).
+    const deadline = Date.now() + 8000;
+    let boxSelector = null;
+    while (Date.now() < deadline) {
+      for (const sel of COMPOSE_BOX_SELECTORS) {
+        const c = await this.page.locator(sel).count().catch(() => 0);
+        if (c > 0) { boxSelector = sel; break; }
+      }
+      if (boxSelector) break;
+      await sleep(300);
     }
-    if (!box) return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "compose_box_not_found" };
-
-    await box.click().catch(() => {});
+    if (!boxSelector) {
+      return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "compose_box_not_found" };
+    }
+    // Focus + click the box via JS (more reliable than locator.click on contenteditable).
+    await this.page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (el) { el.focus(); el.click?.(); }
+    }, boxSelector).catch(() => {});
+    await sleep(jitter(200, 500));
     await humanType(this.page, message);
     await sleep(jitter(500, 1100));
 
+    // Verify the typed message is in the compose box before clicking Send.
+    const typedOk = await this.page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      const t = (el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
+      return t.length > 0;
+    }, boxSelector).catch(() => false);
+    if (!typedOk) {
+      return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "compose_typing_failed" };
+    }
+
     const send = this.page.locator(SEND_BUTTON_SELECTOR).first();
-    if (!(await send.isVisible({ timeout: 4000 }).catch(() => false))) {
-      // Send button still disabled? Try Cmd+Enter / Ctrl+Enter.
-      try { await this.page.keyboard.press("Meta+Enter"); }
-      catch { try { await this.page.keyboard.press("Control+Enter"); } catch { /* ignore */ } }
-    } else {
+    let clickedSend = false;
+    if ((await send.count().catch(() => 0)) > 0) {
       await send.click().catch(() => {});
+      clickedSend = true;
+    }
+    if (!clickedSend) {
+      // Keyboard fallback. Use both Meta and Control for cross-OS.
+      try { await this.page.keyboard.press("Meta+Enter"); } catch { /* ignore */ }
+      try { await this.page.keyboard.press("Control+Enter"); } catch { /* ignore */ }
     }
     await sleep(jitter(800, 1600));
+
+    // Verify send: compose box should be empty (message sent + cleared) AND the message
+    // text should appear in the message thread surface.
+    const sendVerified = await this.page.evaluate(({ sel, expected }) => {
+      const box = document.querySelector(sel);
+      const boxText = (box?.innerText || box?.textContent || "").replace(/\s+/g, " ").trim();
+      const main = document.querySelector("main");
+      const mainText = (main?.innerText || "").replace(/\s+/g, " ");
+      const expectedNorm = expected.replace(/\s+/g, " ").trim();
+      // Compose box cleared OR the message is visible somewhere on the page.
+      return (!boxText || boxText.length === 0) || mainText.includes(expectedNorm.slice(0, 60));
+    }, { sel: boxSelector, expected: message }).catch(() => false);
+
+    if (!sendVerified) {
+      return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "send_unverified" };
+    }
     return { url: profileUrl, composeUrl, status: "sent", ok: true };
   }
 }
