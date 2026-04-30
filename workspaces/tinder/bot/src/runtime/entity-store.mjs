@@ -110,10 +110,91 @@ function profileToMarkdown(profile) {
   if (profile.age != null) lines.push(`- age: ${profile.age}`);
   if (profile.distance_mi != null) lines.push(`- distance_mi: ${profile.distance_mi}`);
   if (profile.bio) lines.push(`- bio: ${JSON.stringify(profile.bio)}`);
+  if (profile.looking_for) lines.push(`- looking_for: ${JSON.stringify(profile.looking_for)}`);
+  if (profile.dream_job) lines.push(`- dream_job: ${JSON.stringify(profile.dream_job)}`);
   if (profile.schools?.length) lines.push(`- schools: ${profile.schools.join(", ")}`);
   if (profile.jobs?.length) lines.push(`- jobs: ${profile.jobs.join(", ")}`);
   if (profile.interests?.length) lines.push(`- interests: ${profile.interests.join(", ")}`);
+  if (profile.basics && Object.keys(profile.basics).length) {
+    for (const [k, v] of Object.entries(profile.basics)) lines.push(`- basics.${k.toLowerCase().replace(/\s+/g, "_")}: ${JSON.stringify(v)}`);
+  }
+  if (profile.lifestyle && Object.keys(profile.lifestyle).length) {
+    for (const [k, v] of Object.entries(profile.lifestyle)) lines.push(`- lifestyle.${k.toLowerCase().replace(/\s+/g, "_")}: ${JSON.stringify(v)}`);
+  }
   if (profile.photos_count != null) lines.push(`- photos_count: ${profile.photos_count}`);
+  return lines.join("\n");
+}
+
+// Parse the markdown ## Profile section back into a structured object so we can
+// diff against a freshly-scraped profile.
+export function profileFromMarkdown(markdown) {
+  const out = { basics: {}, lifestyle: {}, interests: [] };
+  if (!markdown) return out;
+  for (const line of markdown.split("\n")) {
+    const m = line.match(/^- ([\w.]+):\s*(.*)$/);
+    if (!m) continue;
+    const [, k, vRaw] = m;
+    let v = vRaw;
+    if (v.startsWith('"') && v.endsWith('"')) {
+      try { v = JSON.parse(v); } catch {}
+    } else if (/^-?\d+$/.test(v)) v = parseInt(v, 10);
+    if (k === "age" || k === "distance_mi" || k === "photos_count") out[k] = typeof v === "number" ? v : parseInt(v, 10);
+    else if (k === "bio" || k === "looking_for" || k === "dream_job") out[k] = v;
+    else if (k === "schools" || k === "jobs") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
+    else if (k === "interests") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
+    else if (k.startsWith("basics.")) out.basics[k.slice(7)] = v;
+    else if (k.startsWith("lifestyle.")) out.lifestyle[k.slice(10)] = v;
+  }
+  return out;
+}
+
+// Computes a diff between previously-stored profile (from markdown) and a freshly
+// scraped one. Returns null if no changes worth flagging, else { added, removed,
+// changed } with field paths and from/to values.
+export function computeProfileDiff(oldP, newP) {
+  if (!oldP || Object.keys(oldP).length === 0) return null; // first scrape, no diff
+  const diff = { added: {}, removed: {}, changed: {} };
+  const scalarKeys = ["age", "distance_mi", "bio", "looking_for", "dream_job", "photos_count"];
+  for (const k of scalarKeys) {
+    const a = oldP[k] ?? null;
+    const b = newP[k] ?? null;
+    if (a === b) continue;
+    if (a == null && b != null) diff.added[k] = b;
+    else if (a != null && b == null) diff.removed[k] = a;
+    else diff.changed[k] = { from: a, to: b };
+  }
+  // Basics + lifestyle are nested objects
+  for (const grp of ["basics", "lifestyle"]) {
+    const oldG = oldP[grp] || {};
+    const newG = newP[grp] || {};
+    for (const k of Object.keys(newG)) {
+      if (!(k in oldG)) diff.added[`${grp}.${k}`] = newG[k];
+      else if (oldG[k] !== newG[k]) diff.changed[`${grp}.${k}`] = { from: oldG[k], to: newG[k] };
+    }
+    for (const k of Object.keys(oldG)) {
+      if (!(k in newG)) diff.removed[`${grp}.${k}`] = oldG[k];
+    }
+  }
+  // Interests: compute set diffs
+  const oldI = new Set(oldP.interests || []);
+  const newI = new Set(newP.interests || []);
+  const addedI = [...newI].filter(x => !oldI.has(x));
+  const removedI = [...oldI].filter(x => !newI.has(x));
+  if (addedI.length) diff.added.interests = addedI;
+  if (removedI.length) diff.removed.interests = removedI;
+
+  if (Object.keys(diff.added).length === 0 && Object.keys(diff.removed).length === 0 && Object.keys(diff.changed).length === 0) {
+    return null;
+  }
+  return diff;
+}
+
+function diffToMarkdown(diff, ts) {
+  if (!diff) return null;
+  const lines = [`### ${ts}`];
+  for (const [k, v] of Object.entries(diff.added)) lines.push(`- added ${k}: ${JSON.stringify(v)}`);
+  for (const [k, v] of Object.entries(diff.removed)) lines.push(`- removed ${k}: ${JSON.stringify(v)}`);
+  for (const [k, { from, to }] of Object.entries(diff.changed)) lines.push(`- changed ${k}: ${JSON.stringify(from)} -> ${JSON.stringify(to)}`);
   return lines.join("\n");
 }
 
@@ -140,15 +221,18 @@ export async function loadEntity(slug) {
   return { slug, path, meta, ...sections };
 }
 
-export async function saveEntity({ slug, meta, profile, conversation, outbound }) {
+export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "" }) {
   const path = resolve(RAW_DIR, `${slug}.md`);
-  await writeFile(path, renderEntity({ meta, profile, conversation, outbound }));
+  await writeFile(path, renderEntity({ meta, profile, conversation, outbound, profile_changes }));
   return path;
 }
 
 export async function upsertMatch({ matchId, personId, name, source = "tinder", profile = {}, phone = null }) {
   const existing = await findEntityByMatchId(matchId);
-  const city = await resolveCity({ phone, distance_mi: profile.distance_mi });
+  // Conversation-based location wins over distance — we scan existing conversation
+  // (if any) for "I'm in <city>" mentions before falling back to phone/distance.
+  const conversation = existing ? (await loadEntity(existing.slug)).conversation : null;
+  const city = await resolveCity({ phone, distance_mi: profile.distance_mi, conversation });
   const now = new Date().toISOString();
 
   if (existing) {
@@ -170,12 +254,21 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
       slug = newSlug;
     }
 
+    // Compute profile diff vs previously-stored profile.
+    const oldProfile = profileFromMarkdown(ent.profile);
+    const diff = computeProfileDiff(oldProfile, profile);
+    const diffMd = diffToMarkdown(diff, now);
+    const newChanges = diffMd
+      ? [ent.profile_changes, diffMd].filter(Boolean).join("\n\n")
+      : ent.profile_changes;
+
     const meta = {
       ...ent.meta,
       slug,
       city,
       phone: phone ?? ent.meta.phone ?? null,
       last_scrape: now,
+      ...(diff ? { last_profile_diff: now } : {}),
       previous_slugs: previous,
     };
     await saveEntity({
@@ -184,8 +277,9 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
       profile: profileToMarkdown(profile),
       conversation: ent.conversation,
       outbound: ent.outbound,
+      profile_changes: newChanges,
     });
-    return { slug, created: false, renamed: oldCity !== city };
+    return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
   }
 
   const existingSlugs = await listExistingSlugs();
@@ -210,8 +304,9 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
     profile: profileToMarkdown(profile),
     conversation: "",
     outbound: "",
+    profile_changes: "",
   });
-  return { slug, created: true, renamed: false };
+  return { slug, created: true, renamed: false, profile_diff: null };
 }
 
 function fmtMessageLine({ direction, text, ts }) {
@@ -258,7 +353,7 @@ export async function appendMessages(slug, messages) {
     last_activity: lastTs || new Date().toISOString(),
     phone: ent.meta.phone || extractedPhone || null,
   };
-  await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound });
+  await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
   return { added: newLines.length, phone_discovered: extractedPhone };
 }
 
@@ -267,13 +362,13 @@ export async function appendOutboundEvent(slug, { event, mode, intent, draftId, 
   const t = new Date().toISOString().slice(0, 16).replace("T", " ");
   const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
   const outbound = [ent.outbound, line].filter(Boolean).join("\n");
-  await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound });
+  await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
 }
 
 export async function setStatus(slug, status) {
   const ent = await loadEntity(slug);
   const meta = { ...ent.meta, status };
-  await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound });
+  await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
 }
 
 export async function listAllEntities() {

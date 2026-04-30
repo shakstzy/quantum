@@ -102,7 +102,10 @@ export async function launchContext({ force = false, visible = false } = {}) {
   try { await chmod(PROFILE_DIR, 0o700); } catch (_) {}
   acquirePidfile();
 
-  let context;
+  // Wrap entire setup in a single try/catch so any throw between
+  // launchPersistentContext and CDP wiring releases the pidfile and tears
+  // down a partially-constructed context. Round 2 finding IMP-13.
+  let context, page, cdp;
   try {
     const windowArgs = visible
       ? []
@@ -124,18 +127,17 @@ export async function launchContext({ force = false, visible = false } = {}) {
         ...windowArgs
       ]
     });
+
+    page = await context.newPage();
+    for (const p of context.pages()) {
+      if (p !== page && p.url() === 'about:blank') {
+        try { await p.close(); } catch (_) {}
+      }
+    }
   } catch (e) {
+    if (context) { try { await context.close(); } catch (_) {} }
     releasePidfile();
     throw e;
-  }
-
-  // Open a fresh page rather than reusing about:blank; init scripts and
-  // cookie state apply more reliably to new pages (Playwright #28692).
-  const page = await context.newPage();
-  for (const p of context.pages()) {
-    if (p !== page && p.url() === 'about:blank') {
-      try { await p.close(); } catch (_) {}
-    }
   }
 
   // Template map (request side) and response map (body side), both keyed by

@@ -1,16 +1,19 @@
 """Cross-source dedupe for Redfin + Zillow homes.
 
-Strategy (per Codex review): primary key when present (zpid for Zillow,
-property_id for Redfin), then lat/lng proximity within 25 m AND beds/sqft
-sanity (beds equal, sqft within 5%).
+Match precedence:
+  1. Same-source primary key (zpid for Zillow, property_id for Redfin).
+  2. Lat/lng proximity <=25m AND beds match AND sqft within 5%.
+  3. Normalized address+zip AND beds match AND sqft within 5%
+     (the missing-coords fallback - Zillow sometimes drops coords on
+     unmapped/off-market listings).
 
-Why not address-only: condos and unit numbers collide ("Unit #" vs "#"),
-spelling variants ("Saint" vs "St"), and abbreviations. Geocode + size is
-the more durable join key.
+Address normalization handles common collision sources: case, "Unit"/"Apt"/
+"#" suffixes, "St"/"Saint", "Ave"/"Avenue", whitespace, punctuation.
 """
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable
 
 
@@ -35,23 +38,87 @@ def _primary_key(home: dict) -> tuple | None:
     return None
 
 
-def _approx_match(a: dict, b: dict, *, max_meters: float = 25.0) -> bool:
-    la, lna = a.get("lat"), a.get("lng")
-    lb, lnb = b.get("lat"), b.get("lng")
-    if la is None or lna is None or lb is None or lnb is None:
-        return False
-    if haversine_m(la, lna, lb, lnb) > max_meters:
-        return False
-    # Beds must match (when both have beds populated).
+_STREET_TYPE_NORMS = {
+    "saint": "st", "street": "st", "avenue": "ave", "boulevard": "blvd",
+    "road": "rd", "drive": "dr", "lane": "ln", "court": "ct",
+    "place": "pl", "circle": "cir", "trail": "trl", "highway": "hwy",
+    "parkway": "pkwy", "terrace": "ter", "way": "way", "cove": "cv",
+    "loop": "loop", "square": "sq",
+}
+_DIRECTION_NORMS = {
+    "north": "n", "south": "s", "east": "e", "west": "w",
+    "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
+}
+_STRIP_UNIT_RE = re.compile(
+    r"\b(unit|apt|apartment|ste|suite|#)\s*\S+\b", re.IGNORECASE
+)
+
+
+def normalize_address(addr: str | None) -> str:
+    """Normalize a street address for cross-source matching.
+
+    - lowercase
+    - strip 'Unit X' / 'Apt 4B' / '#3' suffixes
+    - canonicalize street types ('Saint'->'st', 'Avenue'->'ave')
+    - canonicalize directions ('North'->'n')
+    - collapse whitespace and strip punctuation
+    """
+    if not addr:
+        return ""
+    s = addr.lower()
+    s = _STRIP_UNIT_RE.sub("", s)
+    s = re.sub(r"[.,]", " ", s)
+    tokens = []
+    for t in s.split():
+        t = t.strip()
+        if not t:
+            continue
+        if t in _STREET_TYPE_NORMS:
+            t = _STREET_TYPE_NORMS[t]
+        if t in _DIRECTION_NORMS:
+            t = _DIRECTION_NORMS[t]
+        tokens.append(t)
+    return " ".join(tokens)
+
+
+def _beds_compatible(a: dict, b: dict) -> bool:
     if a.get("beds") is not None and b.get("beds") is not None:
-        if a["beds"] != b["beds"]:
-            return False
-    # Sqft within 5%.
+        return a["beds"] == b["beds"]
+    return True  # one missing -> don't reject on beds alone
+
+
+def _sqft_compatible(a: dict, b: dict, *, tolerance: float = 0.05) -> bool:
     sa, sb = a.get("sqft"), b.get("sqft")
     if sa and sb:
-        diff = abs(sa - sb) / max(sa, sb)
-        if diff > 0.05:
-            return False
+        return abs(sa - sb) / max(sa, sb) <= tolerance
+    return True
+
+
+def _approx_match(a: dict, b: dict, *, max_meters: float = 25.0) -> bool:
+    """True if a and b look like the same house.
+
+    Tries geo-match first (lat/lng both present + within max_meters).
+    Falls back to normalized address + zip when one side lacks coords -
+    important because Zillow drops coords on some unmapped listings.
+    Both paths require beds + sqft sanity.
+    """
+    if not (_beds_compatible(a, b) and _sqft_compatible(a, b)):
+        return False
+    la, lna = a.get("lat"), a.get("lng")
+    lb, lnb = b.get("lat"), b.get("lng")
+    if la is not None and lna is not None and lb is not None and lnb is not None:
+        if haversine_m(la, lna, lb, lnb) <= max_meters:
+            return True
+        # Both sides have coords but they're far apart -> definitely not same house.
+        return False
+    # Missing coords on at least one side; fall back to address-norm + zip.
+    addr_a = normalize_address(a.get("address"))
+    addr_b = normalize_address(b.get("address"))
+    if not addr_a or not addr_b or addr_a != addr_b:
+        return False
+    za, zb = a.get("zip"), b.get("zip")
+    if za and zb and za != zb:
+        return False
     return True
 
 
