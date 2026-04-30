@@ -258,9 +258,13 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             if not r.get("prop_id"):
                 skipped += 1
                 continue
-            full, norm = _norm_situs(r.get("situs_street_prefix"),
-                                      r.get("situs_street"),
-                                      r.get("situs_street_suffix"))
+            full, norm = _norm_situs(
+                r.get("situs_num"),
+                r.get("situs_street_prefix"),
+                r.get("situs_street"),
+                r.get("situs_street_suffix"),
+                r.get("situs_unit"),
+            )
             land = (r.get("land_hstd_val") or 0) + (r.get("land_non_hstd_val") or 0)
             imprv = (r.get("imprv_hstd_val") or 0) + (r.get("imprv_non_hstd_val") or 0)
             market = land + imprv if (land or imprv) else None
@@ -275,6 +279,8 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             cd["mail_addr_city"].append(r.get("mail_addr_city"))
             cd["mail_addr_state"].append(r.get("mail_addr_state"))
             cd["mail_addr_zip"].append(r.get("mail_addr_zip"))
+            cd["situs_num"].append(r.get("situs_num"))
+            cd["situs_unit"].append(r.get("situs_unit"))
             cd["situs_street_prefix"].append(r.get("situs_street_prefix"))
             cd["situs_street"].append(r.get("situs_street"))
             cd["situs_street_suffix"].append(r.get("situs_street_suffix"))
@@ -284,9 +290,12 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
             cd["situs_norm"].append(norm)
             cd["legal_desc"].append(r.get("legal_desc"))
             cd["legal_acreage"].append(r.get("legal_acreage"))
+            cd["land_acres_sum"].append(r.get("land_acres_sum"))
             cd["subdivision_cd"].append(r.get("subdivision_cd"))
             cd["block"].append(r.get("block"))
             cd["tract_or_lot"].append(r.get("tract_or_lot"))
+            cd["dba"].append(r.get("dba"))
+            cd["market_value_pretax"].append(r.get("market_value_pretax"))
             cd["land_hstd_val"].append(r.get("land_hstd_val"))
             cd["land_non_hstd_val"].append(r.get("land_non_hstd_val"))
             cd["imprv_hstd_val"].append(r.get("imprv_hstd_val"))
@@ -418,33 +427,51 @@ def ingest_land_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
 # ---------------------------------------------------------------------------
 
 def _norm_query(s: str) -> str:
-    """Normalize a free-form address query the same way we normalize situs."""
-    norm = "".join(c.lower() if c.isalnum() else " " for c in s)
-    return " ".join(norm.split())
+    """Normalize a free-form address query the same way we normalize situs.
+
+    Directionals contract: 'south' -> 's'. Common street-type abbreviations
+    are stripped to make the LIKE more permissive (boulevard vs blvd).
+    """
+    bare = "".join(c.lower() if c.isalnum() else " " for c in s)
+    tokens = [_DIRECTIONAL_CONTRACT.get(t, t) for t in bare.split()]
+    return " ".join(tokens)
 
 
 def lookup_address(con: duckdb.DuckDBPyConnection, address: str, *,
                    county: str | None = None, val_year: int | None = None) -> list[dict]:
     """Find parcels matching an address.
 
-    Strategy: extract any 5-digit zip from the input and match by
-    situs_zip + LIKE on the street component. Returns a small list of
-    candidates (typically 1, sometimes 2-3 for condo/duplex).
+    Strategy:
+    1. Extract zip5 if present (strict equality on situs_zip).
+    2. Build a token-AND LIKE filter on situs_norm: every token in the
+       query must appear in situs_norm. This handles "1219 South Lamar Blvd"
+       -> tokens [1219, s, lamar, blvd] -> situs_norm "1219 s lamar blvd".
+    3. Drop tokens that look like a city or state name (TX/Texas/Austin/etc.)
+       since situs_norm only has the street.
     """
     import re
     # Find 5-digit zip
     zip_m = re.search(r"\b(\d{5})\b", address)
     zip5 = zip_m.group(1) if zip_m else None
 
-    # Strip zip + state + city for street-only normalization
-    no_state = re.sub(r",?\s+(TX|TEXAS)\s*", " ", address, flags=re.I)
-    no_zip = re.sub(r"\b\d{5}\b", "", no_state)
-    parts = [p.strip() for p in no_zip.split(",") if p.strip()]
-    street_part = parts[0] if parts else address
-    street_norm = _norm_query(street_part)
+    # Strip zip + state for tokenization
+    s = re.sub(r",?\s+(TX|TEXAS)\s*", " ", address, flags=re.I)
+    s = re.sub(r"\b\d{5}\b", "", s)
+    norm_q = _norm_query(s)
 
-    where = ["situs_norm LIKE ?"]
-    params: list = [f"%{street_norm}%"]
+    # Drop common city/county words; the index-side normalize doesn't include them
+    drop = {"austin", "lakeway", "pflugerville", "leander", "manor", "round", "rock",
+            "westlake", "bee", "cave", "buda", "kyle", "spicewood", "cedar", "park",
+            "travis", "county"}
+    tokens = [t for t in norm_q.split() if t and t not in drop]
+
+    where = []
+    params: list = []
+    for t in tokens:
+        where.append("situs_norm LIKE ?")
+        params.append(f"%{t}%")
+    if not where:
+        return []
     if zip5:
         where.append("situs_zip = ?")
         params.append(zip5)
@@ -454,9 +481,6 @@ def lookup_address(con: duckdb.DuckDBPyConnection, address: str, *,
     if val_year:
         where.append("val_year = ?")
         params.append(val_year)
-    else:
-        # Default to most recent year per (county, prop_id)
-        pass
 
     sql = f"""
         WITH ranked AS (
