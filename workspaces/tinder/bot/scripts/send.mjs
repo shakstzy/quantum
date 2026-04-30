@@ -11,6 +11,7 @@ import { logSession } from "../src/runtime/logger.mjs";
 import { sleep, jitter } from "../src/runtime/humanize.mjs";
 
 const drainAll = process.argv.includes("--all");
+const dryRun = process.argv.includes("--dry-run");
 await abortIfHalted();
 
 const queue = await listQueue("approved");
@@ -32,14 +33,18 @@ try {
   for (const item of todo) {
     const text = extractDraftedReply(item.body);
     try {
-      await sendMessage(page, {
+      const result = await sendMessage(page, {
         matchId: item.meta.match_id,
         text,
         mode: item.meta.mode,
         draftId: item.meta.draft_id,
         lintScore: item.meta.lint_pass ? 1 : 0,
+        dryRun,
       });
-      await moveQueueItem(item.id, "approved", item.meta.mode === "auto" ? "auto-sent" : "sent");
+      // CODEX-IMP: in dry-run, do NOT move the queue item — leave for inspection.
+      if (!dryRun && result?.sent) {
+        await moveQueueItem(item.id, "approved", item.meta.mode === "auto" ? "auto-sent" : "sent");
+      }
       sent += 1;
       if (drainAll && todo.length > 1) await sleep(jitter(45000, 180000));
     } catch (e) {
@@ -48,8 +53,8 @@ try {
       if (/HALTED/.test(e.message)) break;
     }
   }
-  await logSession({ event: "send", sent, failed, queue_remaining: queue.length - sent });
-  console.log(JSON.stringify({ sent, failed, queue_remaining: queue.length - sent }));
+  await logSession({ event: "send", sent, failed, queue_remaining: queue.length - sent, dryRun });
+  console.log(JSON.stringify({ sent, failed, queue_remaining: queue.length - sent, dryRun }));
 } finally {
   await ctx.close();
 }
