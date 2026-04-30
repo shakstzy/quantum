@@ -28,14 +28,19 @@ try {
   await ensureLoggedIn(page);
   const ext = new LinkedInExtractor(page);
 
-  // Pending-ceiling enforcement (P0 fix from codex r2). FAIL CLOSED: if we can't count,
-  // we don't send. Override with --skip-ceiling for dev only.
+  // Pending-ceiling enforcement (P0 fix from codex r2 + r3). FAIL CLOSED: if we can't count
+  // OR if remaining-after-withdraw is still above the ceiling, we don't send. Override with
+  // --skip-ceiling for dev only. Surfaces the BLOCKED message in dry-run too (Codex r3 P2).
   if (!args["skip-ceiling"]) {
-    const ceiling = await enforcePendingCeiling(page, ext, { dryRun });
+    const { gate: gateFn, record: recordFn } = await import("../../src/policy/rate-limits.mjs");
+    const ceiling = await enforcePendingCeiling(page, ext, { dryRun, gate: gateFn, record: recordFn });
     console.log(`[pending-ceiling] ${JSON.stringify(ceiling)}`);
-    if (!ceiling.ok && !dryRun) {
-      console.error(`[send-connect] BLOCKED: ${ceiling.reason ?? ceiling.action}`);
-      process.exit(2);
+    if (!ceiling.ok) {
+      const reason = ceiling.reason ?? ceiling.action;
+      console.error(`[send-connect] BLOCKED by pending-ceiling: ${reason}`);
+      if (!dryRun) process.exit(2);
+      // dry-run: surface the block but exit cleanly (no live action attempted)
+      process.exit(0);
     }
   }
 
