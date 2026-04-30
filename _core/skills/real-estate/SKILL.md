@@ -196,6 +196,35 @@ Both sites server-render their React pages and embed every API response into the
 - `virtual_tour_url`, `open_houses`, `mortgage_rates`, `tour_eligibility`
 - `photos[]`, `photo_count`
 
+## `lookup` output shape
+
+`re lookup "<address>"` resolves the address against Brave (`site:redfin.com` and `site:zillow.com`), then pulls each property page. Output:
+
+```jsonc
+{
+  "input_address": "9400 Shady Oaks Dr Austin TX 78729",
+  "redfin_url": "https://www.redfin.com/TX/Austin/.../home/...",
+  "zillow_url": "https://www.zillow.com/homedetails/.../<zpid>_zpid/",
+  "address_match": "ok" | "mismatch" | "single_source" | "neither_resolved",
+  "redfin": { /* full Redfin property dict, see below */ },
+  "zillow": { /* full Zillow property dict, see below */ },
+  "merged": {
+    "address": "...",
+    "price": ...,
+    "redfin_estimate": ..., "zestimate": ...,
+    "beds": ..., "baths": ..., "sqft": ...,
+    "photos": [...],         // longer list wins
+    "open_houses": [...],    // union
+    "_conflicts": [           // fields where the two sources disagree
+      {"field": "price", "redfin": 575000, "zillow": 435800},
+      ...
+    ]
+  }
+}
+```
+
+`address_match: "mismatch"` means Brave returned different houses for Redfin vs Zillow (the exact street number you typed wasn't indexed). Common when the home isn't currently listed; check `_conflicts` and the per-source URLs to see what each side returned.
+
 ## Cross-source dedupe
 
 The `dedupe` module merges Redfin + Zillow result sets, keying on `zpid` /
