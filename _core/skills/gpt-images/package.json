@@ -1,0 +1,16 @@
+{
+  "name": "gpt-images-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QUANTUM skill: generate images on chatgpt.com via patchright (uses Adithya's ChatGPT plan, no API key)",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome"
+  }
+}
