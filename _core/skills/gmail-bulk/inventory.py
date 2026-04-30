@@ -30,14 +30,6 @@ def _service(email: str):
     return build("gmail", "v1", credentials=get_creds(email), cache_discovery=False)
 
 
-def _thread_svc(email: str):
-    svc = getattr(_TLS, "svc", None)
-    if svc is None:
-        svc = _service(email)
-        _TLS.svc = svc
-    return svc
-
-
 def _list_ids(svc, query: str, limit: int | None = None):
     ids = []
     page_token = None
@@ -61,7 +53,8 @@ def _extract_headers(payload: dict) -> dict:
 
 
 def _get_metadata(email: str, mid: str, retries: int = 3):
-    svc = _thread_svc(email)
+    svc = getattr(_TLS, "svc", None) or _service(email)
+    _TLS.svc = svc
     for attempt in range(retries):
         try:
             return svc.users().messages().get(
