@@ -392,42 +392,43 @@ export class LinkedInExtractor {
     await this.navigateTo(url);
     if (dryRun) return { url, status: "would_withdraw", ok: true, dryRun: true };
 
-    // Find the withdraw control. As of 2026-04-30 LinkedIn uses an <a> tag with
-    // aria-label="Withdraw invitation sent to <Name>" — NOT a <button> with aria-label "Withdraw".
-    // We anchor on the withdraw <a> and walk up to find the matching /in/<username>/ link.
-    // Capture the exact aria-label so we can verify the withdraw worked (uniquely-identifying).
+    // Find the withdraw control matching THIS specific user.
+    // BUG FIX (2026-04-30, after live test mis-withdrew Dylan Patel when asked for evanchi):
+    // The previous walk-up "find any trigger that shares an ancestor with /in/<u>/" was wrong —
+    // <main> shares an ancestor with every card on the page, so it picked an arbitrary trigger.
+    // Correct logic: start from the SPECIFIC /in/<u>/ link, walk up at most ~6 levels to find a
+    // withdraw trigger that's a DESCENDANT of that near-ancestor (i.e., in the SAME card).
     const rowFound = await this.page.evaluate((u) => {
-      // Strategy 1 (NEW): a[aria-label^="Withdraw invitation"]
-      const withdrawAnchors = Array.from(document.querySelectorAll('a[aria-label^="Withdraw invitation"]'));
-      for (const trigger of withdrawAnchors) {
-        let node = trigger;
-        for (let depth = 0; depth < 15 && node; depth++) {
-          const inLink = node.querySelector(`a[href*="/in/${u}/"]`);
-          if (inLink) {
-            const triggerAria = trigger.getAttribute("aria-label") || "";
-            trigger.click();
-            return { ok: true, strategy: "a_aria_withdraw", triggerAria };
+      const inLinks = Array.from(document.querySelectorAll(`a[href*="/in/${u}/"]`));
+      const MAX_CARD_DEPTH = 6;
+      for (const inLink of inLinks) {
+        let ancestor = inLink.parentElement;
+        for (let depth = 0; depth < MAX_CARD_DEPTH && ancestor; depth++) {
+          // Strategy 1 (NEW): aria-label^="Withdraw invitation"
+          const ariaTrig = ancestor.querySelector('a[aria-label^="Withdraw invitation"], button[aria-label^="Withdraw invitation"]');
+          if (ariaTrig) {
+            const triggerAria = ariaTrig.getAttribute("aria-label") || "";
+            ariaTrig.click();
+            return { ok: true, strategy: "near_ancestor_aria", triggerAria, depth };
           }
-          node = node.parentElement;
+          // Strategy 2 (LEGACY): button[aria-label*="Withdraw"] or innerText "Withdraw"
+          const legacyBtn = ancestor.querySelector('button[aria-label*="Withdraw"]');
+          if (legacyBtn) {
+            const triggerAria = legacyBtn.getAttribute("aria-label") || "";
+            legacyBtn.click();
+            return { ok: true, strategy: "near_ancestor_legacy", triggerAria, depth };
+          }
+          const textBtn = Array.from(ancestor.querySelectorAll("button, a"))
+            .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
+          if (textBtn) {
+            textBtn.click();
+            return { ok: true, strategy: "near_ancestor_innertext", triggerAria: null, depth };
+          }
+          ancestor = ancestor.parentElement;
         }
       }
-      // Strategy 2 (LEGACY): button[aria-label*="Withdraw"]
-      const cards = Array.from(document.querySelectorAll('main li, main [data-test-id*="invitation"]'));
-      for (const card of cards) {
-        const a = card.querySelector(`a[href*="/in/${u}/"]`);
-        if (!a) continue;
-        const ariaBtn = card.querySelector('button[aria-label*="Withdraw"]');
-        if (ariaBtn) {
-          const triggerAria = ariaBtn.getAttribute("aria-label") || "";
-          ariaBtn.click();
-          return { ok: true, strategy: "button_aria_legacy", triggerAria };
-        }
-        const textBtn = Array.from(card.querySelectorAll("button, a"))
-          .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
-        if (textBtn) { textBtn.click(); return { ok: true, strategy: "innertext_match", triggerAria: null }; }
-      }
-      return { ok: false };
-    }, username).catch(() => ({ ok: false }));
+      return { ok: false, reason: `no_withdraw_trigger_within_${MAX_CARD_DEPTH}_levels_of_${u}_link` };
+    }, username).catch(() => ({ ok: false, reason: "evaluate_threw" }));
     if (!rowFound || !rowFound.ok) return { url, status: "not_found", ok: false };
     // Confirm in modal (Withdraw confirmation). LinkedIn renders the modal as <dialog open>
     // with three buttons: [Dismiss-X, Cancel, Withdraw]. The Withdraw button has
