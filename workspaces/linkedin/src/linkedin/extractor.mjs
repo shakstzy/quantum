@@ -79,14 +79,34 @@ export class LinkedInExtractor {
   }
 
   async _extractInboxThreadRefs(limit) {
+    // Prefer structural href anchors (a[href*="/messaging/thread/"]). Fall back
+    // to clicking the listitem (LinkedIn's sidebar uses JS click handlers in
+    // some variants) and reading location.href change.
     return await this.page.evaluate(async ({ limit }) => {
-      const labels = Array.from(document.querySelectorAll('main label[aria-label^="Select conversation"]'));
       const out = [];
+      const anchors = Array.from(document.querySelectorAll('main a[href*="/messaging/thread/"]'));
+      for (const a of anchors.slice(0, limit)) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(/\/messaging\/thread\/([^/?#]+)/);
+        if (!m) continue;
+        const li = a.closest("li");
+        const labelEl = li?.querySelector('label[aria-label^="Select conversation"]');
+        const ariaName = (labelEl?.getAttribute("aria-label") || "").replace(/^Select conversation with\s*/i, "").trim();
+        const fallbackName = (a.innerText || a.textContent || "").trim().split("\n")[0] || null;
+        out.push({ name: ariaName || fallbackName, threadId: m[1], url: `/messaging/thread/${m[1]}/` });
+      }
+      if (out.length > 0) return out;
+      // Fallback: legacy listitem-click strategy.
+      const labels = Array.from(document.querySelectorAll('main label[aria-label^="Select conversation"]'));
       for (let i = 0; i < Math.min(labels.length, limit); i++) {
         const label = labels[i];
         const aria = label.getAttribute("aria-label") || "";
         const name = aria.replace(/^Select conversation with\s*/i, "").trim();
-        const click = label.closest("li")?.querySelector('div[class*="listitem__link"]');
+        const li = label.closest("li");
+        // Try multiple click targets in order of preference.
+        const click = li?.querySelector('a[href*="/messaging/thread/"]')
+          || li?.querySelector('div[class*="listitem__link"]')
+          || li;
         if (!click) continue;
         click.click();
         await new Promise((r) => setTimeout(r, 300));
@@ -103,9 +123,14 @@ export class LinkedInExtractor {
     if (threadId) {
       await this.navigateTo(`https://www.linkedin.com/messaging/thread/${encodeURIComponent(threadId)}/`);
     } else {
-      // Open via inbox search by username.
       await this.navigateTo("https://www.linkedin.com/messaging/");
-      await this._searchInboxAndOpen(username);
+      const opened = await this._searchInboxAndOpen(username);
+      if (!opened) {
+        throw new Error(`getConversation: thread not found for username=${username}`);
+      }
+    }
+    if (!/\/messaging\/thread\//.test(this.page.url())) {
+      throw new Error(`getConversation: did not land on /messaging/thread/, got ${this.page.url()}`);
     }
     await scrollMainScrollable(this.page, { attempts: 3, pauseMs: 500, position: "top" });
     const text = await this.getMainText();
@@ -120,7 +145,20 @@ export class LinkedInExtractor {
       await sleep(800);
       await this.page.keyboard.press("Enter");
       await sleep(1500);
-    } catch { /* fall through */ }
+      // Click the first conversation thread anchor that matches.
+      const opened = await this.page.evaluate((u) => {
+        const a = Array.from(document.querySelectorAll('main a[href*="/messaging/thread/"]'))
+          .find((el) => (el.innerText || "").toLowerCase().includes(u.toLowerCase())) || document.querySelector('main a[href*="/messaging/thread/"]');
+        if (!a) return false;
+        a.click();
+        return true;
+      }, username).catch(() => false);
+      if (!opened) return false;
+      await sleep(1500);
+    } catch { return false; }
+    // Verify we landed on a thread URL.
+    if (!/\/messaging\/thread\//.test(this.page.url())) return false;
+    return true;
   }
 
   // People search.
@@ -210,6 +248,11 @@ export class LinkedInExtractor {
     if (state === "self_profile" || state === "already_connected" || state === "pending") {
       return { url, status: state, ok: false, reason: `state=${state}` };
     }
+    // Per MCP reference: deeplink only valid for connectable / follow_only.
+    // unavailable means the action area didn't expose any actionable signal.
+    if (state !== "connectable" && state !== "follow_only" && state !== "incoming_request") {
+      return { url, status: "connect_unavailable", ok: false, reason: `state=${state}` };
+    }
     if (dryRun) {
       return { url, status: `would_${state === "incoming_request" ? "accept" : "connect"}`, ok: true, dryRun: true, state };
     }
@@ -234,8 +277,8 @@ export class LinkedInExtractor {
     await detectRateLimit(this.page);
     const submitted = await this._submitInviteDialog(note);
     if (!submitted.ok) return { url, status: "send_failed", ok: false, reason: submitted.reason };
-    // Verify by re-reading the profile.
-    await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    // Verify with a real navigateTo (waits for main, dismisses modals) before re-reading signals.
+    await this.navigateTo(url);
     const verifiedSignals = await readActionSignals(this.page);
     const stillConnectable = verifiedSignals.hasInvite;
     return {
@@ -337,13 +380,18 @@ export class LinkedInExtractor {
     if (dryRun) return { url, status: "would_withdraw", ok: true, dryRun: true };
 
     // Find a card whose href contains /in/<username>/, then click its Withdraw button.
+    // NOTE: ":has-text(...)" is a Playwright pseudo-selector — invalid in raw querySelector.
+    // We use innerText matching instead.
     const rowFound = await this.page.evaluate((u) => {
       const cards = Array.from(document.querySelectorAll('main li, main [data-test-id*="invitation"]'));
       for (const card of cards) {
         const a = card.querySelector(`a[href*="/in/${u}/"]`);
         if (!a) continue;
-        const btn = card.querySelector('button[aria-label*="Withdraw"], button:has-text("Withdraw")');
-        if (btn) { btn.click(); return true; }
+        const ariaBtn = card.querySelector('button[aria-label*="Withdraw"]');
+        if (ariaBtn) { ariaBtn.click(); return true; }
+        const textBtn = Array.from(card.querySelectorAll("button"))
+          .find((b) => /withdraw/i.test(b.innerText || ""));
+        if (textBtn) { textBtn.click(); return true; }
       }
       return false;
     }, username).catch(() => false);
@@ -370,8 +418,11 @@ export class LinkedInExtractor {
 
     let composeUrl;
     if (urn) {
-      const encoded = encodeURIComponent(`urn:li:fsd_profile:${urn.replace(/^urn:li:fsd_profile:/, "")}`);
-      composeUrl = `https://www.linkedin.com/messaging/compose/?profileUrn=${encoded}&recipient=${encodeURIComponent(urn)}&screenContext=NON_SELF_PROFILE_VIEW&interop=msgOverlay`;
+      // Normalize once to the bare profile id so both query params agree.
+      // MCP reference: profileUrn = encoded "urn:li:fsd_profile:<id>", recipient = bare <id>.
+      const profileId = urn.replace(/^urn:li:fsd_profile:/, "");
+      const encodedProfileUrn = encodeURIComponent(`urn:li:fsd_profile:${profileId}`);
+      composeUrl = `https://www.linkedin.com/messaging/compose/?profileUrn=${encodedProfileUrn}&recipient=${encodeURIComponent(profileId)}&screenContext=NON_SELF_PROFILE_VIEW&interop=msgOverlay`;
     } else {
       // Fall back to the visible Message-button anchor's href (1st-degree only).
       const href = await this.page.evaluate((sel) => {
