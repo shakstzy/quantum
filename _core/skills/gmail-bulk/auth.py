@@ -16,7 +16,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 SKILL_DIR = Path(__file__).resolve().parent
 CLIENT_PATH = SKILL_DIR / "credentials" / "oauth_client.json"
 KEYRING_SERVICE = "quantum-gmail-bulk"
-SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://mail.google.com/",  # required for messages.batchDelete (permanent deletion)
+]
 
 
 def _load_client_config():

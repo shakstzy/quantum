@@ -44,8 +44,8 @@ def _migrate(con: duckdb.DuckDBPyConnection) -> None:
         CREATE TABLE IF NOT EXISTS parcels (
             county VARCHAR NOT NULL,
             prop_id VARCHAR NOT NULL,
+            prop_type_cd VARCHAR NOT NULL,
             val_year INTEGER NOT NULL,
-            prop_type_cd VARCHAR,
             geo_id VARCHAR,
             owner_name VARCHAR,
             mail_addr_line1 VARCHAR,
@@ -89,7 +89,7 @@ def _migrate(con: duckdb.DuckDBPyConnection) -> None:
             ex_exempt BOOLEAN,
             arb_protest BOOLEAN,
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (county, prop_id, val_year)
+            PRIMARY KEY (county, prop_id, prop_type_cd, val_year)
         )
     """)
     con.execute("""
@@ -166,39 +166,44 @@ def _stream_records(path: Path, fields: list, county: str, batch: int = 50_000) 
         yield rows
 
 
+# Property types we keep. Everything else (Personal property, Mineral, Auto)
+# is excluded — Travis CAD files them under the same prop_id as the real
+# parcel they sit on, which would collide on PK and pollute lookups.
+KEEP_PROP_TYPES = {"R", "MH"}
+
+
 def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                    *, val_year: int, progress: bool = True) -> int:
-    """Ingest PROP.TXT for a county/year. Replaces existing slice for that key."""
-    con.execute("DELETE FROM parcels WHERE county = ? AND val_year = ?", [county, val_year])
-    cols = [
-        "county", "prop_id", "val_year", "prop_type_cd", "geo_id", "owner_name",
-        "mail_addr_line1", "mail_addr_line2", "mail_addr_city", "mail_addr_state", "mail_addr_zip",
-        "situs_street_prefix", "situs_street", "situs_street_suffix", "situs_city", "situs_zip",
-        "situs_full", "situs_norm",
-        "legal_desc", "legal_acreage", "subdivision_cd", "block", "tract_or_lot",
-        "land_hstd_val", "land_non_hstd_val", "imprv_hstd_val", "imprv_non_hstd_val",
-        "ag_use_val", "ag_market_val", "market_val", "appraised_val", "ten_pct_cap", "assessed_val",
-        "deed_book_id", "deed_book_page", "deed_dt", "mortgage_co_name",
-        "hs_exempt", "ov65_exempt", "dp_exempt",
-        "dv1_exempt", "dv2_exempt", "dv3_exempt", "dv4_exempt", "ex_exempt",
-        "arb_protest",
-    ]
-    placeholders = ", ".join("?" for _ in cols)
-    sql = f"INSERT INTO parcels ({', '.join(cols)}) VALUES ({placeholders})"
+    """Ingest PROP.TXT for a county/year via DuckDB Appender (fast path).
 
+    Replaces existing slice for that (county, val_year). Filters to real
+    property only - skips P (business equipment), MN (mineral), AU (auto).
+    """
+    con.execute("DELETE FROM parcels WHERE county = ? AND val_year = ?", [county, val_year])
+
+    # Column order MUST match table declaration; Appender is positional.
+    appender = con.appender("parcels")
     total = 0
+    skipped = 0
     t0 = time.monotonic()
-    for batch in _stream_records(path, PROPERTY_FIELDS, county, batch=20_000):
-        params: list[list] = []
+    for batch in _stream_records(path, PROPERTY_FIELDS, county, batch=100_000):
         for r in batch:
-            # Real properties only — skip personal property, mineral, etc. unless you want them
-            full, norm = _norm_situs(r.get("situs_street_prefix"), r.get("situs_street"), r.get("situs_street_suffix"))
+            ptc = (r.get("prop_type_cd") or "").upper()
+            if ptc not in KEEP_PROP_TYPES:
+                skipped += 1
+                continue
+            if not r.get("prop_id"):
+                skipped += 1
+                continue
+            full, norm = _norm_situs(r.get("situs_street_prefix"),
+                                      r.get("situs_street"),
+                                      r.get("situs_street_suffix"))
             land = (r.get("land_hstd_val") or 0) + (r.get("land_non_hstd_val") or 0)
             imprv = (r.get("imprv_hstd_val") or 0) + (r.get("imprv_non_hstd_val") or 0)
             market = land + imprv if (land or imprv) else None
-            params.append([
-                r.get("county"), r.get("prop_id"), r.get("val_year") or val_year,
-                r.get("prop_type_cd"), r.get("geo_id"), r.get("owner_name"),
+            appender.append_row(
+                r.get("county"), str(r.get("prop_id")), ptc, r.get("val_year") or val_year,
+                r.get("geo_id"), r.get("owner_name"),
                 r.get("mail_addr_line1"), r.get("mail_addr_line2"), r.get("mail_addr_city"),
                 r.get("mail_addr_state"), r.get("mail_addr_zip"),
                 r.get("situs_street_prefix"), r.get("situs_street"), r.get("situs_street_suffix"),
@@ -215,15 +220,21 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                 r.get("hs_exempt"), r.get("ov65_exempt"), r.get("dp_exempt"),
                 r.get("dv1_exempt"), r.get("dv2_exempt"), r.get("dv3_exempt"), r.get("dv4_exempt"),
                 r.get("ex_exempt"), r.get("arb_protest"),
-            ])
-        # Drop rows missing prop_id (corrupt lines)
-        params = [p for p in params if p[1]]
-        con.executemany(sql, params)
-        total += len(params)
+                None,  # ingested_at takes default at flush; Appender requires every column
+            )
+            total += 1
         if progress:
             elapsed = time.monotonic() - t0
-            sys.stderr.write(f"\r  parcels: {total:,} rows  ({total/elapsed:.0f}/s)")
+            sys.stderr.write(
+                f"\r  parcels: {total:,} kept / {skipped:,} skipped  ({total/elapsed:.0f}/s)"
+            )
             sys.stderr.flush()
+    appender.close()
+    # Backfill ingested_at on the rows we just inserted
+    con.execute(
+        "UPDATE parcels SET ingested_at = CURRENT_TIMESTAMP WHERE ingested_at IS NULL AND county = ? AND val_year = ?",
+        [county, val_year],
+    )
     if progress:
         sys.stderr.write("\n")
     return total
@@ -232,29 +243,27 @@ def ingest_parcels(con: duckdb.DuckDBPyConnection, path: Path, county: str,
 def ingest_improvements_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                                 *, val_year: int, progress: bool = True) -> int:
     con.execute("DELETE FROM improvements_detail WHERE county = ? AND val_year = ?", [county, val_year])
-    cols = [
-        "county", "prop_id", "val_year", "imprv_id", "imprv_det_id",
-        "imprv_det_type_cd", "imprv_det_type_desc", "imprv_det_class_cd",
-        "yr_built", "depreciation_yr", "imprv_det_area", "imprv_det_val",
-    ]
-    sql = f"INSERT INTO improvements_detail ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
-
+    appender = con.appender("improvements_detail")
     total = 0
     t0 = time.monotonic()
-    for batch in _stream_records(path, IMPROVEMENT_DETAIL_FIELDS, county, batch=50_000):
-        params = [[
-            r.get("county"), r.get("prop_id"), r.get("val_year") or val_year,
-            r.get("imprv_id"), r.get("imprv_det_id"),
-            r.get("imprv_det_type_cd"), r.get("imprv_det_type_desc"), r.get("imprv_det_class_cd"),
-            r.get("yr_built"), r.get("depreciation_yr"),
-            r.get("imprv_det_area"), r.get("imprv_det_val"),
-        ] for r in batch if r.get("prop_id")]
-        con.executemany(sql, params)
-        total += len(params)
+    for batch in _stream_records(path, IMPROVEMENT_DETAIL_FIELDS, county, batch=200_000):
+        for r in batch:
+            if not r.get("prop_id"):
+                continue
+            appender.append_row(
+                r.get("county"), str(r.get("prop_id")), r.get("val_year") or val_year,
+                str(r.get("imprv_id")) if r.get("imprv_id") is not None else None,
+                str(r.get("imprv_det_id")) if r.get("imprv_det_id") is not None else None,
+                r.get("imprv_det_type_cd"), r.get("imprv_det_type_desc"), r.get("imprv_det_class_cd"),
+                r.get("yr_built"), r.get("depreciation_yr"),
+                r.get("imprv_det_area"), r.get("imprv_det_val"),
+            )
+            total += 1
         if progress:
             elapsed = time.monotonic() - t0
             sys.stderr.write(f"\r  imprv_det: {total:,} rows  ({total/elapsed:.0f}/s)")
             sys.stderr.flush()
+    appender.close()
     if progress:
         sys.stderr.write("\n")
     return total
@@ -263,31 +272,27 @@ def ingest_improvements_detail(con: duckdb.DuckDBPyConnection, path: Path, count
 def ingest_land_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
                        *, val_year: int, progress: bool = True) -> int:
     con.execute("DELETE FROM land_detail WHERE county = ? AND val_year = ?", [county, val_year])
-    cols = [
-        "county", "prop_id", "val_year", "land_seg_id",
-        "land_type_cd", "land_type_desc", "state_cd", "is_homesite",
-        "size_acres", "size_sqft", "effective_front", "effective_depth",
-        "land_seg_mkt_val", "ag_apply", "ag_value",
-    ]
-    sql = f"INSERT INTO land_detail ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
-
+    appender = con.appender("land_detail")
     total = 0
     t0 = time.monotonic()
-    for batch in _stream_records(path, LAND_DETAIL_FIELDS, county, batch=50_000):
-        params = [[
-            r.get("county"), r.get("prop_id"), r.get("val_year") or val_year,
-            r.get("land_seg_id"),
-            r.get("land_type_cd"), r.get("land_type_desc"), r.get("state_cd"), r.get("is_homesite"),
-            r.get("size_acres"), r.get("size_sqft"),
-            r.get("effective_front"), r.get("effective_depth"),
-            r.get("land_seg_mkt_val"), r.get("ag_apply"), r.get("ag_value"),
-        ] for r in batch if r.get("prop_id")]
-        con.executemany(sql, params)
-        total += len(params)
+    for batch in _stream_records(path, LAND_DETAIL_FIELDS, county, batch=200_000):
+        for r in batch:
+            if not r.get("prop_id"):
+                continue
+            appender.append_row(
+                r.get("county"), str(r.get("prop_id")), r.get("val_year") or val_year,
+                str(r.get("land_seg_id")) if r.get("land_seg_id") is not None else None,
+                r.get("land_type_cd"), r.get("land_type_desc"), r.get("state_cd"), r.get("is_homesite"),
+                r.get("size_acres"), r.get("size_sqft"),
+                r.get("effective_front"), r.get("effective_depth"),
+                r.get("land_seg_mkt_val"), r.get("ag_apply"), r.get("ag_value"),
+            )
+            total += 1
         if progress:
             elapsed = time.monotonic() - t0
             sys.stderr.write(f"\r  land:      {total:,} rows  ({total/elapsed:.0f}/s)")
             sys.stderr.flush()
+    appender.close()
     if progress:
         sys.stderr.write("\n")
     return total
