@@ -205,6 +205,7 @@ def parse_property(data: dict, *, include_raw: bool = False) -> dict:
         "mortgage_zhl_rates": _d(prop.get("mortgageZHLRates")),
         "foreclosure_types": _d(prop.get("foreclosureTypes")),
         "ad_targets": _d(prop.get("adTargets")),
+        "home_insights": insight_phrases,
         "address": prop.get("streetAddress") or addr.get("streetAddress"),
         "city": prop.get("city") or addr.get("city"),
         "state": prop.get("state") or addr.get("state"),
