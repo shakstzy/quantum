@@ -171,23 +171,67 @@ _DIRECTIONAL_EXPAND = {
 }
 _DIRECTIONAL_CONTRACT = {v: k for k, v in _DIRECTIONAL_EXPAND.items()}
 
+# Street-type aliases. Index stores the abbreviated form ("BLVD"); user
+# queries may use either form. Normalizing both sides to the abbreviation
+# makes "1219 South Lamar Boulevard" match "1219 S LAMAR BLVD".
+_STREET_TYPE_CONTRACT = {
+    "boulevard": "blvd", "blvd": "blvd",
+    "street": "st", "st": "st",
+    "avenue": "ave", "ave": "ave",
+    "drive": "dr", "dr": "dr",
+    "road": "rd", "rd": "rd",
+    "lane": "ln", "ln": "ln",
+    "court": "ct", "ct": "ct",
+    "place": "pl", "pl": "pl",
+    "circle": "cir", "cir": "cir",
+    "trail": "trl", "trl": "trl", "tr": "trl",
+    "highway": "hwy", "hwy": "hwy",
+    "parkway": "pkwy", "pkwy": "pkwy",
+    "terrace": "ter", "ter": "ter",
+    "cove": "cv", "cv": "cv",
+    "square": "sq", "sq": "sq",
+    "loop": "loop",
+    "way": "way",
+    "walk": "walk",
+    "run": "run",
+    "path": "path",
+    "pass": "pass",
+    "bend": "bnd", "bnd": "bnd",
+    "ridge": "rdg", "rdg": "rdg",
+    "crossing": "xing", "xing": "xing",
+    "expressway": "expy", "expy": "expy",
+    "freeway": "fwy", "fwy": "fwy",
+}
+
+
+def _contract_token(t: str) -> str:
+    """Apply directional + street-type abbreviation rules to a single token."""
+    if t in _DIRECTIONAL_CONTRACT:
+        return _DIRECTIONAL_CONTRACT[t]
+    if t in _STREET_TYPE_CONTRACT:
+        return _STREET_TYPE_CONTRACT[t]
+    return t
+
 
 def _norm_situs(num: str | None, prefix: str | None, street: str | None,
                 suffix: str | None, unit: str | None = None) -> tuple[str, str]:
     """Build situs_full (display) and situs_norm (lookup key).
 
     situs_norm contains the canonical short-form of every word: directionals
-    are stored as their abbreviation (north -> n) so LIKE queries work
-    regardless of whether the user typed "South Lamar" or "S Lamar".
+    AND street-type words (boulevard / blvd, drive / dr) are stored as their
+    abbreviation, so LIKE queries match regardless of which form the user
+    typed. The string is space-padded on both ends so token-boundary LIKE
+    patterns ('% blvd %') don't false-match short tokens.
     """
     parts = [p for p in [num, prefix, street, suffix] if p and p.strip()]
     full = " ".join(p.strip() for p in parts)
     if unit and unit.strip():
         full = f"{full} #{unit.strip()}"
-    # Normalize: lowercase, collapse whitespace, drop punctuation, contract directionals
+    # Normalize: lowercase, drop punctuation, contract directionals + street types,
+    # then space-pad so '% s %' won't false-match 'casco' (s is in the middle).
     bare = "".join(c.lower() if c.isalnum() else " " for c in full)
-    tokens = [_DIRECTIONAL_CONTRACT.get(t, t) for t in bare.split()]
-    return full, " ".join(tokens)
+    tokens = [_contract_token(t) for t in bare.split()]
+    return full, " " + " ".join(tokens) + " "
 
 
 def _stream_records(path: Path, fields: list, county: str, batch: int = 50_000) -> Iterator[list[dict]]:
@@ -429,11 +473,12 @@ def ingest_land_detail(con: duckdb.DuckDBPyConnection, path: Path, county: str,
 def _norm_query(s: str) -> str:
     """Normalize a free-form address query the same way we normalize situs.
 
-    Directionals contract: 'south' -> 's'. Common street-type abbreviations
-    are stripped to make the LIKE more permissive (boulevard vs blvd).
+    Directionals AND street-types contract to their abbreviation. The output
+    is the canonical token string (no leading/trailing pad - the caller adds
+    that when constructing LIKE patterns).
     """
     bare = "".join(c.lower() if c.isalnum() else " " for c in s)
-    tokens = [_DIRECTIONAL_CONTRACT.get(t, t) for t in bare.split()]
+    tokens = [_contract_token(t) for t in bare.split()]
     return " ".join(tokens)
 
 
