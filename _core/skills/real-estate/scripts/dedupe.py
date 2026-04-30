@@ -49,17 +49,28 @@ _DIRECTION_NORMS = {
     "north": "n", "south": "s", "east": "e", "west": "w",
     "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
 }
-_STRIP_UNIT_RE = re.compile(
-    r"(?:\b(?:unit|apt|apartment|ste|suite)\.?\b|#)\s*\S+",
+_UNIT_RE = re.compile(
+    r"(?:\b(?:unit|apt|apartment|ste|suite)\.?\b|#)\s*(\S+)",
     re.IGNORECASE,
 )
+
+
+def extract_unit(addr: str | None) -> str | None:
+    """Pull a unit/apt designator out of an address, returning a normalized
+    string ('4b', '5', '101'). Returns None if no unit present.
+    """
+    if not addr:
+        return None
+    s = re.sub(r"[.,]", " ", addr.lower())
+    m = _UNIT_RE.search(s)
+    return m.group(1).strip().lower() if m else None
 
 
 def normalize_address(addr: str | None) -> str:
     """Normalize a street address for cross-source matching.
 
     - lowercase
-    - strip 'Unit X' / 'Apt 4B' / '#3' suffixes
+    - strip unit suffixes (compare units separately via extract_unit)
     - canonicalize street types ('Saint'->'st', 'Avenue'->'ave')
     - canonicalize directions ('North'->'n')
     - collapse whitespace and strip punctuation
@@ -69,7 +80,7 @@ def normalize_address(addr: str | None) -> str:
     s = addr.lower()
     # Punctuation to spaces FIRST so "Apt. 4" -> "apt 4" and "#3" stays.
     s = re.sub(r"[.,]", " ", s)
-    s = _STRIP_UNIT_RE.sub("", s)
+    s = _UNIT_RE.sub("", s)
     tokens = []
     for t in s.split():
         t = t.strip()
@@ -81,6 +92,22 @@ def normalize_address(addr: str | None) -> str:
             t = _DIRECTION_NORMS[t]
         tokens.append(t)
     return " ".join(tokens)
+
+
+def _units_compatible(a: dict, b: dict) -> bool:
+    """True if a and b can plausibly be the same unit.
+
+    - Both have a unit and they match -> True
+    - Both lack a unit -> True
+    - One has, one doesn't -> True (one source may have dropped the unit)
+    - Both have different units -> False (123 Main #4 vs 123 Main #5 are
+      DIFFERENT condos, even at the same street + zip + bed/sqft).
+    """
+    ua = extract_unit(a.get("address"))
+    ub = extract_unit(b.get("address"))
+    if ua and ub and ua != ub:
+        return False
+    return True
 
 
 def _beds_compatible(a: dict, b: dict) -> bool:
@@ -104,7 +131,8 @@ def _approx_match(a: dict, b: dict, *, max_meters: float = 25.0) -> bool:
     important because Zillow drops coords on some unmapped listings.
     Both paths require beds + sqft sanity.
     """
-    if not (_beds_compatible(a, b) and _sqft_compatible(a, b)):
+    if not (_beds_compatible(a, b) and _sqft_compatible(a, b)
+            and _units_compatible(a, b)):
         return False
     la, lna = a.get("lat"), a.get("lng")
     lb, lnb = b.get("lat"), b.get("lng")
