@@ -259,10 +259,11 @@ export async function launchContext({ force = false, visible = false } = {}) {
     listCapturedOps: () => Array.from(templates.keys()),
     listCapturedResponses: () => Array.from(responses.keys()),
     // Wait for the first organic response for `op`. Returns the captured
-    // entry or null on timeout. Resolves immediately if already captured.
+    // entry or null on timeout. Resolves immediately if already captured
+    // (skips placeholder entries that are still awaiting body parse).
     async waitForResponse(op, { timeoutMs = 30000 } = {}) {
       const existing = responses.get(op);
-      if (existing) return existing;
+      if (existing && !existing.pending) return existing;
       return await new Promise(resolve => {
         const arr = responseWaiters.get(op) || [];
         const timer = setTimeout(() => {

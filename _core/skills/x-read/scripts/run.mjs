@@ -236,32 +236,47 @@ async function thread(argv) {
 
 // ---- TweetDetail parser ------------------------------------------------
 
-// Walk every instruction's entries (any instruction type that has them) and
-// collect tweet results recursively.
+// Shared timeline parser used by thread / profile / bookmarks / search.
+// Returns a deduped, normalized tweet array. Walks ALL instruction shapes
+// recursively (Gemini round 3 high finding: TimelineAddToModule, module
+// items, etc carry tweets under non-.entries paths).
+function extractTweetsFromInstructions(instructions, { limit = Infinity } = {}) {
+  const tweetResults = [];
+  for (const inst of instructions || []) {
+    // Direct entries[] (most common: TimelineAddEntries).
+    if (Array.isArray(inst?.entries)) {
+      for (const entry of inst.entries) collectTweetResultsDeep(entry, tweetResults);
+    }
+    // Module items (TimelineAddToModule, etc).
+    if (Array.isArray(inst?.moduleItems)) {
+      for (const item of inst.moduleItems) collectTweetResultsDeep(item, tweetResults);
+    }
+    // Replace / pin / arbitrary single-entry instructions (TimelineReplaceEntry,
+    // TimelinePinEntry, etc).
+    if (inst?.entry) collectTweetResultsDeep(inst.entry, tweetResults);
+    // Last resort: deep-walk the whole instruction for anything we missed.
+    collectTweetResultsDeep(inst, tweetResults);
+  }
+  // Dedupe by rest_id (entries can repeat across modules).
+  const seen = new Set();
+  const tweets = [];
+  for (const r of tweetResults) {
+    const t = normalizeTweet(r);
+    const key = t?.id || JSON.stringify(t).slice(0, 64);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tweets.push(t);
+    if (tweets.length >= limit) break;
+  }
+  return tweets;
+}
+
 function parseTweetDetail(body, focalId) {
   try {
     const instructions = body?.data?.threaded_conversation_with_injections_v2?.instructions
       || body?.data?.threaded_conversation_with_injections?.instructions
       || [];
-    const allEntries = [];
-    for (const inst of instructions) {
-      if (Array.isArray(inst?.entries)) allEntries.push(...inst.entries);
-      // Some instruction types (TimelineReplaceEntry, TimelineAddToModule)
-      // carry entries under different keys; deep-walk to be safe.
-      collectEntriesDeep(inst, allEntries);
-    }
-    const tweetResults = [];
-    for (const entry of allEntries) collectTweetResultsDeep(entry, tweetResults);
-    // De-dupe by rest_id (entries can repeat across modules).
-    const seen = new Set();
-    const tweets = [];
-    for (const r of tweetResults) {
-      const t = normalizeTweet(r);
-      const key = t?.id || JSON.stringify(t).slice(0, 64);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      tweets.push(t);
-    }
+    const tweets = extractTweetsFromInstructions(instructions);
     let root = tweets.find(t => t.id === focalId) || null;
     // Round 2 finding: if the focal tweet is unavailable/tombstoned and X
     // returned no rest_id on the tombstone result, the parser would otherwise
@@ -477,23 +492,10 @@ async function profile(argv) {
     let recentTweets = [];
     const userTweetsResp = await ctx.waitForResponse('UserTweets', { timeoutMs: 8000 });
     if (userTweetsResp && userTweetsResp.ok && userTweetsResp.body) {
-      const collected = [];
       const instr = userTweetsResp.body?.data?.user?.result?.timeline?.timeline?.instructions
         || userTweetsResp.body?.data?.user?.result?.timeline_v2?.timeline?.instructions
         || [];
-      for (const inst of instr) {
-        if (Array.isArray(inst.entries)) {
-          for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
-        }
-        collectEntriesDeep(inst, []); // no-op for shapes already covered
-      }
-      const seen = new Set();
-      for (const r of collected) {
-        const t = normalizeTweet(r);
-        if (!t.id || seen.has(t.id)) continue;
-        seen.add(t.id);
-        recentTweets.push(t);
-      }
+      recentTweets = extractTweetsFromInstructions(instr);
     }
     console.log(JSON.stringify({
       ok: true,
@@ -515,22 +517,8 @@ async function bookmarks(argv) {
     expectedOp: 'Bookmarks'
   });
   try {
-    const collected = [];
     const instr = resp.body?.data?.bookmark_timeline_v2?.timeline?.instructions || [];
-    for (const inst of instr) {
-      if (Array.isArray(inst.entries)) {
-        for (const entry of inst.entries) collectTweetResultsDeep(entry, collected);
-      }
-    }
-    const seen = new Set();
-    const tweets = [];
-    for (const r of collected) {
-      const t = normalizeTweet(r);
-      if (!t.id || seen.has(t.id)) continue;
-      seen.add(t.id);
-      tweets.push(t);
-      if (tweets.length >= limit) break;
-    }
+    const tweets = extractTweetsFromInstructions(instr, { limit });
     console.log(JSON.stringify({
       ok: true,
       count: tweets.length,
