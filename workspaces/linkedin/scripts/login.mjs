@@ -17,22 +17,41 @@ const { ctx, page } = await launchPersistent({ headless: false });
 let exitCode = 0;
 try {
   await ensureLoggedIn(page, { allowInteractive: true, interactiveTimeoutMs: 5 * 60_000 });
-  console.log("[login] /feed reached. Reading own profile via extractor as a sanity check…");
-  const ext = new LinkedInExtractor(page);
-  // Visit /me/ — it client-side redirects to /in/<vanity>/. Wait for the redirect.
-  await page.goto("https://www.linkedin.com/me/", { waitUntil: "load", timeout: 30_000 });
-  try {
-    await page.waitForURL(/linkedin\.com\/in\//, { timeout: 12_000 });
-  } catch { /* tolerate, we'll inspect URL anyway */ }
-  await page.waitForTimeout(1500);
-  const url = page.url();
-  const match = url.match(/\/in\/([^/?#]+)/);
-  if (match) {
-    const me = await ext.getPersonProfile(match[1]);
-    console.log("[login] OK. Self profile:");
-    console.log(JSON.stringify({ url: me.url, displayName: me.displayName, profileUrn: me.profileUrn, publicId: match[1], mainTextLen: (me.sections.main_profile || "").length }, null, 2));
+  console.log("[login] /feed reached. Reading own profile slug from global nav…");
+  // /me/ doesn't reliably redirect under patchright (the JS redirect fails or is delayed).
+  // Pull the user's /in/<vanity>/ link directly from the global nav anchors instead. This
+  // is rendered server-side and always present when logged in.
+  const navHref = await page.evaluate(() => {
+    // Try the most stable selectors first.
+    const candidates = [
+      'nav a[href*="/in/"]',
+      'header a[href*="/in/"]',
+      'a[href*="/in/"][data-test-app-aware-link]',
+      'a[href*="/in/"]',
+    ];
+    for (const sel of candidates) {
+      const a = document.querySelector(sel);
+      if (a) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(/\/in\/([^/?#]+)/);
+        if (m) return { href, publicId: m[1], selector: sel };
+      }
+    }
+    return null;
+  }).catch(() => null);
+
+  if (!navHref) {
+    console.log("[login] OK but could not find a self /in/ link in nav. Session is good though.");
   } else {
-    console.log("[login] OK but could not derive own /in/ slug from", url);
+    console.log(`[login] self public_id from nav: ${navHref.publicId}  (selector=${navHref.selector})`);
+    try {
+      const ext = new LinkedInExtractor(page);
+      const me = await ext.getPersonProfile(navHref.publicId);
+      console.log("[login] OK. Self profile:");
+      console.log(JSON.stringify({ url: me.url, displayName: me.displayName, profileUrn: me.profileUrn, publicId: navHref.publicId, mainTextLen: (me.sections.main_profile || "").length }, null, 2));
+    } catch (err) {
+      console.error(`[login] self-profile fetch failed: ${err.code ?? "ERR"} ${err.message}`);
+    }
   }
 } catch (err) {
   console.error(`[login] failed: ${err.code ?? "ERR"} ${err.message}`);
