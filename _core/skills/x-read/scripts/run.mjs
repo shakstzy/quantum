@@ -2,8 +2,8 @@
 // run.mjs -- x-read skill CLI.
 //
 // Verbs: login | whoami | thread | status | reset-breaker
-// All read-only. Replays X GraphQL ops via captured request templates from
-// inside the x.com page context.
+// All read-only. v1 parses the page's organic GraphQL responses (no replay)
+// to keep zero-extra-request semantics + dodge the original-vs-replay race.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -54,7 +54,6 @@ function parseArgs(argv) {
   return { positional, flags };
 }
 
-// Extract a tweet ID from a full URL or accept a bare numeric ID.
 function parseTweetId(input) {
   if (!input) die('tweet id or URL required');
   if (/^\d{5,25}$/.test(input)) return input;
@@ -63,66 +62,84 @@ function parseTweetId(input) {
   die(`could not parse tweet ID from "${input}"; pass an x.com/<handle>/status/<id> URL or a bare numeric ID`);
 }
 
-// Boot a session and warm it up so a target op is captured before we replay.
-// warmupOp: name of GraphQL op the caller needs in the template map.
-// warmupNav: URL to navigate to in order to organically trigger that op.
-async function openSession({ warmupOp, warmupNav }) {
+// Boot a session, navigate, and wait for a target op's response to be captured
+// from the page's organic traffic.
+async function openSessionAndCapture({ navUrl, expectedOp }) {
   ensureDeps();
-  const { launchContext, waitForTemplate, isAuthChallengeUrl, tripBreaker } = await import('./browser.mjs');
+  const { launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker } = await import('./browser.mjs');
 
   const ctx = await launchContext({ visible: false });
   try {
-    if (DEBUG) process.stderr.write(`[x-read] navigating to ${warmupNav}\n`);
-    await ctx.page.goto(warmupNav, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (DEBUG) process.stderr.write(`[x-read] navigating to ${navUrl}\n`);
+    await ctx.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (e) {
     await ctx.close();
     throw e;
   }
 
-  // Detect challenge redirects after navigation settles.
+  // Settle briefly so URL redirects + initial DOM render finish.
   await new Promise(r => setTimeout(r, 1500));
+
+  // URL-level challenge check.
   const url = ctx.page.url();
   if (isAuthChallengeUrl(url)) {
-    tripBreaker('challenge-on-warmup');
+    tripBreaker(`challenge-url:${url}`);
     await ctx.close();
-    die(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`node scripts/run.mjs login\` after manually verifying the account.`, 3);
+    die(`[x-read] redirected to challenge URL ${url}. Breaker tripped (single-strike on Premium account). After verifying the account in a real browser, run \`node scripts/run.mjs login\`.`, 3);
   }
 
-  const template = await waitForTemplate(ctx, warmupOp, { timeoutMs: 30000, probeEveryMs: 300 });
-  if (!template) {
-    const ops = ctx.listCapturedOps();
+  // DOM-level challenge check.
+  const domChallenge = await detectDomChallenge(ctx.page).catch(() => null);
+  if (domChallenge) {
+    tripBreaker(`dom-challenge:${domChallenge}`);
     await ctx.close();
-    die(`[x-read] session warm-up failed: required op "${warmupOp}" not observed within 30s. Captured ops: [${ops.join(', ') || 'none'}]. If "none", session likely expired; run \`node scripts/run.mjs login\`.`, 3);
+    die(`[x-read] DOM challenge detected (${domChallenge}). Breaker tripped. Verify the account in a real browser, then run \`login\`.`, 3);
   }
-  return ctx;
+
+  // Wait for the response we need.
+  const resp = await ctx.waitForResponse(expectedOp, { timeoutMs: 30000 });
+  if (!resp) {
+    const ops = ctx.listCapturedResponses();
+    await ctx.close();
+    die(`[x-read] expected op "${expectedOp}" response not seen within 30s. Captured response ops: [${ops.join(', ') || 'none'}]. If "none", session likely expired; run \`node scripts/run.mjs login\`.`, 3);
+  }
+
+  // Auth-failure check on the response itself.
+  if (resp.status === 401 || resp.status === 403) {
+    tripBreaker(`response-${resp.status}:${expectedOp}`);
+    await ctx.close();
+    die(`[x-read] ${resp.status} from ${expectedOp}; session likely expired. Breaker tripped. Run \`node scripts/run.mjs login\`.`, 3);
+  }
+  if (resp.status === 429) {
+    const { rateLimitResetSeconds } = await import('./browser.mjs');
+    const wait = rateLimitResetSeconds(resp.rateLimit?.reset);
+    await ctx.close();
+    die(`[x-read] 429 rate-limited on ${expectedOp}; reset in ${wait}s.`, 4);
+  }
+  if (!resp.ok) {
+    await ctx.close();
+    die(`[x-read] ${expectedOp} returned ${resp.status}: ${typeof resp.body === 'string' ? resp.body.slice(0, 400) : JSON.stringify(resp.body).slice(0, 400)}`);
+  }
+
+  return { ctx, resp };
 }
 
 async function whoami() {
-  // Viewer fires on home load.
-  const ctx = await openSession({ warmupOp: 'Viewer', warmupNav: 'https://x.com/home' });
-  const { pageApi, rateLimitSleepMs } = await import('./browser.mjs');
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl: 'https://x.com/home',
+    expectedOp: 'Viewer'
+  });
   try {
-    const tpl = ctx.getTemplate('Viewer');
-    const res = await pageApi(ctx.page, 'Viewer', tpl);
-    if (res.status === 429) {
-      const wait = rateLimitSleepMs(res.rateLimit.reset);
-      die(`[x-read] 429 rate-limited; reset in ${Math.round(wait/1000)}s. Try again later.`, 4);
-    }
-    if (res.status === 401 || res.status === 403) {
-      die(`[x-read] ${res.status} from Viewer; session likely expired. Run \`node scripts/run.mjs login\`.`, 3);
-    }
-    if (!res.ok) {
-      die(`[x-read] Viewer returned ${res.status}: ${typeof res.body === 'string' ? res.body : JSON.stringify(res.body).slice(0, 400)}`);
-    }
-    const viewer = res.body?.data?.viewer || res.body?.data?.viewer_v2 || res.body?.data;
+    const viewer = resp.body?.data?.viewer || resp.body?.data?.viewer_v2 || resp.body?.data;
     const userResult = viewer?.user_results?.result || viewer?.user_result?.result;
-    const legacy = userResult?.legacy || {};
+    const tweet = unwrapVisibilityResult(userResult);
+    const legacy = tweet?.legacy || {};
     const out = {
       ok: true,
-      id: userResult?.rest_id || null,
+      id: tweet?.rest_id || null,
       handle: legacy.screen_name || null,
       name: legacy.name || null,
-      verified: !!(userResult?.is_blue_verified ?? legacy.verified),
+      verified: !!(tweet?.is_blue_verified ?? legacy.verified),
       followers: legacy.followers_count ?? null,
       following: legacy.friends_count ?? null
     };
@@ -132,97 +149,147 @@ async function whoami() {
 
 async function thread(argv) {
   const tweetId = parseTweetId(argv.positional[0]);
-  // Navigate to the canonical tweet URL so the X client fires TweetDetail
-  // for THIS tweet ID. This both captures the template and gives us a fresh
-  // response we can mine.
   const navUrl = `https://x.com/i/status/${tweetId}`;
-  const ctx = await openSession({ warmupOp: 'TweetDetail', warmupNav: navUrl });
-  const { pageApi, rateLimitSleepMs } = await import('./browser.mjs');
+  const { ctx, resp } = await openSessionAndCapture({
+    navUrl,
+    expectedOp: 'TweetDetail'
+  });
   try {
-    const tpl = ctx.getTemplate('TweetDetail');
-    // Replay with our target tweet ID; X may have already fetched it, but
-    // replaying ensures we have a fresh, parseable response in our control.
-    const res = await pageApi(ctx.page, 'TweetDetail', tpl, {
-      variables: { focalTweetId: tweetId }
-    });
-    if (res.status === 429) {
-      const wait = rateLimitSleepMs(res.rateLimit.reset);
-      die(`[x-read] 429 rate-limited; reset in ${Math.round(wait/1000)}s.`, 4);
-    }
-    if (res.status === 401 || res.status === 403) {
-      die(`[x-read] ${res.status} from TweetDetail; session likely expired. Run \`node scripts/run.mjs login\`.`, 3);
-    }
-    if (!res.ok) {
-      die(`[x-read] TweetDetail returned ${res.status}: ${typeof res.body === 'string' ? res.body : JSON.stringify(res.body).slice(0, 400)}`);
-    }
-    const out = parseTweetDetail(res.body, tweetId);
+    const out = parseTweetDetail(resp.body, tweetId);
     out.fetched_at = new Date().toISOString();
+    if (out.ok && out.root && out.root.id !== tweetId) {
+      // Codex round 1: silent root mismatch corrupts output. Fail loud.
+      out.ok = false;
+      out.error = `root.id mismatch: expected ${tweetId}, got ${out.root.id}`;
+    }
     console.log(JSON.stringify(out, null, 2));
+    if (!out.ok) process.exitCode = 5;
   } finally { await ctx.close(); }
 }
 
-// Walk the TweetDetail response. We pull the focal tweet + every reply entry
-// surfaced in the primary instructions block. Cursor-paginated "show more
-// replies" modules are NOT walked in v1.
+// ---- TweetDetail parser ------------------------------------------------
+
+// Walk every instruction's entries (any instruction type that has them) and
+// collect tweet results recursively.
 function parseTweetDetail(body, focalId) {
   try {
     const instructions = body?.data?.threaded_conversation_with_injections_v2?.instructions
       || body?.data?.threaded_conversation_with_injections?.instructions
       || [];
-    const entries = [];
+    const allEntries = [];
     for (const inst of instructions) {
-      if (inst.type === 'TimelineAddEntries' && Array.isArray(inst.entries)) {
-        entries.push(...inst.entries);
-      }
+      if (Array.isArray(inst?.entries)) allEntries.push(...inst.entries);
+      // Some instruction types (TimelineReplaceEntry, TimelineAddToModule)
+      // carry entries under different keys; deep-walk to be safe.
+      collectEntriesDeep(inst, allEntries);
     }
+    const tweetResults = [];
+    for (const entry of allEntries) collectTweetResultsDeep(entry, tweetResults);
+    // De-dupe by rest_id (entries can repeat across modules).
+    const seen = new Set();
     const tweets = [];
-    for (const entry of entries) {
-      const items = collectTweetResults(entry);
-      for (const r of items) tweets.push(normalizeTweet(r));
+    for (const r of tweetResults) {
+      const t = normalizeTweet(r);
+      const key = t?.id || JSON.stringify(t).slice(0, 64);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tweets.push(t);
     }
-    const root = tweets.find(t => t.id === focalId) || tweets[0] || null;
-    const replies = tweets.filter(t => t.id !== (root?.id ?? focalId));
+    const root = tweets.find(t => t.id === focalId) || null;
+    if (!root) {
+      // Tombstone-only or unavailable: surface raw shape for debugging.
+      return {
+        ok: false,
+        error: `focal tweet ${focalId} not found in TweetDetail response`,
+        captured_ids: tweets.map(t => t.id).filter(Boolean)
+      };
+    }
+    const replies = tweets.filter(t => t.id !== root.id);
     return {
       ok: true,
       root,
       replies,
       counts: { tweets: tweets.length, replies: replies.length },
-      truncated_note: 'v1 returns only primary entries; cursor-paginated "show more replies" modules are not walked.'
+      truncated_note: 'v1 returns only entries surfaced in the first TweetDetail response. Cursor-paginated "show more replies" modules are not walked.'
     };
   } catch (e) {
     return { ok: false, error: `parse failed: ${e.message}`, raw_keys: Object.keys(body || {}) };
   }
 }
 
-function collectTweetResults(entry) {
-  const out = [];
-  // Single-tweet entries.
-  const single = entry?.content?.itemContent?.tweet_results?.result;
-  if (single) out.push(single);
-  // Conversation modules: items[]
-  const items = entry?.content?.items || [];
-  for (const it of items) {
-    const r = it?.item?.itemContent?.tweet_results?.result;
-    if (r) out.push(r);
+function collectEntriesDeep(node, out, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 8) return;
+  if (Array.isArray(node)) {
+    for (const x of node) collectEntriesDeep(x, out, depth + 1);
+    return;
   }
-  return out;
+  if (Array.isArray(node.entries)) out.push(...node.entries);
+  for (const k of Object.keys(node)) {
+    if (k === 'entries') continue;
+    collectEntriesDeep(node[k], out, depth + 1);
+  }
 }
 
-function normalizeTweet(r) {
-  // Tombstones (deleted/unavailable) come back as TweetTombstone or
-  // TweetUnavailable; legacy is missing. Surface what we can.
-  if (r?.__typename === 'TweetTombstone' || r?.__typename === 'TweetUnavailable') {
-    return { id: r?.rest_id || null, tombstone: r?.tombstone?.text?.text || r?.__typename, text: null, author: null };
+// Recursively find any object that looks like a tweet_results.result wrapper.
+function collectTweetResultsDeep(node, out, depth = 0) {
+  if (!node || typeof node !== 'object' || depth > 12) return;
+  if (Array.isArray(node)) {
+    for (const x of node) collectTweetResultsDeep(x, out, depth + 1);
+    return;
   }
-  const tweet = r?.tweet || r; // some responses nest under .tweet
+  if (node.tweet_results && node.tweet_results.result) {
+    out.push(node.tweet_results.result);
+  }
+  for (const k of Object.keys(node)) {
+    collectTweetResultsDeep(node[k], out, depth + 1);
+  }
+}
+
+// Unwrap TweetWithVisibilityResults / Tweet / TweetTombstone wrapper layers.
+// Returns the inner tweet object (with rest_id + legacy) or the original
+// tombstone marker.
+function unwrapVisibilityResult(r) {
+  if (!r || typeof r !== 'object') return r;
+  // TweetWithVisibilityResults nests the real tweet under .tweet
+  if (r.__typename === 'TweetWithVisibilityResults' && r.tweet) return r.tweet;
+  if (r.tweet && r.tweet.rest_id && !r.rest_id) return r.tweet;
+  return r;
+}
+
+function normalizeTweet(rawResult) {
+  const r = unwrapVisibilityResult(rawResult);
+  // Tombstone after unwrap.
+  if (r?.__typename === 'TweetTombstone' || r?.__typename === 'TweetUnavailable') {
+    return {
+      id: r?.rest_id || null,
+      tombstone: r?.tombstone?.text?.text || r?.__typename,
+      text: null,
+      author: null
+    };
+  }
+  const tweet = r;
   const legacy = tweet?.legacy || {};
-  const note = tweet?.note_tweet?.note_tweet_results?.result?.text;
+
+  // Note Tweets: long-form. When present, prefer note's entity set for
+  // mentions/urls; media still comes from legacy unless note-specific media
+  // is present.
+  const noteResult = tweet?.note_tweet?.note_tweet_results?.result;
+  const noteEntities = noteResult?.entity_set;
+  const text = noteResult?.text || legacy?.full_text || null;
+
   const userResult = tweet?.core?.user_results?.result;
   const userLegacy = userResult?.legacy || {};
+
+  // Retweet unwrap. legacy.retweeted_status_result.result is the original.
+  const retweet = tweet?.legacy?.retweeted_status_result?.result;
+  const quoted = tweet?.quoted_status_result?.result;
+
   return {
     id: tweet?.rest_id || legacy?.id_str || null,
-    text: note || legacy?.full_text || null,
-    is_long_form: !!note,
+    text,
+    is_long_form: !!noteResult,
+    is_retweet: !!retweet,
+    is_quote: !!(legacy?.is_quote_status || quoted),
     created_at: legacy?.created_at || null,
     in_reply_to_status_id: legacy?.in_reply_to_status_id_str || null,
     metrics: {
@@ -233,19 +300,40 @@ function normalizeTweet(r) {
       quotes: legacy?.quote_count ?? null,
       views: tweet?.views?.count ?? null
     },
-    media: (legacy?.entities?.media || []).map(m => ({
-      type: m.type,
-      url: m.media_url_https,
-      expanded: m.expanded_url
-    })),
+    media: extractMedia(legacy, noteEntities),
+    urls: extractUrls(legacy, noteEntities),
     author: {
       id: userResult?.rest_id || null,
       handle: userLegacy?.screen_name || null,
       name: userLegacy?.name || null,
       verified: !!(userResult?.is_blue_verified ?? userLegacy?.verified)
-    }
+    },
+    retweet_of: retweet ? normalizeTweet(retweet) : null,
+    quoted: quoted ? normalizeTweet(quoted) : null
   };
 }
+
+function extractMedia(legacy, noteEntities) {
+  const fromLegacy = (legacy?.entities?.media || []).map(m => ({
+    type: m.type,
+    url: m.media_url_https,
+    expanded: m.expanded_url
+  }));
+  // Note tweets sometimes carry their own media block, but legacy media is
+  // usually the canonical source. If both exist, prefer legacy.
+  return fromLegacy;
+}
+
+function extractUrls(legacy, noteEntities) {
+  const src = noteEntities?.urls || legacy?.entities?.urls || [];
+  return src.map(u => ({
+    short: u.url,
+    expanded: u.expanded_url,
+    display: u.display_url
+  }));
+}
+
+// ---- Verb plumbing -----------------------------------------------------
 
 async function login(argv) {
   ensureDeps();
@@ -257,13 +345,20 @@ async function status() {
   const { readBreaker, getProfileDir } = await import('./browser.mjs');
   const dir = getProfileDir();
   const pidfilePath = join(dir, '.skill.pid');
-  const pid = existsSync(pidfilePath) ? parseInt(readFileSync(pidfilePath, 'utf8').trim(), 10) : null;
+  let pid = null;
+  let pidAlive = false;
+  if (existsSync(pidfilePath)) {
+    pid = parseInt(readFileSync(pidfilePath, 'utf8').trim(), 10);
+    if (Number.isFinite(pid)) {
+      try { process.kill(pid, 0); pidAlive = true; } catch { pidAlive = false; }
+    }
+  }
   const b = readBreaker();
   const cookiesPath = join(dir, 'Default', 'Cookies');
   const cookies = existsSync(cookiesPath) ? 'present' : 'missing';
   console.log(JSON.stringify({
     profile_dir: dir,
-    active_pid: pid,
+    pidfile: { pid, alive: pidAlive },
     breaker: b,
     cookies
   }, null, 2));
@@ -291,14 +386,15 @@ Usage:
 
 Verbs:
   login                       One-time visible browser login. Cookies persist to profile dir.
-  whoami                      Capture Viewer op + return Adithya's user object.
+  whoami                      Capture Viewer op + return the logged-in user object.
   thread <url-or-id>          Fetch tweet + visible replies. Pass x.com/<handle>/status/<id> URL or bare numeric ID.
   status                      Profile + cookies + breaker + pidfile state.
   reset-breaker               Reset the 24h halt after manual verification.
 
 Read-only contract:
-  pageApi accepts only GET. There are no write verbs (post, like, follow, dm).
-  For posting to X, use the zernio-post skill instead.
+  All fetches go through page.on('response') capture of the X client's organic
+  GraphQL traffic. No replay HTTP from us in v1. There are no write verbs
+  (post, like, follow, dm). For posting to X, use the zernio-post skill.
 
 Env:
   X_READ_PROFILE_DIR          Override profile dir (default: ~/.quantum/chrome-profiles/x)
