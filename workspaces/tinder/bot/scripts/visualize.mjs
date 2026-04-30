@@ -46,26 +46,61 @@ Return only the bullets. No preamble, no other prose.`;
 async function captureProfilePhotoUrls(page, matchId) {
   await page.goto(`https://tinder.com/app/messages/${matchId}`, { waitUntil: "domcontentloaded" });
   await sleep(jitter(3000, 4500));
-  // Need to scroll the profile pane to lazy-load all carousel images
-  return await page.evaluate(async () => {
-    const pane = document.querySelector("[class*='profileContent']");
-    if (!pane) return [];
-    // Scroll pane to bottom to trigger lazy loading of all photos
-    pane.scrollTop = pane.scrollHeight;
-    await new Promise(r => setTimeout(r, 1500));
-    pane.scrollTop = 0;
-    await new Promise(r => setTimeout(r, 800));
-    const hits = new Set();
-    for (const img of pane.querySelectorAll("img")) {
-      if (img.src && img.src.includes("images-ssl.gotinder.com")) hits.add(img.src);
+
+  // Tinder shows ONE carousel slide by default. To get all 4-7 photos we need to
+  // advance through the carousel. The "next photo" button lives in the profile
+  // pane carousel. Easiest: send keyboard arrow-right inside the pane focus,
+  // capturing URLs after each advance. Stop when no new URL appears (looped).
+  const collected = new Set();
+
+  async function snapshotPaneUrls() {
+    const urls = await page.evaluate(() => {
+      const pane = document.querySelector("[class*='profileContent']");
+      if (!pane) return [];
+      const hits = new Set();
+      for (const img of pane.querySelectorAll("img")) {
+        if (img.src && img.src.includes("images-ssl.gotinder.com")) hits.add(img.src);
+      }
+      for (const el of pane.querySelectorAll("*")) {
+        const bg = (el.style && el.style.backgroundImage) || "";
+        const m = bg.match(/url\("([^"]*images-ssl\.gotinder\.com[^"]*)"/);
+        if (m) hits.add(m[1]);
+      }
+      return [...hits];
+    });
+    for (const u of urls) collected.add(u);
+  }
+
+  // Initial capture
+  await snapshotPaneUrls();
+
+  // Click the carousel to focus, then advance with arrow-right up to 10 times.
+  try {
+    const carouselNext = await page.$("[class*='profileContent'] button[aria-label*='Next' i], [class*='profileContent'] [class*='carousel'] button[aria-label*='Next' i]");
+    if (carouselNext) {
+      // Some Tinder builds expose a clickable "next" button — preferred when present.
+      for (let i = 0; i < 10; i++) {
+        const before = collected.size;
+        try { await carouselNext.click({ timeout: 800 }); } catch { break; }
+        await sleep(jitter(500, 900));
+        await snapshotPaneUrls();
+        if (collected.size === before) break; // looped or no more
+      }
+    } else {
+      // Fallback: keyboard arrow-right on the pane. Click the pane first to focus.
+      const pane = await page.$("[class*='profileContent']");
+      if (pane) await pane.click({ timeout: 800 }).catch(() => {});
+      for (let i = 0; i < 10; i++) {
+        const before = collected.size;
+        await page.keyboard.press("ArrowRight").catch(() => {});
+        await sleep(jitter(500, 900));
+        await snapshotPaneUrls();
+        if (collected.size === before) break;
+      }
     }
-    for (const el of pane.querySelectorAll("*")) {
-      const bg = (el.style && el.style.backgroundImage) || "";
-      const m = bg.match(/url\("([^"]*images-ssl\.gotinder\.com[^"]*)"/);
-      if (m) hits.add(m[1]);
-    }
-    return [...hits];
-  });
+  } catch { /* selector miss is OK; we still have the initial capture */ }
+
+  return [...collected];
 }
 
 async function downloadPhotos(ctx, urls, slug) {
