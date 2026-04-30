@@ -158,15 +158,27 @@ def _is_zillow_property_url(s: str) -> bool:
 
 
 def find_redfin_url(address_or_url: str) -> str | None:
-    """Resolve to a Redfin property URL. Accepts:
-      - a full Redfin property URL -> returned as-is
-      - a free-text address -> brave-search, filtered by exact street number
+    """Resolve to a Redfin property URL.
+
+    Strategy:
+      1. If input is a Redfin property URL, return it as-is.
+      2. Brave-search 'site:redfin.com <address>', filter for URLs whose
+         slug contains BOTH the street number AND the street-name token.
+         Return None if no result has both - off-market / new-build
+         listings are commonly missing from Brave's index, and we'd
+         rather surface "not found" than the wrong house.
+
+    Off-market and new-build Redfin listings often can't be resolved via
+    Brave because Redfin gates the canonical URL behind their WAF-walled
+    autocomplete API. When this returns None, the caller should accept a
+    user-pasted URL via --redfin-url.
     """
     if _is_redfin_property_url(address_or_url):
         return address_or_url
     return _brave_first_url(
         address_or_url, "redfin.com",
         require_street_num=_street_number(address_or_url),
+        require_street_name=_street_name_token(address_or_url),
     )
 
 
