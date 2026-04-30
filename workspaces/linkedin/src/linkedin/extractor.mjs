@@ -398,43 +398,70 @@ export class LinkedInExtractor {
       await sleep(700);
     }
 
-    // Find the withdraw control matching THIS specific user.
-    // BUG FIX (2026-04-30, after live test mis-withdrew Dylan Patel when asked for evanchi):
-    // The previous walk-up "find any trigger that shares an ancestor with /in/<u>/" was wrong —
-    // <main> shares an ancestor with every card on the page, so it picked an arbitrary trigger.
-    // Correct logic: start from the SPECIFIC /in/<u>/ link, walk up at most ~6 levels to find a
-    // withdraw trigger that's a DESCENDANT of that near-ancestor (i.e., in the SAME card).
-    const rowFound = await this.page.evaluate((u) => {
-      const inLinks = Array.from(document.querySelectorAll(`a[href*="/in/${u}/"]`));
-      const MAX_CARD_DEPTH = 6;
-      for (const inLink of inLinks) {
+    // Find the withdraw control for THIS specific user. Per Codex r2 review of the targeting fix:
+    //   Single-card invariant: walk UP from the user's /in/<u>/ link, find the first ancestor
+    //   that contains EXACTLY ONE withdraw trigger AND EXACTLY ONE distinct /in/ public id, AND
+    //   that public id == requested target. Reject if either uniqueness check fails.
+    // Also: check trigger's display-name appears in the card's innerText (paranoid preflight).
+    // doClick toggles whether we actually click (false in dry-run so operator can audit target).
+    const rowFound = await this.page.evaluate(({ target, doClick }) => {
+      function publicIdFromHref(href) {
+        try {
+          const url = new URL(href, location.origin);
+          const m = url.pathname.match(/^\/in\/([^/]+)\/?$/);
+          return m ? decodeURIComponent(m[1]) : null;
+        } catch { return null; }
+      }
+      const targetId = String(target || "").trim();
+      const links = Array.from(document.querySelectorAll('main a[href*="/in/"]'))
+        .filter((a) => publicIdFromHref(a.getAttribute("href") || "") === targetId);
+      if (links.length === 0) return { ok: false, reason: "no_in_link_for_target" };
+      const WITHDRAW_SEL =
+        'a[aria-label^="Withdraw invitation"], button[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]';
+      for (const inLink of links) {
         let ancestor = inLink.parentElement;
-        for (let depth = 0; depth < MAX_CARD_DEPTH && ancestor; depth++) {
-          // Strategy 1 (NEW): aria-label^="Withdraw invitation"
-          const ariaTrig = ancestor.querySelector('a[aria-label^="Withdraw invitation"], button[aria-label^="Withdraw invitation"]');
-          if (ariaTrig) {
-            const triggerAria = ariaTrig.getAttribute("aria-label") || "";
-            ariaTrig.click();
-            return { ok: true, strategy: "near_ancestor_aria", triggerAria, depth };
-          }
-          // Strategy 2 (LEGACY): button[aria-label*="Withdraw"] or innerText "Withdraw"
-          const legacyBtn = ancestor.querySelector('button[aria-label*="Withdraw"]');
-          if (legacyBtn) {
-            const triggerAria = legacyBtn.getAttribute("aria-label") || "";
-            legacyBtn.click();
-            return { ok: true, strategy: "near_ancestor_legacy", triggerAria, depth };
-          }
-          const textBtn = Array.from(ancestor.querySelectorAll("button, a"))
-            .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
-          if (textBtn) {
-            textBtn.click();
-            return { ok: true, strategy: "near_ancestor_innertext", triggerAria: null, depth };
+        for (let depth = 0; depth < 8 && ancestor && ancestor !== document.body; depth++) {
+          const triggers = Array.from(ancestor.querySelectorAll(WITHDRAW_SEL));
+          const publicIds = new Set(
+            Array.from(ancestor.querySelectorAll('a[href*="/in/"]'))
+              .map((a) => publicIdFromHref(a.getAttribute("href") || ""))
+              .filter(Boolean)
+          );
+          if (triggers.length === 1 && publicIds.size === 1 && publicIds.has(targetId)) {
+            const trigger = triggers[0];
+            const triggerAria = trigger.getAttribute("aria-label") || "";
+            // Paranoid preflight: trigger's display name (extracted from aria-label) must
+            // appear in the card's innerText. Catches any future cross-binding bug.
+            const nameFromAria = triggerAria.replace(/^Withdraw invitation sent to\s+/i, "").trim();
+            if (nameFromAria && !(ancestor.innerText || "").includes(nameFromAria)) {
+              return { ok: false, reason: "trigger_name_not_in_card", triggerAria };
+            }
+            if (doClick) trigger.click();
+            return {
+              ok: true,
+              strategy: "exact_card_single_withdraw",
+              triggerAria,
+              targetHref: inLink.href,
+              depth,
+              clicked: doClick,
+            };
           }
           ancestor = ancestor.parentElement;
         }
       }
-      return { ok: false, reason: `no_withdraw_trigger_within_${MAX_CARD_DEPTH}_levels_of_${u}_link` };
-    }, username).catch(() => ({ ok: false, reason: "evaluate_threw" }));
+      return { ok: false, reason: "no_exact_single_withdraw_card" };
+    }, { target: username, doClick: !dryRun }).catch((err) => ({ ok: false, reason: `evaluate_threw: ${err?.message ?? err}` }));
+
+    if (dryRun) {
+      // In dry-run we don't click but we DO report which trigger would have been clicked,
+      // so the operator can verify targeting before re-running with --send.
+      return {
+        url, status: rowFound.ok ? "would_withdraw" : "not_found",
+        ok: rowFound.ok, dryRun: true,
+        triggerAria: rowFound.triggerAria ?? null,
+        reason: rowFound.reason ?? null,
+      };
+    }
     if (!rowFound || !rowFound.ok) return { url, status: "not_found", ok: false };
     // Confirm in modal (Withdraw confirmation). LinkedIn renders the modal as <dialog open>
     // with three buttons: [Dismiss-X, Cancel, Withdraw]. The Withdraw button has
@@ -461,13 +488,15 @@ export class LinkedInExtractor {
       await this.page.waitForSelector(DIALOG_SELECTOR, { state: "hidden", timeout: 6000 }).catch(() => {});
     }
     // Verify by re-reading the page: the EXACT trigger we clicked (matched by aria-label)
-    // should no longer exist. This is precise — no walking-up false positives.
+    // should no longer exist. Use attribute equality (not selector-string interpolation) so
+    // names with quotes/backslashes/newlines are safe. FAIL CLOSED on evaluate error.
     await sleep(jitter(1200, 2000));
-    let stillPending = false;
+    let stillPending = true;
     if (rowFound.triggerAria) {
       stillPending = await this.page.evaluate((aria) => {
-        return !!document.querySelector(`a[aria-label="${aria.replace(/"/g, '\\"')}"]`);
-      }, rowFound.triggerAria).catch(() => null);
+        return Array.from(document.querySelectorAll('a[aria-label], button[aria-label]'))
+          .some((el) => el.getAttribute("aria-label") === aria);
+      }, rowFound.triggerAria).catch(() => true);
     }
     return {
       url,

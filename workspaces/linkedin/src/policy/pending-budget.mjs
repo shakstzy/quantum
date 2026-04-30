@@ -58,32 +58,47 @@ async function scrollUntilStable(page, { maxScrolls = 30, pauseMs = 700 } = {}) 
 }
 
 // Returns {count, candidates: [{username, sentAtText}]} where candidates are oldest-first.
+// Reads the {username, cardText, sentAtText} for each sent invite using the SAME
+// single-card invariant as withdrawInvite (Codex r2 P1: prevents wrong-username binding
+// when enforcePendingCeiling later feeds usernames into withdrawInvite).
 async function readSentInvites(page) {
   return await page.evaluate(() => {
+    function publicIdFromHref(href) {
+      try {
+        const u = new URL(href, location.origin);
+        const m = u.pathname.match(/^\/in\/([^/]+)\/?$/);
+        return m ? decodeURIComponent(m[1]) : null;
+      } catch { return null; }
+    }
+    const WITHDRAW_SEL =
+      'a[aria-label^="Withdraw invitation"], button[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]';
+    const triggers = Array.from(document.querySelectorAll(WITHDRAW_SEL));
+    const seen = new Set();
     const out = [];
-    // Anchor on the withdraw control (now an <a aria-label^="Withdraw invitation">),
-    // walk up to find the card that also contains a /in/<username>/ link.
-    const triggers = Array.from(document.querySelectorAll(
-      'a[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]'
-    ));
     for (const trigger of triggers) {
-      let node = trigger;
-      let inLink = null;
-      for (let depth = 0; depth < 15 && node; depth++) {
-        inLink = node.querySelector('a[href*="/in/"]');
-        if (inLink) break;
+      let node = trigger.parentElement;
+      for (let depth = 0; depth < 8 && node && node !== document.body; depth++) {
+        const triggersHere = node.querySelectorAll(WITHDRAW_SEL);
+        const ids = new Set(
+          Array.from(node.querySelectorAll('a[href*="/in/"]'))
+            .map((a) => publicIdFromHref(a.getAttribute("href") || ""))
+            .filter(Boolean)
+        );
+        if (triggersHere.length === 1 && ids.size === 1) {
+          const username = [...ids][0];
+          if (seen.has(username)) break;
+          seen.add(username);
+          const text = (node.innerText || "").trim();
+          const sentMatch = text.match(/Sent\s+([^\n]+?)(?:\n|$)/i);
+          out.push({
+            username,
+            cardText: text.slice(0, 240),
+            sentAtText: sentMatch ? sentMatch[1].trim() : null,
+          });
+          break;
+        }
         node = node.parentElement;
       }
-      if (!inLink || !node) continue;
-      const m = (inLink.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
-      if (!m) continue;
-      const text = (node.innerText || "").trim();
-      const sentMatch = text.match(/Sent\s+([^\n]+?)(?:\n|$)/i);
-      out.push({
-        username: m[1],
-        cardText: text.slice(0, 240),
-        sentAtText: sentMatch ? sentMatch[1].trim() : null,
-      });
     }
     return out;
   }).catch(() => []);
