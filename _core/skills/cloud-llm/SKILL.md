@@ -20,7 +20,7 @@ Single point of entry for cloud LLM calls (Gemini + Sonnet) with account cycling
 |---|---|---|---|
 | **gemini Pro vision** (default) | `gemini -m gemini-3-pro-preview -p "..." -o text` (cwd matters: image paths must be inside cwd) | best quota across 3 accounts; vision quality on par with Sonnet | workspace sandbox restricts image paths to cwd subtree |
 | **gemini Flash** (auto on Pro 429) | `gemini -p "..." -o text` (no model flag → Flash) | cheaper quota | lower quality on visual nuance |
-| **claude -p sonnet** (final fallback) | `claude -p "..." --model sonnet` | no path restriction; consistent quality | single-account, no cycling — eats Max weekly cap |
+| **claude -p sonnet** (final fallback) | `claude -p "..." --model sonnet` | no path restriction; consistent quality | single-account, no cycling  -  eats Max weekly cap |
 
 **Account cycling (gemini only):** copy a cached creds file into place before invocation:
 
@@ -68,16 +68,16 @@ const desc = await describeImages(
 
 ## When this fires
 
-Triggers — any consumer skill that needs cloud LLM and doesn't want to think about cycling:
+Triggers  -  any consumer skill that needs cloud LLM and doesn't want to think about cycling:
 - Vision: image description, screenshot Q&A, multimodal synthesis
 - Text: long-form prompts that exceed local-llm's 32k context
 
 Do NOT use for:
-- Skills that require local-only inference (privacy-sensitive raw files that should not leave the machine — those still go through `local-llm`).
+- Skills that require local-only inference (privacy-sensitive raw files that should not leave the machine  -  those still go through `local-llm`).
 - Drafting messages in Adithya's voice (that path is `claude -p` directly inside the consumer; cycling adds nothing because it's already single-shot per draft).
 
 ## Operator notes
 
 - This skill has no daemon, no install. The CLIs (`gemini`, `claude`) are already on PATH.
-- The cycling state is just `~/.gemini/oauth_creds.json` getting overwritten. No DB, no lockfile. If two consumers ran concurrently they could clobber each other mid-call — fine in practice because both consumers process serially.
+- The cycling state is just `~/.gemini/oauth_creds.json` getting overwritten. No DB, no lockfile. If two consumers ran concurrently they could clobber each other mid-call  -  fine in practice because both consumers process serially.
 - Logs from each invocation go to consumer's own log; this skill is silent on success.

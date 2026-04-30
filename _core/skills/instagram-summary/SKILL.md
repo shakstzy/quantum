@@ -53,7 +53,7 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 
 ## Errors
 
-- `cloud-llm dispatch failed`: all gemini accounts exhausted AND claude -p also failed. Hand off to `_core/skills/cloud-llm/SKILL.md` (it owns the engine cycle and account state). Likely cause: every Gemini account 429'd this week and Claude Max weekly cap also hit — wait for caps to reset.
+- `cloud-llm dispatch failed`: all gemini accounts exhausted AND claude -p also failed. Hand off to `_core/skills/cloud-llm/SKILL.md` (it owns the engine cycle and account state). Likely cause: every Gemini account 429'd this week and Claude Max weekly cap also hit  -  wait for caps to reset.
 - `LoginRequired`: Instagram demanding auth. Run once with a burner:
 
   ```
