@@ -15,9 +15,15 @@ import { chmod, mkdir } from 'node:fs/promises';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-const PROFILE_DIR = process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/x`;
-const PIDFILE = join(PROFILE_DIR, '.skill.pid');
-const BREAKER_FILE = join(PROFILE_DIR, '.breaker.json');
+// Profile dir, pidfile, and breaker file are runtime-evaluated so the
+// --profile <name> flag (resolved into X_READ_PROFILE_DIR by run.mjs)
+// takes effect on every call. Don't bake at module-load — that breaks
+// multi-account support.
+export function getProfileDir() {
+  return process.env.X_READ_PROFILE_DIR || `${process.env.HOME}/.quantum/chrome-profiles/x`;
+}
+function getPidfile() { return join(getProfileDir(), '.skill.pid'); }
+function getBreakerFile() { return join(getProfileDir(), '.breaker.json'); }
 
 // Allowlist of GraphQL op names we'll touch via replay (pageApi). Any op
 // outside this set is rejected to keep the read-only contract auditable.
@@ -33,8 +39,6 @@ const ALLOWED_OPS = new Set([
   'HomeTimeline',
   'UsersByRestIds'
 ]);
-
-export function getProfileDir() { return PROFILE_DIR; }
 
 function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (_) { return false; }
