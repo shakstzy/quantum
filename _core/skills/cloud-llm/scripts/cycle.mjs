@@ -16,7 +16,10 @@ import { randomUUID } from "node:crypto";
 const execFile = promisify(_execFile);
 
 const QUANTUM_ROOT = "/Users/shakstzy/QUANTUM";
-const STAGING_DIR = resolve(QUANTUM_ROOT, "raw/.cloud-llm-staging");
+// Staging lives inside the skill itself (NOT raw/) so gemini's .gitignore-respect
+// behavior doesn't filter out the staged image files. raw/* is gitignored so any
+// path under raw/ would be skipped by gemini at file-read time.
+const STAGING_DIR = resolve(QUANTUM_ROOT, "_core/skills/cloud-llm/.staging");
 const GEMINI_ACCOUNTS_DIR = resolve(homedir(), ".gemini/accounts");
 const GEMINI_ACTIVE_CREDS = resolve(homedir(), ".gemini/oauth_creds.json");
 const GEMINI_PRO_MODEL = "gemini-3-pro-preview";
@@ -103,7 +106,16 @@ async function runGemini({ prompt, imageRefs, useFlash = false }) {
   if (!stdout.trim()) {
     throw new Error(`gemini returned empty output. stderr=${stderr.slice(0, 300)}`);
   }
-  return stdout.trim();
+  // Detect gemini's "agentic chatter" output — when the CLI couldn't access the
+  // file and emits its own internal reasoning instead of completing the task.
+  // Heuristic: leading "I will" / "I am" / "I'll" lines without any bullets.
+  const trimmed = stdout.trim();
+  const looksAgentic = /^(I will|I am|I'll|I need to|I'd|Let me|Looking at|I notice)/i.test(trimmed);
+  const hasBullets = /^[-*]\s+\w+:/m.test(trimmed);
+  if (looksAgentic && !hasBullets) {
+    throw new Error(`gemini returned agentic chatter (likely ignored file). first 200 chars: ${trimmed.slice(0, 200)}`);
+  }
+  return trimmed;
 }
 
 async function runClaude({ prompt, imagePaths }) {

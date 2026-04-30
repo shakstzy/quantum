@@ -17,7 +17,9 @@ import uuid
 from pathlib import Path
 
 QUANTUM_ROOT = Path("/Users/shakstzy/QUANTUM")
-STAGING_DIR = QUANTUM_ROOT / "raw" / ".cloud-llm-staging"
+# Staging lives inside the skill itself (NOT raw/) so gemini's .gitignore-respect
+# behavior doesn't filter out the staged image files at file-read time.
+STAGING_DIR = QUANTUM_ROOT / "_core" / "skills" / "cloud-llm" / ".staging"
 GEMINI_ACCOUNTS_DIR = Path.home() / ".gemini" / "accounts"
 GEMINI_ACTIVE_CREDS = Path.home() / ".gemini" / "oauth_creds.json"
 GEMINI_PRO_MODEL = "gemini-3-pro-preview"
@@ -90,9 +92,15 @@ def _run_gemini(prompt: str, image_refs: list[str], use_flash: bool = False) -> 
         raise RuntimeError(f"gemini 429: {stderr[:300]}")
     if proc.returncode != 0:
         raise RuntimeError(f"gemini exit={proc.returncode}: {stderr[:400]}")
-    if not stdout.strip():
+    trimmed = stdout.strip()
+    if not trimmed:
         raise RuntimeError(f"gemini returned empty output. stderr={stderr[:300]}")
-    return stdout.strip()
+    # Detect agentic chatter (CLI couldn't access file, emits internal reasoning)
+    looks_agentic = bool(re.match(r"^(I will|I am|I'll|I need to|I'd|Let me|Looking at|I notice)", trimmed, re.IGNORECASE))
+    has_bullets = bool(re.search(r"^[-*]\s+\w+:", trimmed, re.MULTILINE))
+    if looks_agentic and not has_bullets:
+        raise RuntimeError(f"gemini returned agentic chatter (likely ignored file): {trimmed[:200]}")
+    return trimmed
 
 
 def _run_claude(prompt: str, abs_paths: list[Path]) -> str:
