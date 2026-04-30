@@ -2,7 +2,7 @@
 import { launchPersistent } from "../../src/runtime/profile.mjs";
 import { ensureLoggedIn } from "../../src/linkedin/session.mjs";
 import { LinkedInExtractor } from "../../src/linkedin/extractor.mjs";
-import { gate } from "../../src/policy/rate-limits.mjs";
+import { gate, record } from "../../src/policy/rate-limits.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.query) {
@@ -17,6 +17,7 @@ try {
   await ensureLoggedIn(page);
   const ext = new LinkedInExtractor(page);
   const result = await ext.searchPeople({ query: args.query, location: args.location ?? null });
+  await record("search_people", { target: args.query, extra: { hits: result.profiles?.length ?? 0 } });
   if (args.json) console.log(JSON.stringify(result, null, 2));
   else {
     console.log(`Found ${result.profiles.length} profile links:`);
