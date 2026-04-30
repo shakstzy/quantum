@@ -1,6 +1,6 @@
 ---
 name: real-estate
-description: Scrape Redfin and Zillow listings, property details, history, comps, and tax records via a free CLI (curl_cffi TLS impersonation, no paid API). Use for "look up <address>", "find homes in <city>", "redfin estimate", "zestimate", "comps", "price history", "school ratings", "tax history".
+description: Scrape Redfin and Zillow listings, property details, history, comps, tax records, AI summaries, walk/transit/bike scores, parcel info, permits, polygon/bbox/multi-region searches via a free CLI (curl_cffi TLS impersonation, no paid API). Use for "look up <address>", "find homes in <city>", "search homes in this polygon", "redfin estimate", "zestimate", "comps", "price history", "school ratings", "tax history", "compare <region A> vs <region B>".
 ---
 
 # real-estate
