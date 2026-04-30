@@ -40,16 +40,23 @@ DEFAULT_HEADERS = {
 }
 
 _session: curl_requests.Session | None = None
+import threading as _threading
+_session_lock = _threading.RLock()
 
 
 def _get_session() -> curl_requests.Session:
-    """Return a warmed session. We hit the homepage once to acquire cookies."""
+    """Return a warmed session. We hit the homepage once to acquire cookies.
+
+    Thread-safe: the lock serializes the lazy-create so two concurrent
+    callers don't double-warm the session.
+    """
     global _session
-    if _session is None:
-        s = curl_requests.Session(impersonate="chrome131")
-        s.get(BASE + "/", headers=DEFAULT_HEADERS, timeout=20)
-        _session = s
-    return _session
+    with _session_lock:
+        if _session is None:
+            s = curl_requests.Session(impersonate="chrome131")
+            s.get(BASE + "/", headers=DEFAULT_HEADERS, timeout=20)
+            _session = s
+        return _session
 
 
 def _fetch_html(url: str) -> str:

@@ -55,6 +55,10 @@ STATE_ABBREVS = {
 _PROFILE_ROTATION = ["chrome124", "safari17_0", "chrome131", "chrome120", "chrome116", "firefox133"]
 _session: curl_requests.Session | None = None
 _session_profile: str | None = None
+# Threads can race when batch.py runs N concurrent fetches and one trips PX
+# rotation. The lock serializes session reads/writes so a swap is atomic.
+import threading as _threading
+_session_lock = _threading.RLock()
 
 
 def _new_session(profile: str) -> curl_requests.Session:
@@ -65,10 +69,11 @@ def _new_session(profile: str) -> curl_requests.Session:
 
 def _get_session() -> curl_requests.Session:
     global _session, _session_profile
-    if _session is None:
-        _session_profile = _PROFILE_ROTATION[0]
-        _session = _new_session(_session_profile)
-    return _session
+    with _session_lock:
+        if _session is None:
+            _session_profile = _PROFILE_ROTATION[0]
+            _session = _new_session(_session_profile)
+        return _session
 
 
 def _is_px_block(r) -> bool:
@@ -80,19 +85,22 @@ def _fetch_html(url: str) -> str:
     s = _get_session()
     r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
     if _is_px_block(r):
-        try:
-            start = _PROFILE_ROTATION.index(_session_profile or "") + 1
-        except ValueError:
-            start = 0
-        for prof in _PROFILE_ROTATION[start:]:
+        # PX rotation needs the session lock to swap _session / _session_profile
+        # atomically without racing other threads.
+        with _session_lock:
             try:
-                s = _new_session(prof)
-            except Exception:
-                continue
-            r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
-            if r.status_code == 200 and not _is_px_block(r):
-                _session, _session_profile = s, prof
-                return r.text
+                start = _PROFILE_ROTATION.index(_session_profile or "") + 1
+            except ValueError:
+                start = 0
+            for prof in _PROFILE_ROTATION[start:]:
+                try:
+                    s = _new_session(prof)
+                except Exception:
+                    continue
+                r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
+                if r.status_code == 200 and not _is_px_block(r):
+                    _session, _session_profile = s, prof
+                    return r.text
         raise RuntimeError(
             f"zillow GET {url} -> PX captcha across all impersonation profiles "
             f"({_PROFILE_ROTATION}). Wait ~30 min for PX to release the IP, "
