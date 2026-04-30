@@ -114,7 +114,30 @@ def run(email: str, action: str, ids: list[str], dry_run: bool, audit_path: Path
     elif action.startswith("add-label:") or action.startswith("remove-label:"):
         op, label_id = action.split(":", 1)
         delta = {"addLabelIds": [label_id], "removeLabelIds": []} if op == "add-label" else {"addLabelIds": [], "removeLabelIds": [label_id]}
-        run(email, "trash", ids, False, audit_path, force)  # not used; handled above
+        svc = _service(email)
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        success_total = 0
+        with audit_path.open("a") as af:
+            t0 = time.time()
+            for i in range(0, len(ids), CHUNK):
+                chunk = ids[i:i + CHUNK]
+                body = {"ids": chunk, **delta}
+                attempt = 0
+                while True:
+                    try:
+                        svc.users().messages().batchModify(userId="me", body=body).execute()
+                        success_total += len(chunk)
+                        af.write(json.dumps({"ts": time.time(), "action": action, "batch": i // CHUNK, "n": len(chunk), "ok": True}) + "\n")
+                        break
+                    except HttpError as e:
+                        if e.resp.status in (429, 500, 503) and attempt < 4:
+                            time.sleep(2 ** attempt)
+                            attempt += 1
+                            continue
+                        af.write(json.dumps({"ts": time.time(), "action": action, "batch": i // CHUNK, "n": len(chunk), "ok": False, "error": str(e)}) + "\n")
+                        break
+                print(f"[bulk] batch {i // CHUNK + 1}/{(len(ids) + CHUNK - 1) // CHUNK} done", file=sys.stderr)
+            print(f"[bulk] {success_total}/{len(ids)} messages updated ({action}) in {time.time()-t0:.1f}s")
     else:
         sys.exit(f"unknown action: {action}")
 
