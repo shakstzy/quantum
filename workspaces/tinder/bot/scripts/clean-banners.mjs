@@ -7,9 +7,9 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { RAW_DIR } from "../src/runtime/paths.mjs";
 
-// GEMINI-IMP-R2-8: matches the welcome banner shape (start-anchor + name + time-ago).
-// Tinder concats with no whitespace ("Zoe1 day agoBinge..."), so no \b after "ago".
-const BANNER_RE = /\bYou Matched with\b.*\b(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|moments ago|today|yesterday)/i;
+// GEMINI-IMP-R2-8: matches welcome banner shape. No \b before \d+ — letter→digit
+// transition is NOT a word boundary in JS. Tinder concats with no spaces.
+const BANNER_RE = /\bYou Matched with\b.*(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|moments ago|today|yesterday)/i;
 
 const files = (await readdir(RAW_DIR)).filter(f => f.endsWith(".md"));
 let touched = 0;
