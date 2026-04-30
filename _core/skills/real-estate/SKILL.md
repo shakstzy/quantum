@@ -1,11 +1,15 @@
 ---
 name: real-estate
-description: Scrape Redfin and Zillow listings, property details, history, comps, tax records, AI summaries, walk/transit/bike scores, parcel info, permits, polygon/bbox/multi-region searches via a free CLI (curl_cffi TLS impersonation, no paid API). Use for "look up <address>", "find homes in <city>", "search homes in this polygon", "redfin estimate", "zestimate", "comps", "price history", "school ratings", "tax history", "compare <region A> vs <region B>".
+description: Scrape Redfin and Zillow listings, property details, history, comps, tax records, AI summaries, walk/transit/bike scores, parcel info, permits, polygon/bbox/multi-region searches via a free CLI (curl_cffi TLS impersonation, no paid API). Plus a free County Appraisal District (CAD) bulk-data layer for owner names, appraised/assessed values, deed dates, exemption flags - currently Travis County (Austin); modular per-county adapters for the remaining 253 TX counties. Use for "look up <address>", "find homes in <city>", "owner of <address>", "search homes in this polygon", "redfin estimate", "zestimate", "comps", "price history", "school ratings", "tax history", "compare <region A> vs <region B>", "investor-owned vs owner-occupied".
 ---
 
 # real-estate
 
-Free, local CLI for Redfin + Zillow research queries. No paid API. No browser. No bot-detection cat-and-mouse beyond a TLS-impersonating HTTP client (`curl_cffi`).
+Free, local CLI with three data layers:
+
+1. **Redfin + Zillow** scraping for active listings, history, schools, AI summaries, walk/transit/bike, polygon/bbox/multi-region search. TLS-impersonating HTTP client (`curl_cffi`). No paid API.
+2. **Rent estimation** from Zillow rental comps within a radius.
+3. **County Appraisal District (CAD) bulk data** for owner names, county-appraised values, deed dates, exemption flags, parcel geo-IDs. Free public-record downloads, ingested locally into DuckDB. Currently Travis County only; pluggable per-county adapter pattern for the remaining 253 TX counties. Once ingested, lookups are sub-millisecond and unlimited.
 
 ## When this fires
 
@@ -36,10 +40,10 @@ From repo root:
 _core/skills/real-estate/re rent-estimate "6326 River Place Blvd Austin TX 78732"
 _core/skills/real-estate/re rent-estimate "<address>" --radius-miles 1.5 --beds-tolerance 1
 
-# THE simple "address -> all the info" path (queries BOTH sites + merges)
-_core/skills/real-estate/re lookup "9400 Shady Oaks Dr Austin TX 78729"
+# THE simple "address -> all the info" path (queries BOTH sites + CAD if Travis + merges)
+_core/skills/real-estate/re lookup "5509 Casco Walk Austin TX 78724"
 
-# Just the merged top-level view, skip the per-source dumps
+# Just the merged top-level view, skip the per-source dumps. Includes cad_* fields when CAD covers the address.
 _core/skills/real-estate/re lookup "<address>" --merged-only
 
 # With full nested raw payloads for both sources
@@ -296,6 +300,67 @@ How it stays safe:
 - **Honest per-row failure.** A Zillow PX block on row 47 doesn't kill rows 48-100; the row's `error` field surfaces it.
 
 For TRUE scale (>50 addresses without IP rotation): set `REAL_ESTATE_PROXY=socks5://...` to route Zillow through a residential proxy. Without proxies, every dozen addresses on the same IP raises the chance of a softlock; with cheap residential ($5/GB pay-as-go like IPRoyal, or your own WireGuard exit on a $5/mo VPS), that ceiling lifts.
+
+## CAD (County Appraisal District) bulk-data layer
+
+Free, public, no scraping. Ingests official appraisal-roll exports into a
+local DuckDB and serves sub-millisecond lookups offline. Currently
+Travis County (Austin). The schema parser is the **EARS / True Prodigy
+fixed-width format**, which is the same across ~30+ TX counties on that
+platform - adding new counties is mostly just a new download URL.
+
+```bash
+# One-time download + ingest (Travis: ~553MB zip, ~22s ingest, ~276MB DuckDB)
+re cad refresh travis
+
+# Skip download if you already have the extracted .TXT files (handy during dev)
+re cad refresh travis --skip-download --val-year 2026
+
+# Look up an address (zip-routed, structured JSON)
+re cad lookup "5509 Casco Walk Austin TX 78724"
+re cad lookup "<addr>" --full      # also return improvements + land segments
+
+# Show what's ingested (county / val_year / parcel count / freshness)
+re cad summary
+```
+
+**Auto-merge with `re lookup`.** When the address resolves to a covered
+county, `re lookup <address>` adds these `cad_*` keys to the merged view:
+
+- `cad_owner_name` — current taxable owner (Redfin/Zillow don't expose this)
+- `cad_appraised_val`, `cad_assessed_val`, `cad_market_val` — county valuations
+- `cad_year_built`, `cad_living_sqft` — from the improvement-detail file
+- `cad_legal_acreage` — lot acres
+- `cad_homestead_exempt` — `false` = not owner-occupied (signal for investor-owned)
+- `cad_over65_exempt`, `cad_disabled_veteran_exempt` — other exemption flags
+- `cad_deed_dt` — last recorded deed date (TX is a non-disclosure state for sale price, so the price isn't here)
+- `cad_subdivision_cd`, `cad_legal_desc` — official legal references
+- `cad_prop_id`, `cad_county` — for cross-referencing other CAD pulls
+
+**Why bulk download instead of scraping the CAD search portal:**
+- Free + unlimited (no rate limits, no IP burn)
+- 100% coverage including off-MLS, new builds, and mineral parcels
+- Sub-ms query time after one ~22s ingest
+- Quarterly refresh cadence matches CAD's update cycle anyway
+
+**Adding a county.** Drop a new file at `scripts/cad/counties/<name>.py`
+that exports `NAME, STATE, FIPS, ZIPS, find_latest_export(),
+find_local_extract(), PROP_FILE, IMP_DET_FILE, LAND_DET_FILE, cache_dir()`.
+Register it in `scripts/cad/registry.py`. If the county is on the same
+True Prodigy / EARS schema (Williamson, Hays, Bastrop, Caldwell, Comal,
+Guadalupe, etc.), no parser changes needed. Other vendors (Tyler, Harris
+Govern, Pritchard & Abbott) need their own field-spec dict in `schema.py`.
+
+**Storage:**
+- Source zips at `~/.quantum/real-estate/cad/<county>/raw/`
+- Extracted `.TXT` files at `~/.quantum/real-estate/cad/<county>/extracted/`
+- DuckDB at `~/.quantum/real-estate/cad/cad.duckdb` (one DB across all counties)
+- Add `--prune-after` to `re cad refresh` to drop the 17GB extracted files post-ingest
+
+**What CAD does not give you (that Redfin/Zillow do):** list price, days
+on market, photos, AI summary, schools, walk/transit/bike scores, comps,
+nearby homes. CAD is for ownership + assessed value + parcel geometry,
+not for marketing data. The merged `re lookup` output covers both.
 
 ## Cross-source dedupe
 
