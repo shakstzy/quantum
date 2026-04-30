@@ -9,7 +9,9 @@ import { loadCaps } from "../runtime/caps.mjs";
 import { sleep } from "../runtime/humanize.mjs";
 
 const SENT_URL = "https://www.linkedin.com/mynetwork/invitation-manager/sent/";
-const WITHDRAW_BTN_SEL = 'button[aria-label*="Withdraw"]';
+// As of 2026-04-30 LinkedIn renders the withdraw control as <a aria-label^="Withdraw invitation">.
+// We accept both the new <a> form and the legacy <button> form so the count works across variants.
+const WITHDRAW_BTN_SEL = 'a[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]';
 
 async function gotoSentManager(page) {
   await page.goto(SENT_URL, { waitUntil: "domcontentloaded", timeout: 30_000 });
@@ -59,16 +61,23 @@ async function scrollUntilStable(page, { maxScrolls = 30, pauseMs = 700 } = {}) 
 async function readSentInvites(page) {
   return await page.evaluate(() => {
     const out = [];
-    const cards = Array.from(document.querySelectorAll(
-      'main li:has(button[aria-label*="Withdraw"]), main [data-test-id*="invitation"]:has(button[aria-label*="Withdraw"])'
+    // Anchor on the withdraw control (now an <a aria-label^="Withdraw invitation">),
+    // walk up to find the card that also contains a /in/<username>/ link.
+    const triggers = Array.from(document.querySelectorAll(
+      'a[aria-label^="Withdraw invitation"], button[aria-label*="Withdraw"]'
     ));
-    for (const card of cards) {
-      const a = card.querySelector('a[href*="/in/"]');
-      if (!a) continue;
-      const m = (a.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
+    for (const trigger of triggers) {
+      let node = trigger;
+      let inLink = null;
+      for (let depth = 0; depth < 15 && node; depth++) {
+        inLink = node.querySelector('a[href*="/in/"]');
+        if (inLink) break;
+        node = node.parentElement;
+      }
+      if (!inLink || !node) continue;
+      const m = (inLink.getAttribute("href") || "").match(/\/in\/([^/?#]+)/);
       if (!m) continue;
-      const text = (card.innerText || "").trim();
-      // LinkedIn's "Sent X ago" line is usually visible. Extract the relative-time hint.
+      const text = (node.innerText || "").trim();
       const sentMatch = text.match(/Sent\s+([^\n]+?)(?:\n|$)/i);
       out.push({
         username: m[1],

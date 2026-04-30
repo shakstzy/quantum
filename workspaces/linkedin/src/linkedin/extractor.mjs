@@ -392,23 +392,35 @@ export class LinkedInExtractor {
     await this.navigateTo(url);
     if (dryRun) return { url, status: "would_withdraw", ok: true, dryRun: true };
 
-    // Find a card whose href contains /in/<username>/, then click its Withdraw button.
-    // NOTE: ":has-text(...)" is a Playwright pseudo-selector — invalid in raw querySelector.
-    // We use innerText matching instead.
+    // Find the withdraw control. As of 2026-04-30 LinkedIn uses an <a> tag with
+    // aria-label="Withdraw invitation sent to <Name>" — NOT a <button> with aria-label "Withdraw".
+    // We anchor on the withdraw <a> and walk up to find the matching /in/<username>/ link.
+    // Fallbacks: legacy button[aria-label*=Withdraw], then innerText match.
     const rowFound = await this.page.evaluate((u) => {
+      // Strategy 1 (NEW): a[aria-label^="Withdraw invitation"]
+      const withdrawAnchors = Array.from(document.querySelectorAll('a[aria-label^="Withdraw invitation"]'));
+      for (const trigger of withdrawAnchors) {
+        let node = trigger;
+        for (let depth = 0; depth < 15 && node; depth++) {
+          const inLink = node.querySelector(`a[href*="/in/${u}/"]`);
+          if (inLink) { trigger.click(); return { ok: true, strategy: "a_aria_withdraw" }; }
+          node = node.parentElement;
+        }
+      }
+      // Strategy 2 (LEGACY): button[aria-label*="Withdraw"]
       const cards = Array.from(document.querySelectorAll('main li, main [data-test-id*="invitation"]'));
       for (const card of cards) {
         const a = card.querySelector(`a[href*="/in/${u}/"]`);
         if (!a) continue;
         const ariaBtn = card.querySelector('button[aria-label*="Withdraw"]');
-        if (ariaBtn) { ariaBtn.click(); return true; }
-        const textBtn = Array.from(card.querySelectorAll("button"))
-          .find((b) => /withdraw/i.test(b.innerText || ""));
-        if (textBtn) { textBtn.click(); return true; }
+        if (ariaBtn) { ariaBtn.click(); return { ok: true, strategy: "button_aria_legacy" }; }
+        const textBtn = Array.from(card.querySelectorAll("button, a"))
+          .find((b) => /^withdraw$/i.test((b.innerText || "").trim()));
+        if (textBtn) { textBtn.click(); return { ok: true, strategy: "innertext_match" }; }
       }
-      return false;
-    }, username).catch(() => false);
-    if (!rowFound) return { url, status: "not_found", ok: false };
+      return { ok: false };
+    }, username).catch(() => ({ ok: false }));
+    if (!rowFound || !rowFound.ok) return { url, status: "not_found", ok: false };
     // Confirm in modal (Withdraw confirmation).
     await sleep(jitter(500, 1200));
     if (await this._dialogIsOpen({ timeoutMs: 3000 })) {
@@ -416,7 +428,7 @@ export class LinkedInExtractor {
       await confirm.click().catch(() => {});
       await this.page.waitForSelector(DIALOG_SELECTOR, { state: "hidden", timeout: 4000 }).catch(() => {});
     }
-    return { url, status: "withdrawn", ok: true };
+    return { url, status: "withdrawn", ok: true, strategy: rowFound.strategy };
   }
 
   // Send a message via the magic compose URL (requires profile URN — we read it from the profile page).
