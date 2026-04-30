@@ -64,6 +64,22 @@ function latestProfileDiff(ent) {
   return parseLatestDiffJsonBlock(ent.profile_changes);
 }
 
+// Parse the ## Visual section's `- key: value` bullets into a structured object.
+// Skips comment lines like `<!-- engine=... -->` and (none observed) entries.
+function visualFromEntity(ent) {
+  const md = ent.visual || "";
+  if (!md.trim()) return null;
+  const out = {};
+  for (const line of md.split("\n")) {
+    const m = line.match(/^[-*]\s+([\w_]+):\s*(.*)$/);
+    if (!m) continue;
+    const [, k, v] = m;
+    if (!v || v.trim().toLowerCase() === "(none observed)") continue;
+    out[k] = v.trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function main() {
   await expireOldPending();
   const entities = await listAllEntities();
@@ -92,11 +108,13 @@ async function main() {
     const finalIntent = channel === "tinder_reengage" ? "reengage_after_imessage_silence" : intent;
     const profile = profileFromEntity(ent);
     const profileDiff = latestProfileDiff(ent);
+    const visual = visualFromEntity(ent);
     const context = {
       ...profile,
       thread: parseMessages(ent.conversation),
       imessage_summary: summarizeImessage(activity),
       profile_diff: profileDiff,
+      visual,
     };
 
     let drafted;

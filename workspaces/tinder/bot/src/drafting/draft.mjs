@@ -30,8 +30,14 @@ function formatProfileDiff(diff) {
   return lines.length ? lines.join("\n") : null;
 }
 
+function formatVisual(visual) {
+  if (!visual || Object.keys(visual).length === 0) return null;
+  return Object.entries(visual).map(([k, v]) => `  ${k}: ${v}`).join("\n");
+}
+
 function buildPrompt({ context, intent, voice }) {
   const diffBlock = formatProfileDiff(context.profile_diff);
+  const visualBlock = formatVisual(context.visual);
   const lines = [
     SYSTEM,
     "",
@@ -54,6 +60,12 @@ function buildPrompt({ context, intent, voice }) {
     `  jobs: ${(context.jobs || []).join(", ") || "—"}`,
     "",
   ];
+  if (visualBlock) {
+    lines.push("visual signal from her photos (NON-FACIAL — settings, props, vibe, activities):");
+    lines.push(visualBlock);
+    lines.push("Use these signals to anchor the opener on something specific and observable (a place, a prop, an activity, a notable_signal). NEVER reference how she looks, her body, or her face.");
+    lines.push("");
+  }
   if (diffBlock) {
     lines.push("PROFILE CHANGES SINCE LAST SCRAPE (recent edits she made):");
     lines.push(diffBlock);
