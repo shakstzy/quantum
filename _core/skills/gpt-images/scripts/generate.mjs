@@ -85,10 +85,11 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
       if (!clickedSend) await new Promise(r => setTimeout(r, 250));
     }
     if (!clickedSend) {
-      if (debug) process.stderr.write('[gpt-images] no send button found, falling back to Cmd+Enter\n');
-      await ctx.page.keyboard.press('Meta+Enter').catch(() => {});
-      await new Promise(r => setTimeout(r, 200));
-      await ctx.page.keyboard.press('Enter').catch(() => {});
+      // Single fallback: Cmd+Enter is the canonical ProseMirror submit
+      // shortcut. Plain Enter inserts a hard break in ChatGPT's editor and
+      // would corrupt the prompt, so it's not safe as a backup.
+      if (debug) process.stderr.write('[gpt-images] no send button found within 5s, sending Cmd+Enter\n');
+      await ctx.page.keyboard.press('Meta+Enter');
     }
 
     // Poll for image in newest assistant message.
@@ -146,27 +147,28 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
 
 async function waitForGeneratedImage(page, { timeoutMs, debug }) {
   // ChatGPT renders generated images outside the [data-message-author-role]
-  // wrapper used for text turns, so search globally for img elements whose
-  // src points at OpenAI's asset CDNs. Take the LAST such match (most
-  // recently added). The user's prompt does NOT contain images, so any new
-  // assistant-side image is the generated one.
+  // wrapper used for text turns. Scope search to <main> to avoid sidebar
+  // chrome / hero images, then filter to OpenAI asset hosts OR sufficiently
+  // large inline images. Stability gate: require two consecutive polls with
+  // the same src + naturalWidth/Height before declaring ready, so we don't
+  // download a low-res placeholder that gets swapped for full-res.
   const deadline = Date.now() + timeoutMs;
   let last = { kind: 'init' };
+  let stableHits = 0;
+  let stableSig = '';
   while (Date.now() < deadline) {
     const r = await page.evaluate(() => {
-      const allImgs = Array.from(document.querySelectorAll('img'));
-      // Filter for "looks like a generated content image" hosts.
+      const root = document.querySelector('main') || document.body;
+      const allImgs = Array.from(root.querySelectorAll('img'));
       const generated = allImgs.filter(im => {
         const s = im.getAttribute('src') || im.src || '';
         if (!s) return false;
         if (s.startsWith('data:') || s.startsWith('blob:')) return false;
         if (!/^https?:\/\//.test(s)) return false;
-        // Exclude obvious chrome (avatars, logos, sprites).
         if (/avatar|profile-pic|logo|favicon|sprite|icon\.|emoji/i.test(s)) return false;
-        // Whitelist OpenAI asset hosts.
-        return /oaiusercontent\.com|files\.oaiusercontent|files\.oai|sdmntpr|sdmnt[a-z]+\.openai|cdn\.openai\.com|videos\.openai|assets\.oaistatic\.com\/img/i.test(s)
-          // Or any large image inline (rect width >= 200) that isn't on our exclusion list.
-          || (im.getBoundingClientRect().width >= 200 && im.getBoundingClientRect().height >= 200);
+        if (/oaiusercontent\.com|files\.oaiusercontent|files\.oai|sdmntpr|sdmnt[a-z]+\.openai|cdn\.openai\.com|videos\.openai|assets\.oaistatic\.com\/img|chatgpt\.com\/backend-api\/(estuary|files)/i.test(s)) return true;
+        const r = im.getBoundingClientRect();
+        return r.width >= 200 && r.height >= 200;
       });
       if (!generated.length) {
         const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
@@ -174,19 +176,30 @@ async function waitForGeneratedImage(page, { timeoutMs, debug }) {
       }
       const last = generated[generated.length - 1];
       const src = last.getAttribute('src') || last.src;
-      if (!last.naturalWidth || !last.naturalHeight) {
-        return { kind: 'loading', src };
-      }
-      // Stability check: image must be >= 200px in at least one dimension.
-      // Tiny tracking pixels and inline previews would slip through otherwise.
+      if (!last.naturalWidth || !last.naturalHeight) return { kind: 'loading', src };
       if (Math.max(last.naturalWidth, last.naturalHeight) < 200) {
         return { kind: 'too-small', src, w: last.naturalWidth, h: last.naturalHeight };
       }
-      return { kind: 'ready', src, w: last.naturalWidth, h: last.naturalHeight };
+      return { kind: 'candidate', src, w: last.naturalWidth, h: last.naturalHeight };
     });
     if (debug) process.stderr.write(`[gpt-images] poll: ${JSON.stringify(r).slice(0, 200)}\n`);
     last = r;
-    if (r.kind === 'ready') return r;
+    if (r.kind === 'candidate') {
+      const sig = `${r.src}|${r.w}x${r.h}`;
+      if (sig === stableSig) {
+        stableHits++;
+        if (stableHits >= 1) {
+          // Two consecutive matching polls (this is the second).
+          return { kind: 'ready', src: r.src, w: r.w, h: r.h };
+        }
+      } else {
+        stableHits = 0;
+        stableSig = sig;
+      }
+    } else {
+      stableHits = 0;
+      stableSig = '';
+    }
     await new Promise(rs => setTimeout(rs, 2500));
   }
   return last;

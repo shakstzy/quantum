@@ -5,7 +5,7 @@
 
 import { chromium } from 'patchright';
 import { chmod, mkdir } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, openSync, writeSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 
 const PROFILE_DIR = process.env.GPT_IMAGES_PROFILE_DIR
@@ -22,16 +22,32 @@ function isAlive(pid) {
 }
 
 function acquirePidfile() {
-  if (existsSync(PIDFILE)) {
-    const old = parseInt(readFileSync(PIDFILE, 'utf8').trim(), 10);
-    if (old && isAlive(old)) {
-      throw new Error(`Profile locked by pid ${old}. Wait or kill it.`);
+  // Atomic: openSync with 'wx' creates and fails if exists. If a stale
+  // pidfile from a crashed prior run exists, validate liveness and clear it.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(PIDFILE, 'wx');
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+      process.on('exit', releasePidfile);
+      process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
+      process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });
+      return;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      // File exists. Validate liveness; if stale, clear and retry once.
+      try {
+        const old = parseInt(readFileSync(PIDFILE, 'utf8').trim(), 10);
+        if (old && isAlive(old)) {
+          throw new Error(`Profile locked by pid ${old}. Wait or kill it.`);
+        }
+        unlinkSync(PIDFILE);
+      } catch (inner) {
+        if (inner.message?.startsWith('Profile locked')) throw inner;
+      }
     }
   }
-  writeFileSync(PIDFILE, String(process.pid));
-  process.on('exit', releasePidfile);
-  process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
-  process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });
+  throw new Error('Could not acquire pidfile after 2 attempts.');
 }
 
 function releasePidfile() {
