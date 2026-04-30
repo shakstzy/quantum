@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from urllib.parse import quote, urlparse
@@ -457,9 +458,6 @@ def _parse_bbox(s: str) -> tuple[float, float, float, float]:
     if len(parts) != 4:
         raise SystemExit("--bbox needs 4 floats: n,e,s,w")
     return tuple(parts)  # type: ignore
-
-
-import re  # noqa: E402  -- used in _parse_polygon helper above
 
 
 def main(argv=None):

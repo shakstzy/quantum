@@ -9,6 +9,9 @@
 #   zernio.sh upload <file>                      Presign, PUT bytes, return {publicUrl}. Guards against expired presigned URLs.
 #   zernio.sh post <payload.json>                POST /posts with payload. Returns response JSON.
 #   zernio.sh status <postId>                    GET /posts/{postId}. Use to poll post status.
+#   zernio.sh discord-channels <accountId>       Discord: list channels (falls back to accounts metadata if live API not ready).
+#   zernio.sh discord-settings <accountId>       Discord: current channel + webhook identity (same fallback).
+#   zernio.sh discord-settings-update <accountId> <payload.json>  Discord: PATCH webhook identity / switch channel.
 #
 # Requires: ZERNIO_API_KEY in env, curl, jq, file, stat, ffprobe (optional, for video preflight).
 #
@@ -191,12 +194,45 @@ case "$cmd" in
 
   discord-channels)
     accountId="${1:?accountId required}"
-    api GET "/accounts/${accountId}/discord-channels"
+    # Live API doesn't ship /v1/accounts/{id}/discord-channels yet (returns 404 HTML
+    # as of 2026-04-29) despite docs.zernio.com listing it. The connected channel +
+    # guild already live in accounts[].metadata, so degrade to that. When Zernio
+    # ships the endpoint, this branch can switch back to the direct call.
+    resp=$(api GET "/accounts/${accountId}/discord-channels" 2>/dev/null) || resp=""
+    if [[ -n "$resp" ]] && echo "$resp" | jq empty 2>/dev/null; then
+      printf '%s' "$resp"
+    else
+      "$0" accounts | jq --arg id "$accountId" '
+        .accounts[]
+        | select(._id == $id and .platform == "discord")
+        | {
+            connectedChannel: { id: .metadata.channelId, name: .metadata.channelName, type: .metadata.channelType },
+            guild: { id: .metadata.guildId, name: .metadata.guildName },
+            note: "discord-channels endpoint not live; reading from accounts metadata"
+          }
+      '
+    fi
     ;;
 
   discord-settings)
     accountId="${1:?accountId required}"
-    api GET "/accounts/${accountId}/discord-settings"
+    # Same fallback as discord-channels: live API returns 404 HTML; read from accounts.
+    resp=$(api GET "/accounts/${accountId}/discord-settings" 2>/dev/null) || resp=""
+    if [[ -n "$resp" ]] && echo "$resp" | jq empty 2>/dev/null; then
+      printf '%s' "$resp"
+    else
+      "$0" accounts | jq --arg id "$accountId" '
+        .accounts[]
+        | select(._id == $id and .platform == "discord")
+        | {
+            channel: { id: .metadata.channelId, name: .metadata.channelName, type: .metadata.channelType },
+            guild: { id: .metadata.guildId, name: .metadata.guildName },
+            webhook: { id: .metadata.webhookId, hasToken: (.metadata.webhookToken != null) },
+            connectionMethod: .metadata.connectionMethod,
+            note: "discord-settings endpoint not live; reading from accounts metadata"
+          }
+      '
+    fi
     ;;
 
   discord-settings-update)

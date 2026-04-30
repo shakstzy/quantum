@@ -1,47 +1,41 @@
 """Zillow scraper using public HTML pages.
 
-Zillow runs PerimeterX + Cloudflare. Direct calls to their internal
-`async-create-search-page-state` and home-details JSON endpoints get
-captcha-walled even with browser TLS impersonation. The public HTML pages
-are friendlier:
+Zillow runs PerimeterX + Cloudflare. We hit /<region>/ or /homes/<slug>_rb/
+HTML pages, pull __NEXT_DATA__, and parse client-side. Pure parsing lives in
+zillow_parse.py.
 
-  * Search pages (e.g. /austin-tx/, /homes/Austin-TX_rb/) embed the full
-    listing array under `__NEXT_DATA__.props.pageProps.searchPageState`.
-  * Property pages embed structured data under
-    `__NEXT_DATA__.props.pageProps.componentProps.gdpClientCache` (a
-    JSON-encoded blob keyed by GraphQL query+variables).
-
-Empirically, curl_cffi's `chrome124` impersonation profile clears
-PerimeterX where `chrome131`/`chrome120` get 403'd. Throttle requests and
-warm the session with a homepage GET so PX issues a `_pxvid` cookie.
-
-Region resolution: we don't bother with autocomplete (PX-walled). Instead
-we accept either:
-  * a direct Zillow URL ("https://www.zillow.com/austin-tx/"), or
-  * a free-text query that we slugify into the canonical city URL pattern
-    "/<city-slug>-<state-abbrev>/" (e.g. "Austin, TX" -> "/austin-tx/").
+Region resolution accepts:
+  * a direct Zillow URL (preserves customRegionId if present)
+  * a free-text query slugified into the canonical city URL
+  * (lat,lng) polygon -> bbox + client-side point-in-polygon filter
+  * (n,e,s,w) bbox    -> mapBounds in searchQueryState
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
-import time
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, parse_qs
 
 from curl_cffi import requests as curl_requests
 
-BASE = "https://www.zillow.com"
+import zillow_parse as P
+from zillow_parse import (
+    BASE,
+    next_data,
+    parse_property,
+    parse_search_homes,
+    search_page_state,
+    search_query_state,
+    search_total_count,
+)
+
 DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.zillow.com/",
 }
-NEXT_DATA_RE = re.compile(
-    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
-    re.DOTALL,
-)
 STATE_ABBREVS = {
     "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
     "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
@@ -58,10 +52,6 @@ STATE_ABBREVS = {
     "wisconsin": "wi", "wyoming": "wy", "district of columbia": "dc",
 }
 
-# Profile rotation order. PerimeterX bans clusters of fingerprints over time
-# (chrome131 was fine in March, blocked by late April). When the active
-# profile gets PX-walled we drop down the list. safari17_0 has historically
-# been the most resilient because PX defaults bias toward Chrome detection.
 _PROFILE_ROTATION = ["chrome124", "safari17_0", "chrome131", "chrome120", "chrome116", "firefox133"]
 _session: curl_requests.Session | None = None
 _session_profile: str | None = None
@@ -86,17 +76,10 @@ def _is_px_block(r) -> bool:
 
 
 def _fetch_html(url: str) -> str:
-    """Fetch a Zillow page, rotating impersonation profiles on PX blocks.
-
-    Per-call cost is 1 request on the happy path. On PX block we open a fresh
-    session with the next profile and retry; we don't loop more than the
-    rotation length to avoid burning the IP across every fingerprint.
-    """
     global _session, _session_profile
     s = _get_session()
     r = s.get(url, headers=DEFAULT_HEADERS, timeout=25)
     if _is_px_block(r):
-        # Try other profiles, starting after the current one.
         try:
             start = _PROFILE_ROTATION.index(_session_profile or "") + 1
         except ValueError:
@@ -120,27 +103,16 @@ def _fetch_html(url: str) -> str:
     return r.text
 
 
-def _next_data(html: str) -> dict:
-    m = NEXT_DATA_RE.search(html)
-    if not m:
-        raise RuntimeError("zillow: __NEXT_DATA__ not found; layout may have changed")
-    return json.loads(m.group(1))
-
-
 # ---------------------------------------------------------------------------
 # Region resolution
 # ---------------------------------------------------------------------------
 
 def _slugify_city_state(query: str) -> str | None:
-    """Best-effort: 'Austin, TX' -> 'austin-tx', '78704' -> '78704'."""
     q = query.strip().lower()
-    # Bare zip
     if q.isdigit() and len(q) == 5:
         return q
-    # Already a slug ('austin-tx')
     if re.fullmatch(r"[a-z0-9-]+", q) and "-" in q:
         return q
-    # 'city, state' or 'city state'
     m = re.match(r"([a-z .'-]+?)[, ]+([a-z .]+)$", q)
     if not m:
         return None
@@ -153,13 +125,6 @@ def _slugify_city_state(query: str) -> str | None:
 
 
 def _city_url(query: str) -> str:
-    """Return the canonical Zillow search URL for `query`.
-
-    Uses the `/homes/<slug>_rb/` path. The `/austin-tx/` "city guide" path
-    also works but ignores `searchQueryState` filters in some A/B variants;
-    the `_rb` (results-board) path is the one Zillow's frontend uses for
-    filtered queries.
-    """
     if query.startswith("http"):
         return query
     if query.startswith("/"):
@@ -172,77 +137,59 @@ def _city_url(query: str) -> str:
     return f"{BASE}/homes/{slug}_rb/"
 
 
+def _custom_region_id_from_url(url: str) -> str | None:
+    """If `url` is a Zillow URL with a searchQueryState querystring that
+    includes customRegionId, extract it. Used to preserve user-drawn
+    regions that we can't synthesize ourselves.
+    """
+    qs = parse_qs(urlparse(url).query)
+    sqs_str = (qs.get("searchQueryState") or [None])[0]
+    if not sqs_str:
+        return None
+    try:
+        sqs = json.loads(sqs_str)
+    except json.JSONDecodeError:
+        return None
+    return sqs.get("customRegionId")
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 
-def search(
-    query: str,
-    *,
-    max_price: int | None = None,
-    min_price: int | None = None,
-    min_beds: int | None = None,
-    min_baths: float | None = None,
-    page: int = 1,
-) -> dict:
-    """Search Zillow by free-text region.
+# Map our public flag names to Zillow filterState keys.
+_STATUS_TO_FILTER: dict[str, dict[str, Any]] = {
+    "active": {"isForSaleByAgent": {"value": True}, "isForSaleByOwner": {"value": True},
+               "isNewConstruction": {"value": True}, "isComingSoon": {"value": True}},
+    "pending": {"isPendingListingsSelected": {"value": True},
+                "isAuction": {"value": True}, "isPreMarketForeclosure": {"value": True}},
+    "sold": {"isRecentlySold": {"value": True}},
+    "coming-soon": {"isComingSoon": {"value": True}},
+    "off-market": {"isAllHomes": {"value": True}, "isForSaleByAgent": {"value": False},
+                   "isForSaleByOwner": {"value": False}, "isNewConstruction": {"value": False},
+                   "isComingSoon": {"value": False}},
+}
 
-    Filtering goes through `searchQueryState` querystring, which Zillow's
-    frontend builds. Critical detail: if `searchQueryState` lacks
-    `mapBounds` + `regionSelection`, Zillow ignores the URL slug and falls
-    back to a default region (often Austin in the US). So we do two GETs:
-
-      1. Fetch the unfiltered city URL to discover the region's mapBounds
-         and regionSelection from the rendered queryState.
-      2. Re-fetch with the full state (bounds + region + filters).
-    """
-    url = _city_url(query)
-    base_html = _fetch_html(url)
-    base_data = _next_data(base_html)
-    base_sps = (((base_data.get("props") or {}).get("pageProps") or {})
-                .get("searchPageState") or {})
-    base_qs = base_sps.get("queryState") or {}
-    map_bounds = base_qs.get("mapBounds")
-    region_selection = base_qs.get("regionSelection")
-    if not map_bounds or not region_selection:
-        # Region didn't resolve; return the unfiltered listings as-is so the
-        # caller still gets something useful.
-        listings = (base_sps.get("cat1") or {}).get("searchResults", {}).get("listResults") or []
-        return _wrap_search(query, url, listings, base_sps)
-
-    sqs = {
-        "pagination": {"currentPage": page} if page > 1 else {},
-        "mapBounds": map_bounds,
-        "regionSelection": region_selection,
-        "filterState": _filter_state(max_price, min_price, min_beds, min_baths),
-        "isListVisible": True,
-        "mapZoom": base_qs.get("mapZoom") or 11,
-    }
-    sep = "&" if "?" in url else "?"
-    full_url = url + sep + "searchQueryState=" + quote(json.dumps(sqs, separators=(",", ":")))
-    html = _fetch_html(full_url)
-    data = _next_data(html)
-    sps = ((data.get("props") or {}).get("pageProps") or {}).get("searchPageState") or {}
-    listings = (sps.get("cat1") or {}).get("searchResults", {}).get("listResults") or []
-    return _wrap_search(query, full_url, listings, sps)
+_SORT_VALUES = {
+    "newest": "days",
+    "price-asc": "price",
+    "price-desc": "priced",
+    "sqft-desc": "size",
+    "sqft-asc": "sizea",
+    "lot-desc": "lot",
+}
 
 
-def _wrap_search(query: str, url: str, listings: list, sps: dict) -> dict:
-    homes = [_summarize_home(h) for h in listings]
-    total = ((sps.get("cat1") or {}).get("totalResultCount")) or len(homes)
-    return {
-        "source": "zillow",
-        "query": query,
-        "url": url,
-        "total_in_region": total,
-        "count": len(homes),
-        "homes": homes,
-    }
-
-
-def _filter_state(max_price, min_price, min_beds, min_baths) -> dict[str, Any]:
-    fs: dict[str, Any] = {"sortSelection": {"value": "globalrelevanceex"},
+def _filter_state(*, max_price=None, min_price=None, min_beds=None, min_baths=None,
+                  min_sqft=None, max_sqft=None, max_hoa=None,
+                  year_built_min=None, year_built_max=None,
+                  lot_size_min=None, lot_size_max=None,
+                  has_pool=None, has_garage=None, new_construction=None,
+                  status=None, sort=None) -> dict[str, Any]:
+    fs: dict[str, Any] = {"sortSelection": {"value": _SORT_VALUES.get(sort or "", "globalrelevanceex")},
                           "isAllHomes": {"value": True}}
+    if status and status in _STATUS_TO_FILTER:
+        fs.update(_STATUS_TO_FILTER[status])
     if max_price is not None or min_price is not None:
         price = {}
         if max_price is not None: price["max"] = max_price
@@ -252,35 +199,221 @@ def _filter_state(max_price, min_price, min_beds, min_baths) -> dict[str, Any]:
         fs["beds"] = {"min": min_beds}
     if min_baths is not None:
         fs["baths"] = {"min": min_baths}
+    if min_sqft is not None or max_sqft is not None:
+        sq = {}
+        if min_sqft is not None: sq["min"] = min_sqft
+        if max_sqft is not None: sq["max"] = max_sqft
+        fs["sqft"] = sq
+    if max_hoa is not None:
+        fs["hoa"] = {"max": max_hoa}
+    if year_built_min is not None or year_built_max is not None:
+        yb = {}
+        if year_built_min is not None: yb["min"] = year_built_min
+        if year_built_max is not None: yb["max"] = year_built_max
+        fs["built"] = yb
+    if lot_size_min is not None or lot_size_max is not None:
+        ls = {}
+        if lot_size_min is not None: ls["min"] = lot_size_min
+        if lot_size_max is not None: ls["max"] = lot_size_max
+        fs["lotSize"] = ls
+    if has_pool: fs["hasPool"] = {"value": True}
+    if has_garage: fs["parkingSpots"] = {"min": 1}
+    if new_construction: fs["isNewConstruction"] = {"value": True}
     return fs
 
 
-def _summarize_home(h: dict) -> dict:
-    hdp = h.get("hdpData") or {}
-    home_info = (hdp.get("homeInfo") or {}) if isinstance(hdp, dict) else {}
-    detail = h.get("detailUrl") or h.get("hdpUrl") or ""
-    if detail and not detail.startswith("http"):
-        detail = BASE + detail
+def _point_in_polygon(lat: float, lng: float, polygon: list[tuple[float, float]]) -> bool:
+    """Ray-casting point-in-polygon. polygon is [(lat, lng), ...]."""
+    n = len(polygon)
+    inside = False
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        lat_i, lng_i = polygon[i]
+        lat_j, lng_j = polygon[j]
+        if ((lng_i > lng) != (lng_j > lng)) and \
+                (lat < (lat_j - lat_i) * (lng - lng_i) / (lng_j - lng_i + 1e-12) + lat_i):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _polygon_to_bbox(polygon: list[tuple[float, float]]) -> tuple[float, float, float, float]:
+    lats = [p[0] for p in polygon]
+    lngs = [p[1] for p in polygon]
+    return (max(lats), max(lngs), min(lats), min(lngs))  # n, e, s, w
+
+
+def search(
+    query: str | None = None,
+    *,
+    max_price: int | None = None,
+    min_price: int | None = None,
+    min_beds: int | None = None,
+    min_baths: float | None = None,
+    min_sqft: int | None = None,
+    max_sqft: int | None = None,
+    max_hoa: int | None = None,
+    year_built_min: int | None = None,
+    year_built_max: int | None = None,
+    lot_size_min: int | None = None,
+    lot_size_max: int | None = None,
+    has_pool: bool = False,
+    has_garage: bool = False,
+    new_construction: bool = False,
+    status: str | None = None,
+    sort: str | None = None,
+    page: int = 1,
+    polygon: list[tuple[float, float]] | None = None,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> dict:
+    """Zillow search with filters, regions, and polygons."""
+    fs = _filter_state(
+        max_price=max_price, min_price=min_price, min_beds=min_beds,
+        min_baths=min_baths, min_sqft=min_sqft, max_sqft=max_sqft,
+        max_hoa=max_hoa, year_built_min=year_built_min,
+        year_built_max=year_built_max, lot_size_min=lot_size_min,
+        lot_size_max=lot_size_max, has_pool=has_pool,
+        has_garage=has_garage, new_construction=new_construction,
+        status=status, sort=sort,
+    )
+
+    if polygon is not None or bbox is not None:
+        return _search_via_geo(polygon=polygon, bbox=bbox, page=page, filter_state=fs)
+
+    if not query:
+        raise RuntimeError("zillow search: pass a query, polygon, or bbox")
+
+    # If the query is a Zillow URL with customRegionId, replay via that.
+    if query.startswith("http") and (cid := _custom_region_id_from_url(query)):
+        return _search_via_custom_region(cid, query, fs, page)
+
+    url = _city_url(query)
+    base_html = _fetch_html(url)
+    base_data = next_data(base_html)
+    base_sps = search_page_state(base_data)
+    base_qs = search_query_state(base_sps)
+    map_bounds = base_qs.get("mapBounds")
+    region_selection = base_qs.get("regionSelection")
+    if not map_bounds or not region_selection:
+        listings = parse_search_homes(base_sps)
+        return _wrap_search(query, url, listings, base_sps)
+
+    sqs = {
+        "pagination": {"currentPage": page} if page > 1 else {},
+        "mapBounds": map_bounds,
+        "regionSelection": region_selection,
+        "filterState": fs,
+        "isListVisible": True,
+        "mapZoom": base_qs.get("mapZoom") or 11,
+    }
+    sep = "&" if "?" in url else "?"
+    full_url = url + sep + "searchQueryState=" + quote(json.dumps(sqs, separators=(",", ":")))
+    html = _fetch_html(full_url)
+    data = next_data(html)
+    sps = search_page_state(data)
+    listings = parse_search_homes(sps)
+    return _wrap_search(query, full_url, listings, sps)
+
+
+def _search_via_custom_region(custom_region_id: str, src_url: str,
+                              filter_state: dict, page: int) -> dict:
+    sqs = {
+        "pagination": {"currentPage": page} if page > 1 else {},
+        "customRegionId": custom_region_id,
+        "filterState": filter_state,
+        "isListVisible": True,
+    }
+    full_url = (BASE + "/homes/?searchQueryState="
+                + quote(json.dumps(sqs, separators=(",", ":"))))
+    html = _fetch_html(full_url)
+    data = next_data(html)
+    sps = search_page_state(data)
+    listings = parse_search_homes(sps)
+    return _wrap_search(src_url, full_url, listings, sps,
+                        extra={"custom_region_id": custom_region_id})
+
+
+def _search_via_geo(*, polygon=None, bbox=None, page=1, filter_state: dict) -> dict:
+    """Polygon / bbox search via mapBounds + optional client-side filter."""
+    if polygon is not None and bbox is None:
+        bbox = _polygon_to_bbox(polygon)
+    if not bbox or len(bbox) != 4:
+        raise RuntimeError("zillow geo: need polygon (>=3 verts) or bbox (n,e,s,w)")
+    n, e, s, w = bbox
+    map_bounds = {"north": n, "east": e, "south": s, "west": w}
+    sqs = {
+        "pagination": {"currentPage": page} if page > 1 else {},
+        "mapBounds": map_bounds,
+        "filterState": filter_state,
+        "isListVisible": True,
+        "isMapVisible": True,
+    }
+    full_url = (BASE + "/homes/?searchQueryState="
+                + quote(json.dumps(sqs, separators=(",", ":"))))
+    html = _fetch_html(full_url)
+    data = next_data(html)
+    sps = search_page_state(data)
+    listings_raw = ((sps.get("cat1") or {}).get("searchResults") or {}).get("listResults") or []
+    if polygon:
+        # Client-side filter to the actual polygon; bbox is just a Zillow filter prelude.
+        filtered = []
+        for h in listings_raw:
+            home_info = ((h.get("hdpData") or {}).get("homeInfo") or {})
+            lat = home_info.get("latitude") or (h.get("latLong") or {}).get("latitude")
+            lng = home_info.get("longitude") or (h.get("latLong") or {}).get("longitude")
+            if lat is None or lng is None:
+                continue
+            if _point_in_polygon(float(lat), float(lng), polygon):
+                filtered.append(h)
+        listings_raw = filtered
+    listings = [P.summarize_home(h) for h in listings_raw]
+    return _wrap_search(None, full_url, listings, sps,
+                        extra={"polygon": polygon, "bbox": bbox})
+
+
+def _wrap_search(query, url: str, listings: list, sps: dict, extra: dict | None = None) -> dict:
+    out = {
+        "source": "zillow",
+        "query": query,
+        "url": url,
+        "total_in_region": search_total_count(sps) or len(listings),
+        "count": len(listings),
+        "homes": listings,
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def search_multi(queries: list[str], *, dedupe: bool = True, **kw) -> dict:
+    """Run search() across N queries with throttling + dedupe by zpid."""
+    import time
+    merged: list[dict] = []
+    seen: set = set()
+    sub_results = []
+    for i, q in enumerate(queries):
+        if i:
+            time.sleep(2.0)
+        try:
+            res = search(q, **kw)
+        except Exception as e:
+            sub_results.append({"query": q, "error": str(e)})
+            continue
+        sub_results.append({"query": q, "count": res.get("count", 0)})
+        for h in res.get("homes") or []:
+            key = h.get("zpid") or (h.get("address"), h.get("zip"))
+            if dedupe and key in seen:
+                continue
+            seen.add(key)
+            merged.append(h)
     return {
-        "zpid": h.get("zpid") or home_info.get("zpid"),
-        "address": h.get("addressStreet") or h.get("address") or home_info.get("streetAddress"),
-        "city": h.get("addressCity") or home_info.get("city"),
-        "state": h.get("addressState") or home_info.get("state"),
-        "zip": h.get("addressZipcode") or home_info.get("zipcode"),
-        "price": h.get("unformattedPrice") or h.get("price") or home_info.get("price"),
-        "beds": h.get("beds") or home_info.get("bedrooms"),
-        "baths": h.get("baths") or home_info.get("bathrooms"),
-        "sqft": h.get("area") or home_info.get("livingArea"),
-        "lot_size": home_info.get("lotAreaValue"),
-        "year_built": home_info.get("yearBuilt"),
-        "url": detail,
-        "status": h.get("statusType") or home_info.get("homeStatus"),
-        "zestimate": home_info.get("zestimate"),
-        "rent_zestimate": home_info.get("rentZestimate"),
-        "tax_assessed_value": home_info.get("taxAssessedValue"),
-        "home_type": home_info.get("homeType"),
-        "lat": home_info.get("latitude") or h.get("latLong", {}).get("latitude"),
-        "lng": home_info.get("longitude") or h.get("latLong", {}).get("longitude"),
+        "source": "zillow",
+        "queries": queries,
+        "sub_results": sub_results,
+        "count": len(merged),
+        "homes": merged,
     }
 
 
@@ -292,71 +425,9 @@ def property_details(url: str, *, include_raw: bool = False) -> dict:
     if not url.startswith("http"):
         url = BASE + (url if url.startswith("/") else "/" + url)
     html = _fetch_html(url)
-    data = _next_data(html)
-    pp = ((data.get("props") or {}).get("pageProps") or {})
-    cp = pp.get("componentProps") or {}
-    cache_raw = cp.get("gdpClientCache")
-    if not cache_raw:
-        # Sometimes Zillow stores it under componentProps.initialReduxState
-        return {"source": "zillow", "url": url,
-                "next_data_keys": list(pp.keys()),
-                "raw": pp if include_raw else None}
-    cache = json.loads(cache_raw) if isinstance(cache_raw, str) else cache_raw
-    # gdpClientCache is keyed by GraphQL operation name + variables. The main
-    # property payload sits under ForSaleShopperPlatformFullRenderQuery on
-    # for-sale listings and OffMarketShopperPlatformRenderQuery on off-market
-    # ones. Other keys (Comps*, School*, MortgageRates*) hold related data
-    # we don't want to mistake for the property record.
-    prop = {}
-    if isinstance(cache, dict):
-        primary_prefixes = (
-            "ForSaleShopperPlatformFullRenderQuery",
-            "OffMarketShopperPlatformRenderQuery",
-            "VariantQuery",
-            "ForSaleDoubleScrollFullRenderQuery",
-        )
-        for k, v in cache.items():
-            if any(k.startswith(p) for p in primary_prefixes) and isinstance(v, dict) and v.get("property"):
-                prop = v["property"]
-                break
-        if not prop:
-            for v in cache.values():
-                if isinstance(v, dict) and v.get("property"):
-                    prop = v["property"]
-                    break
-    addr = prop.get("address") or {}
-
-    out = {
-        "source": "zillow",
-        "url": url,
-        "zpid": prop.get("zpid"),
-        "address": prop.get("streetAddress") or addr.get("streetAddress"),
-        "city": prop.get("city") or addr.get("city"),
-        "state": prop.get("state") or addr.get("state"),
-        "zip": prop.get("zipcode") or addr.get("zipcode"),
-        "price": prop.get("price"),
-        "zestimate": prop.get("zestimate"),
-        "rent_zestimate": prop.get("rentZestimate"),
-        "tax_assessed_value": prop.get("taxAssessedValue"),
-        "tax_history": prop.get("taxHistory") or [],
-        "price_history": prop.get("priceHistory") or [],
-        "beds": prop.get("bedrooms"),
-        "baths": prop.get("bathrooms"),
-        "sqft": prop.get("livingArea"),
-        "year_built": prop.get("yearBuilt"),
-        "lot_size": prop.get("lotSize"),
-        "lot_area_value": prop.get("lotAreaValue"),
-        "home_type": prop.get("homeType"),
-        "home_status": prop.get("homeStatus"),
-        "description": prop.get("description"),
-        "schools": prop.get("schools") or [],
-        "annual_homeowners_insurance": prop.get("annualHomeownersInsurance"),
-        "monthly_hoa_fee": prop.get("monthlyHoaFee"),
-        "lat": prop.get("latitude") or addr.get("latitude"),
-        "lng": prop.get("longitude") or addr.get("longitude"),
-    }
-    if include_raw:
-        out["raw"] = prop
+    data = next_data(html)
+    out = parse_property(data, include_raw=include_raw)
+    out["url"] = url
     return out
 
 
@@ -369,29 +440,76 @@ def _print(o):
     sys.stdout.write("\n")
 
 
+def _parse_polygon(s: str) -> list[tuple[float, float]]:
+    pts = []
+    for chunk in re.split(r"[;\n]+", s.strip()):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        a, b = chunk.split(",")
+        pts.append((float(a), float(b)))
+    return pts
+
+
+def _parse_bbox(s: str) -> tuple[float, float, float, float]:
+    parts = [float(x) for x in s.split(",")]
+    if len(parts) != 4:
+        raise SystemExit("--bbox needs 4 floats: n,e,s,w")
+    return tuple(parts)  # type: ignore
+
+
 def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(prog="zillow")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("search")
-    sp.add_argument("query")
+    sp.add_argument("query", nargs="?")
     sp.add_argument("--max-price", type=int)
     sp.add_argument("--min-price", type=int)
     sp.add_argument("--min-beds", type=int)
     sp.add_argument("--min-baths", type=float)
+    sp.add_argument("--min-sqft", type=int)
+    sp.add_argument("--max-sqft", type=int)
+    sp.add_argument("--max-hoa", type=int)
+    sp.add_argument("--year-built-min", type=int)
+    sp.add_argument("--year-built-max", type=int)
+    sp.add_argument("--lot-size-min", type=int)
+    sp.add_argument("--lot-size-max", type=int)
+    sp.add_argument("--has-pool", action="store_true")
+    sp.add_argument("--has-garage", action="store_true")
+    sp.add_argument("--new-construction", action="store_true")
+    sp.add_argument("--status", choices=list(_STATUS_TO_FILTER.keys()))
+    sp.add_argument("--sort", choices=list(_SORT_VALUES.keys()))
     sp.add_argument("--page", type=int, default=1)
+    sp.add_argument("--polygon", help="lat,lng;lat,lng;... (>=3 vertices)")
+    sp.add_argument("--bbox", help="north,east,south,west")
+    sp.add_argument("--regions", help="multi-region OR: 'Austin, TX;Round Rock, TX'")
 
     sp = sub.add_parser("property")
     sp.add_argument("url")
-    sp.add_argument("--include-raw", action="store_true", help="include the full property payload")
+    sp.add_argument("--include-raw", action="store_true")
 
     args = ap.parse_args(argv)
     if args.cmd == "search":
-        _print(search(
-            args.query, max_price=args.max_price, min_price=args.min_price,
-            min_beds=args.min_beds, min_baths=args.min_baths, page=args.page,
-        ))
+        polygon = _parse_polygon(args.polygon) if args.polygon else None
+        bbox = _parse_bbox(args.bbox) if args.bbox else None
+        common = dict(
+            max_price=args.max_price, min_price=args.min_price,
+            min_beds=args.min_beds, min_baths=args.min_baths,
+            min_sqft=args.min_sqft, max_sqft=args.max_sqft,
+            max_hoa=args.max_hoa,
+            year_built_min=args.year_built_min, year_built_max=args.year_built_max,
+            lot_size_min=args.lot_size_min, lot_size_max=args.lot_size_max,
+            has_pool=args.has_pool, has_garage=args.has_garage,
+            new_construction=args.new_construction,
+            status=args.status, sort=args.sort, page=args.page,
+        )
+        if args.regions:
+            qs = [q.strip() for q in args.regions.split(";") if q.strip()]
+            _print(search_multi(qs, **common))
+        else:
+            _print(search(args.query, **common, polygon=polygon, bbox=bbox))
     elif args.cmd == "property":
         _print(property_details(args.url, include_raw=args.include_raw))
 
