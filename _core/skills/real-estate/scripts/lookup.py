@@ -27,10 +27,27 @@ from urllib.parse import urlparse
 
 import redfin  # type: ignore
 import zillow  # type: ignore
+import zillow_parse  # type: ignore
 
 # URL shape regexes
 RF_PROPERTY_RE = re.compile(r"redfin\.com/[A-Z]{2}/[^/]+/[^/]+/home/\d+")
 ZW_PROPERTY_RE = re.compile(r"zillow\.com/homedetails/[^/]+/\d+_zpid")
+
+
+def _zillow_slug(address: str) -> str | None:
+    """Build a Zillow-style address slug from free-text.
+
+    Zillow's canonical search slug is `<num>-<street-words-hyphenated>-<city>-<ST>-<zip>`.
+    Example: '5509 Casco Walk Austin TX 78724' -> '5509-Casco-Walk-Austin-TX-78724'.
+    Returns None if we can't parse out at least street + city + state.
+    """
+    s = (address or "").strip()
+    if not s:
+        return None
+    # Drop trailing punctuation, collapse repeats, hyphenate words.
+    s = re.sub(r"[,]+", " ", s)
+    s = re.sub(r"\s+", "-", s)
+    return s
 
 
 _STREET_NUM_RE = re.compile(r"^\s*(\d+)\b")
@@ -107,9 +124,39 @@ def find_redfin_url(address_or_url: str) -> str | None:
 
 
 def find_zillow_url(address_or_url: str) -> str | None:
-    """Resolve to a Zillow property URL. Same shape as find_redfin_url."""
+    """Resolve to a Zillow property URL.
+
+    Strategy:
+      1. If the input is already a Zillow homedetails URL, return it.
+      2. Slug the address and hit /homes/<slug>/. Zillow 301-redirects
+         exact-address slugs to the canonical /homedetails/<zpid>_zpid/ page.
+         No Brave needed; works on active AND off-market listings.
+      3. Fall back to Brave with street-number filter as last resort.
+    """
     if _is_zillow_property_url(address_or_url):
         return address_or_url
+    # Direct redirect path (zero search-engine dependency)
+    slug = _zillow_slug(address_or_url)
+    if slug:
+        try:
+            s = zillow._get_session()
+            url = f"https://www.zillow.com/homes/{slug}/"
+            r = s.get(url, timeout=20, allow_redirects=False)
+            loc = r.headers.get("Location") or r.headers.get("location")
+            if loc:
+                if loc.startswith("/"):
+                    loc = "https://www.zillow.com" + loc
+                if _is_zillow_property_url(loc):
+                    return loc
+                # Two-hop: /homedetails/<zpid>_zpid/ -> with full slug
+                if "/homedetails/" in loc:
+                    r2 = s.get(loc, timeout=20, allow_redirects=False)
+                    loc2 = r2.headers.get("Location") or r2.headers.get("location")
+                    if loc2 and _is_zillow_property_url(loc2):
+                        return loc2 if loc2.startswith("http") else "https://www.zillow.com" + loc2
+                    return loc
+        except Exception:
+            pass  # fall through to Brave
     return _brave_first_url(
         address_or_url, "zillow.com",
         require_street_num=_street_number(address_or_url),

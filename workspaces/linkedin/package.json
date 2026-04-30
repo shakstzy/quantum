@@ -1,0 +1,28 @@
+{
+  "name": "quantum-linkedin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Patchright-driven LinkedIn capability layer for QUANTUM. In-page Voyager fetch + DOM fallbacks. Ban-aversion priority #1.",
+  "scripts": {
+    "postinstall": "patchright install chromium",
+    "login": "node scripts/login.mjs",
+    "diag": "node scripts/diag.mjs",
+    "status": "node scripts/status.mjs",
+    "pull": "node scripts/pull.mjs",
+    "get-profile": "node scripts/cli/get-profile.mjs",
+    "send-dm": "node scripts/cli/send-dm.mjs",
+    "send-connect": "node scripts/cli/send-connect.mjs",
+    "list-threads": "node scripts/cli/list-threads.mjs",
+    "list-invites": "node scripts/cli/list-invites.mjs",
+    "accept-invite": "node scripts/cli/accept-invite.mjs",
+    "withdraw-invite": "node scripts/cli/withdraw-invite.mjs",
+    "search-people": "node scripts/cli/search-people.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "ghost-cursor-playwright": "^2.1.0",
+    "patchright": "^1.59.4",
+    "proper-lockfile": "^4.1.2"
+  }
+}

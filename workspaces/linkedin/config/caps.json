@@ -1,0 +1,31 @@
+{
+  "_comment": "Conservative 2026 caps. Override by editing in place. Per Gemini-Flash adversarial review (2026-04-30): connect rate dropped from 15 to 10/day and 80 to 50/wk. Pending-invite ceiling enforced at 400 (force-withdraw oldest before send_connect).",
+  "active_hours": { "start": 9, "end": 19, "tz": "America/Chicago", "weekdays_only": true },
+  "daily": {
+    "send_connect": 10,
+    "send_dm_to_connection": 30,
+    "send_dm_to_non_connection": 5,
+    "accept_invite": 40,
+    "ignore_invite": 40,
+    "withdraw_invite": 50,
+    "get_profile": 100,
+    "search_people": 30
+  },
+  "weekly": {
+    "send_connect": 50
+  },
+  "pending_ceiling": {
+    "max_outstanding": 400,
+    "force_withdraw_when_above": 400,
+    "force_withdraw_batch_size": 25,
+    "force_withdraw_min_age_days": 14
+  },
+  "pacing": {
+    "inter_action_seconds": [30, 180],
+    "burst_size": 8,
+    "burst_cooldown_minutes": [45, 65],
+    "distraction_probability": 0.05,
+    "distraction_minutes": [8, 18],
+    "type_per_char_ms": [60, 130]
+  }
+}
