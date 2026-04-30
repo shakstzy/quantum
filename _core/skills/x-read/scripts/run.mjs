@@ -424,11 +424,29 @@ function extractUrls(legacy, noteEntities) {
 
 // ---- profile <handle> --------------------------------------------------
 
+// Reserved X routes that look like handles but aren't. Navigating to them
+// triggers auth challenges and trips the breaker. Gemini round 3 finding.
+const RESERVED_X_ROUTES = new Set([
+  'login', 'logout', 'home', 'explore', 'notifications', 'messages',
+  'i', 'search', 'compose', 'settings', 'tos', 'privacy', 'help',
+  'jobs', 'about', 'download', 'verified', 'verified-organizations',
+  'premium', 'premium_sign_up', 'flow', 'account', 'account_access',
+  'signup', 'session', 'oauth2', 'oauth', 'intent', 'media',
+  'bookmarks', 'lists', 'topics', 'communities', 'analytics',
+  'account_analytics', 'tweet', 'status', 'web'
+]);
+
 async function profile(argv) {
   let handle = argv.positional[0];
   if (!handle) die('Usage: profile <handle>');
+  // Accept full URLs too: https://x.com/<handle>
+  const urlMatch = handle.match(/^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})(?:[\/?#]|$)/);
+  if (urlMatch) handle = urlMatch[1];
   if (handle.startsWith('@')) handle = handle.slice(1);
   if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) die(`invalid handle "${handle}"; X handles are 1-15 alphanumeric/underscore`);
+  if (RESERVED_X_ROUTES.has(handle.toLowerCase())) {
+    die(`"${handle}" is a reserved X route, not a user handle. Pass an actual user handle.`);
+  }
   const { ctx, resp } = await openSessionAndCapture({
     navUrl: `https://x.com/${handle}`,
     expectedOp: 'UserByScreenName'
@@ -537,13 +555,24 @@ async function analytics(argv) {
     if (!v) {
       die('[x-read] accountOverviewQuery had no data.viewer_v2; X shape may have changed or your account does not have Premium analytics enabled.', 5);
     }
-    // Surface raw shape — analytics fields churn faster than tweet shape.
-    // Caller can decide what to mine.
+    // Gemini round 3 critical: viewer_v2 contains user_results.result.legacy
+    // which embeds the authenticated user's email, phone, account settings.
+    // Strip it. Surface ONLY the analytics-shaped fields plus rest_id for
+    // identity. Caller never gets PII.
+    const userResult = v.user_results?.result || {};
+    const safe = {
+      rest_id: userResult.rest_id || null,
+      organic_metrics_time_series: userResult.organic_metrics_time_series || null,
+      // If new analytics keys appear, surface them via a shallow allowlist
+      // rather than passthrough. Document additions in graphql-endpoints.md.
+      creator_analytics: userResult.creator_analytics || null,
+      monetization_analytics: userResult.monetization_analytics || null
+    };
     console.log(JSON.stringify({
       ok: true,
-      data: v,
+      data: safe,
       fetched_at: new Date().toISOString(),
-      note: 'analytics schema is X-internal and rotates more often than tweet shape; surfacing raw viewer_v2 verbatim. Mine fields you need; if a key disappears, run `node scripts/diag.mjs --target=analytics` to rediscover.'
+      note: 'analytics fields filtered to allowlist (organic_metrics_time_series, creator_analytics, monetization_analytics). Raw viewer_v2 contains email/phone/settings PII and is NOT surfaced. If a metric key is missing, run `node scripts/diag.mjs --target=analytics` to rediscover, then add to the allowlist in run.mjs::analytics.'
     }, null, 2));
   } finally { await ctx.close(); }
 }
@@ -554,9 +583,17 @@ async function search(argv) {
   const query = argv.positional.join(' ').trim();
   if (!query) die('Usage: search <query...>  (use --product=Top|Latest|People|Photos|Videos to switch tab; default Top)');
   const product = (argv.flags.product || 'Top');
-  const validProducts = new Set(['Top', 'Latest', 'People', 'Photos', 'Videos']);
-  if (!validProducts.has(product)) die(`invalid --product "${product}"; valid: ${Array.from(validProducts).join(', ')}`);
-  const navUrl = `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query&f=${product === 'Top' ? 'top' : product.toLowerCase()}`;
+  // Gemini round 3 finding: X uses non-obvious f= fragments per tab.
+  const productFragment = {
+    Top: null, // omit f= entirely
+    Latest: 'live',
+    People: 'user',
+    Photos: 'image',
+    Videos: 'video'
+  };
+  if (!(product in productFragment)) die(`invalid --product "${product}"; valid: Top, Latest, People, Photos, Videos`);
+  let navUrl = `https://x.com/search?q=${encodeURIComponent(query)}&src=typed_query`;
+  if (productFragment[product]) navUrl += `&f=${productFragment[product]}`;
   const { ctx, resp } = await openSessionAndCapture({
     navUrl,
     expectedOp: 'SearchTimeline'

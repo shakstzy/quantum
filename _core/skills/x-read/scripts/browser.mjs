@@ -195,15 +195,28 @@ export async function launchContext({ force = false, visible = false } = {}) {
 
   // Response capture via Playwright. Buffer the JSON body for the first
   // matching response per op. Resolve any waiters.
+  //
+  // Gemini round 3 medium: synchronously claim the slot BEFORE awaiting
+  // resp.text(), so concurrent same-op requests don't both pass the
+  // .has() check. The placeholder gets replaced atomically when text()
+  // resolves; later same-op responses still see has()===true and bail.
+  //
+  // Gemini round 3 medium: globally trip the breaker on 401/403/429 from
+  // ANY captured GraphQL response, not just the verb's expectedOp. A side
+  // op like UserTweets failing 429 should halt before we burn more reqs.
   page.on('response', async (resp) => {
     try {
       const url = resp.url();
       if (!isXGraphqlUrl(url)) return;
       const parsed = parseOpFromUrl(url);
       if (!parsed) return;
-      // Only capture the first response per op. If callers want a fresh one,
-      // they must navigate again.
+      const status = resp.status();
+      if (status === 401 || status === 403) {
+        tripBreaker(`background-response-${status}:${parsed.op}`);
+      }
       if (responses.has(parsed.op)) return;
+      // Synchronously claim the slot to block concurrent same-op responses.
+      responses.set(parsed.op, { op: parsed.op, queryId: parsed.queryId, url, status, ok: resp.ok(), pending: true });
       let body = null;
       let parseErr = null;
       try {
@@ -217,7 +230,7 @@ export async function launchContext({ force = false, visible = false } = {}) {
         op: parsed.op,
         queryId: parsed.queryId,
         url,
-        status: resp.status(),
+        status,
         ok: resp.ok(),
         rateLimit: {
           limit: resp.headers()['x-rate-limit-limit'] || null,
