@@ -433,6 +433,39 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
     out["listing_status_banner"] = _payload_dict(listing_status_banner)
     out["avm_historical"] = _payload_dict(avm_hist)
     out["main_house_panel"] = _payload_dict(main_panel)
+    # Phase 3 additions
+    activity_payload = _payload_dict(activity)
+    out["total_views"] = activity_payload.get("totalViews")
+    out["favorite_count"] = activity_payload.get("favoriteCount")
+    out["activity_listing_date"] = activity_payload.get("listingDate")
+    around = _payload_dict(around_home)
+    walk_data = around.get("walkScoreData") or {}
+    if isinstance(walk_data, dict):
+        # Walk Score lives here, not in /location-score (which is empty for many homes).
+        out["walk_score"] = out.get("walk_score") or walk_data.get("walkScore")
+        out["transit_score"] = out.get("transit_score") or walk_data.get("transitScore")
+        out["bike_score"] = out.get("bike_score") or walk_data.get("bikeScore")
+    out["points_of_interest"] = around.get("pointOfInterestList") or []
+    out["transit_data"] = around.get("transitData")
+    out["region_name"] = around.get("regionName")
+    out["comp_home_tags"] = _payload_dict(comp_tags)
+    out["hot_market"] = _payload_dict(hot_market)
+    out["local_insights"] = _payload_dict(local_insights)
+    out["agents_who_toured"] = _payload_dict(agents_toured)
+    sr = _payload_dict(shared_region)
+    out["region_trends"] = sr.get("trendsData")
+    out["region_compete_score"] = sr.get("competeScoreResponse")
+    out["region_offer_insights"] = sr.get("offerInsightsInfo")
+    out["region_aggregate_trends"] = sr.get("aggregateTrendsData")
+    out["region_breadcrumbs"] = sr.get("regionBreadcrumbs") or []
+    out["primary_region"] = _payload_dict(primary_region)
+    pt = _payload_dict(page_tags)
+    out["seo_meta_tags"] = pt.get("metaTags") or []
+    out["page_title"] = pt.get("pageTitle")
+    if photo_tags:
+        ptp = _payload_dict(photo_tags)
+        out["photo_tags_by_id"] = ptp.get("tagsByPhotoId") or {}
+        out["photo_filter_tags"] = ptp.get("includedFilterTags") or []
     if include_raw:
         out["raw"] = {
             "initial": p_initial, "above": p_above, "below": p_below,
