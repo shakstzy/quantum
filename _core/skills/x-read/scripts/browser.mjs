@@ -269,20 +269,31 @@ export async function waitForTemplate(ctx, opName, { timeoutMs = 30000, probeEve
   return null;
 }
 
-// Wait for an authenticated GraphQL response from any auth-shaped op. Used
-// by login as the session-ready signal.
-//
-// Auth-ready definition:
-//   - An expected op fires (Viewer / AccountSettings / HomeTimeline /
-//     HomeLatestTimeline / NotificationsTimeline)
-//   - Status is 2xx
-//   - The captured TEMPLATE has BOTH `authorization` and `x-csrf-token`
-//     headers (Codex round-1: bearer alone is not sufficient evidence of
-//     a working CSRF state for replay)
-export async function waitForAuthSignal(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 1000 } = {}) {
+// Wait for an authenticated session signal. Two parallel strategies:
+//   (a) auth_token cookie appears in the context (the deterministic signal -
+//       X sets this cookie the moment login completes, regardless of which
+//       GraphQL op fires next).
+//   (b) An auth-shaped GraphQL response is captured with bearer + csrf
+//       headers and 2xx status (a stronger signal that the session also
+//       supports replay; useful but slower and op-name-fragile).
+// Either strategy resolving wins. Login flow uses this as the "you're in"
+// signal. onProgress is called every probe so callers can heartbeat.
+export async function waitForAuthSignal(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 1000, onProgress = null } = {}) {
   const deadline = Date.now() + timeoutMs;
   const candidates = ['Viewer', 'AccountSettings', 'HomeTimeline', 'HomeLatestTimeline', 'NotificationsTimeline'];
+  let lastProgress = 0;
   while (Date.now() < deadline) {
+    // Strategy A: cookie-based.
+    try {
+      const cookies = await ctx.context.cookies();
+      const authTok = cookies.find(c => c.name === 'auth_token' && /(\.|^)x\.com|twitter\.com/.test(c.domain));
+      const ct0 = cookies.find(c => c.name === 'ct0' && /(\.|^)x\.com|twitter\.com/.test(c.domain));
+      if (authTok && ct0) {
+        return { kind: 'cookie', authToken: 'present', ct0: 'present' };
+      }
+    } catch (_) { /* cookie read can race during navigation; ignore */ }
+
+    // Strategy B: captured GraphQL response.
     for (const op of candidates) {
       const tpl = ctx.getTemplate(op);
       const resp = ctx.getResponse(op);
@@ -290,7 +301,12 @@ export async function waitForAuthSignal(ctx, { timeoutMs = 15 * 60 * 1000, probe
       const hdrs = tpl.headers || {};
       const hasAuth = !!(hdrs.authorization || hdrs.Authorization);
       const hasCsrf = !!(hdrs['x-csrf-token'] || hdrs['X-Csrf-Token'] || hdrs['X-CSRF-Token']);
-      if (hasAuth && hasCsrf && resp.ok) return { op, template: tpl, response: resp };
+      if (hasAuth && hasCsrf && resp.ok) return { kind: 'graphql', op, template: tpl, response: resp };
+    }
+
+    if (onProgress && Date.now() - lastProgress > 30000) {
+      try { onProgress({ elapsedMs: Date.now() - (deadline - timeoutMs), pageUrl: ctx.page.url() }); } catch (_) {}
+      lastProgress = Date.now();
     }
     await new Promise(r => setTimeout(r, probeEveryMs));
   }

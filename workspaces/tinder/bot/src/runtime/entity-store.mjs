@@ -228,13 +228,24 @@ export function computeProfileDiff(oldP, newP) {
   return diff;
 }
 
-function diffToMarkdown(diff, ts) {
+// CODEX-IMP-13+14: profile diffs stored as JSON fenced code blocks. Regex-prose
+// format wasn't round-trip safe (values containing "->" or "added " corrupted parse).
+function diffToJsonBlock(diff, ts) {
   if (!diff) return null;
-  const lines = [`### ${ts}`];
-  for (const [k, v] of Object.entries(diff.added)) lines.push(`- added ${k}: ${JSON.stringify(v)}`);
-  for (const [k, v] of Object.entries(diff.removed)) lines.push(`- removed ${k}: ${JSON.stringify(v)}`);
-  for (const [k, { from, to }] of Object.entries(diff.changed)) lines.push(`- changed ${k}: ${JSON.stringify(from)} -> ${JSON.stringify(to)}`);
-  return lines.join("\n");
+  const payload = { ts, ...diff };
+  return ["```json profile-diff", JSON.stringify(payload, null, 2), "```"].join("\n");
+}
+
+// Parses the most recent profile-diff JSON block out of the ## Profile changes
+// section. Returns null if none present.
+export function parseLatestDiffJsonBlock(profileChangesMd) {
+  if (!profileChangesMd) return null;
+  const re = /```json profile-diff\n([\s\S]*?)\n```/g;
+  let last = null;
+  let m;
+  while ((m = re.exec(profileChangesMd)) !== null) last = m[1];
+  if (!last) return null;
+  try { return JSON.parse(last); } catch { return null; }
 }
 
 async function listExistingSlugs() {
@@ -262,96 +273,134 @@ export async function loadEntity(slug) {
 
 export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "" }) {
   const path = resolve(RAW_DIR, `${slug}.md`);
-  await writeFile(path, renderEntity({ meta, profile, conversation, outbound, profile_changes }));
+  await atomicWrite(path, renderEntity({ meta, profile, conversation, outbound, profile_changes }));
   return path;
 }
 
-export async function upsertMatch({ matchId, personId, name, source = "tinder", profile = {}, phone = null }) {
-  const existing = await findEntityByMatchId(matchId);
-  // Conversation-based location wins over distance — we scan existing conversation
-  // (if any) for "I'm in <city>" mentions before falling back to phone/distance.
-  const conversation = existing ? (await loadEntity(existing.slug)).conversation : null;
-  const city = await resolveCity({ phone, distance_mi: profile.distance_mi, conversation });
-  const now = new Date().toISOString();
+// CODEX-IMP-6+7+12: profile=null means "capture failed/skipped"; preserve existing
+// stored profile and skip the diff path entirely. profile={} or {sparse fields} means
+// "captured but empty" → still diff.
+export async function upsertMatch({ matchId, personId, name, source = "tinder", profile = null, phone = null }) {
+  return await withEntityLock(async () => {
+    const existing = await findEntityByMatchId(matchId);
+    // Conversation-based location wins over distance.
+    const conversation = existing ? (await loadEntity(existing.slug)).conversation : null;
+    const distanceForCity = profile?.distance_mi ?? null;
+    const city = await resolveCity({ phone, distance_mi: distanceForCity, conversation });
+    const now = new Date().toISOString();
 
-  if (existing) {
-    const ent = await loadEntity(existing.slug);
-    const oldCity = ent.meta.city;
-    let slug = ent.slug;
-    let previous = ent.meta.previous_slugs || [];
+    if (existing) {
+      const ent = await loadEntity(existing.slug);
+      const oldCity = ent.meta.city;
+      let slug = ent.slug;
+      let previous = ent.meta.previous_slugs || [];
 
-    if (oldCity !== city) {
-      const candidate = buildSlug({ name: ent.meta.first_name || name, source: ent.meta.source || source, city });
-      const existingSlugs = await listExistingSlugs();
-      existingSlugs.delete(ent.slug);
-      const newSlug = existingSlugs.has(candidate)
-        ? await uniqueSlug({ name: ent.meta.first_name || name, source: ent.meta.source || source, city }, existingSlugs)
-        : candidate;
-      previous = [...new Set([...previous, ent.slug])];
-      const newPath = resolve(RAW_DIR, `${newSlug}.md`);
-      await rename(ent.path, newPath);
-      slug = newSlug;
+      if (oldCity !== city) {
+        const candidate = buildSlug({ name: ent.meta.first_name || name, source: ent.meta.source || source, city });
+        const existingSlugs = await listExistingSlugs();
+        existingSlugs.delete(ent.slug);
+        const newSlug = existingSlugs.has(candidate)
+          ? await uniqueSlug({ name: ent.meta.first_name || name, source: ent.meta.source || source, city }, existingSlugs)
+          : candidate;
+        previous = [...new Set([...previous, ent.slug])];
+        const newPath = resolve(RAW_DIR, `${newSlug}.md`);
+        await rename(ent.path, newPath);
+        slug = newSlug;
+      }
+
+      // Decide what to write into ## Profile and ## Profile changes.
+      let nextProfileMd = ent.profile;       // default: keep existing
+      let nextChanges = ent.profile_changes; // default: keep existing
+      let diff = null;
+      if (profile) {
+        // Capture succeeded — diff against stored.
+        const oldProfile = profileFromMarkdown(ent.profile);
+        // CODEX-IMP-12: if oldProfile has no meaningful captured fields (parsed from
+        // "(no profile yet)"), treat as no prior data and skip diff (avoids fake "added
+        // every field" event on first real capture). Meaningful = any scalar OR any
+        // basics/lifestyle entry OR any interest.
+        const hasOld = !!(oldProfile.age || oldProfile.bio || oldProfile.distance_mi
+          || oldProfile.looking_for || oldProfile.dream_job
+          || (oldProfile.basics && Object.keys(oldProfile.basics).length)
+          || (oldProfile.lifestyle && Object.keys(oldProfile.lifestyle).length)
+          || (oldProfile.interests && oldProfile.interests.length));
+        diff = hasOld ? computeProfileDiff(oldProfile, profile) : null;
+        nextProfileMd = profileToMarkdown(profile);
+        if (diff) {
+          // CODEX-IMP-13+14: store diffs as JSON-fenced blocks for round-trip safety.
+          const block = diffToJsonBlock(diff, now);
+          nextChanges = [ent.profile_changes, block].filter(s => s && s.trim() && s.trim() !== "(none yet)").join("\n\n");
+        }
+      }
+
+      const meta = {
+        ...ent.meta,
+        slug,
+        city,
+        phone: phone ?? ent.meta.phone ?? null,
+        last_scrape: now,
+        ...(diff ? { last_profile_diff: now } : {}),
+        previous_slugs: previous,
+      };
+      await saveEntity({
+        slug,
+        meta,
+        profile: nextProfileMd,
+        conversation: ent.conversation,
+        outbound: ent.outbound,
+        profile_changes: nextChanges,
+      });
+      return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
     }
 
-    // Compute profile diff vs previously-stored profile.
-    const oldProfile = profileFromMarkdown(ent.profile);
-    const diff = computeProfileDiff(oldProfile, profile);
-    const diffMd = diffToMarkdown(diff, now);
-    const newChanges = diffMd
-      ? [ent.profile_changes, diffMd].filter(Boolean).join("\n\n")
-      : ent.profile_changes;
-
+    const existingSlugs = await listExistingSlugs();
+    const slug = await uniqueSlug({ name, source, city }, existingSlugs);
     const meta = {
-      ...ent.meta,
       slug,
+      first_name: firstName(name),
+      source,
       city,
-      phone: phone ?? ent.meta.phone ?? null,
+      match_id: matchId,
+      person_id: personId,
+      phone,
+      status: "new",
+      first_seen: now,
+      last_activity: now,
       last_scrape: now,
-      ...(diff ? { last_profile_diff: now } : {}),
-      previous_slugs: previous,
+      previous_slugs: [],
     };
     await saveEntity({
       slug,
       meta,
-      profile: profileToMarkdown(profile),
-      conversation: ent.conversation,
-      outbound: ent.outbound,
-      profile_changes: newChanges,
+      profile: profile ? profileToMarkdown(profile) : "",
+      conversation: "",
+      outbound: "",
+      profile_changes: "",
     });
-    return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
-  }
-
-  const existingSlugs = await listExistingSlugs();
-  const slug = await uniqueSlug({ name, source, city }, existingSlugs);
-  const meta = {
-    slug,
-    first_name: firstName(name),
-    source,
-    city,
-    match_id: matchId,
-    person_id: personId,
-    phone,
-    status: "new",
-    first_seen: now,
-    last_activity: now,
-    last_scrape: now,
-    previous_slugs: [],
-  };
-  await saveEntity({
-    slug,
-    meta,
-    profile: profileToMarkdown(profile),
-    conversation: "",
-    outbound: "",
-    profile_changes: "",
+    return { slug, created: true, renamed: false, profile_diff: null };
   });
-  return { slug, created: true, renamed: false, profile_diff: null };
 }
 
 function fmtMessageLine({ direction, text, ts }) {
   const who = direction === "out" ? "you" : "her";
   const t = ts ? new Date(ts).toISOString().slice(0, 16).replace("T", " ") : new Date().toISOString().slice(0, 16).replace("T", " ");
   return `**${who}** ${t} ${text.replace(/\n/g, " ")}`;
+}
+
+// CODEX-IMP-17: dedupe identity = {direction, text}, NOT the rendered line which
+// includes a timestamp. Without this, a message scraped twice (no real ts from DOM)
+// gets two stamped-now lines that don't dedupe on the next pass.
+function messageIdentity(direction, text) {
+  return `${direction}::${text.replace(/\s+/g, " ").trim()}`;
+}
+function existingIdentities(conversationMd) {
+  const out = new Set();
+  for (const line of (conversationMd || "").split("\n")) {
+    const m = line.match(/^\*\*(her|you)\*\*\s+\S+\s+\S+\s+(.*)$/);
+    if (!m) continue;
+    out.add(messageIdentity(m[1] === "you" ? "out" : "in", m[2]));
+  }
+  return out;
 }
 
 // Pull a phone number out of message text in canonical E.164. Returns null if none.

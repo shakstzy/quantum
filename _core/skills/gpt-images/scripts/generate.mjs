@@ -136,21 +136,20 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
 
     if (debug) process.stderr.write(`[gpt-images] image ready: ${result.src}\n`);
 
-    // Download via context.request -- inherits browser cookies, reuses TLS session.
-    const buffer = await downloadAsset(ctx.context, result.src);
-    const ext = guessExt(result.src) || 'png';
+    // Download + content-type/magic-byte validation.
+    const { body, ext } = await downloadAsset(ctx.context, result.src);
     const imgPath = join(runDir, `image-1.${ext}`);
-    await writeFile(imgPath, buffer);
+    await writeFile(imgPath, body);
 
     metadata = {
       run_id: runId,
       prompt,
       full_prompt: fullPrompt,
-      image_url: result.src,
+      image_url: redactSig(result.src),
       image_path: imgPath,
       width: result.w || null,
       height: result.h || null,
-      bytes: buffer.length,
+      bytes: body.length,
       created_at: new Date().toISOString(),
       user: sess.user?.email || sess.user?.name || sess.user?.id || null,
       page_url: ctx.page.url()
@@ -242,7 +241,32 @@ async function downloadAsset(context, url) {
   // context. oaiusercontent URLs are usually pre-signed; this still works.
   const res = await context.request.get(url, { timeout: 60000 });
   if (!res.ok()) throw new Error(`Image fetch failed: HTTP ${res.status()} ${res.statusText()}`);
-  return await res.body();
+  const body = await res.body();
+  if (!body || body.length < 512) {
+    throw new Error(`Image fetch returned ${body?.length || 0} bytes, expected >= 512. Likely a challenge or empty response.`);
+  }
+  // Magic-byte sniff to confirm we got a real image, not an HTML challenge
+  // page that returned 200.
+  const ext = sniffImageMagic(body);
+  if (!ext) {
+    const ct = res.headers()['content-type'] || 'unknown';
+    throw new Error(`Downloaded body is not a recognized image (content-type=${ct}, first bytes=${body.slice(0, 8).toString('hex')}). Likely a challenge or HTML response.`);
+  }
+  return { body, ext };
+}
+
+function sniffImageMagic(buf) {
+  if (!buf || buf.length < 4) return null;
+  // PNG: 89 50 4E 47
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png';
+  // JPEG: FF D8 FF
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpg';
+  // WebP: 'RIFF' .... 'WEBP'
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
+      && buf.length >= 12 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'webp';
+  // GIF: 'GIF87a' or 'GIF89a'
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'gif';
+  return null;
 }
 
 function slugify(s) {
@@ -253,13 +277,16 @@ function slugify(s) {
   return out || 'image';
 }
 
-function guessExt(url) {
+function redactSig(url) {
+  // Strip credential-bearing query params from the saved URL so that
+  // metadata.json doesn't carry a signed download credential to disk.
   try {
     const u = new URL(url);
-    const m = u.pathname.match(/\.(png|jpg|jpeg|webp|gif)$/i);
-    if (m) return m[1].toLowerCase().replace('jpeg', 'jpg');
-  } catch (_) {}
-  return null;
+    for (const k of ['sig', 'signature', 'X-Amz-Signature', 'token']) {
+      if (u.searchParams.has(k)) u.searchParams.set(k, 'REDACTED');
+    }
+    return u.toString();
+  } catch (_) { return url; }
 }
 
 function ts() {
