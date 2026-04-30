@@ -387,10 +387,16 @@ export class LinkedInExtractor {
 
   // Withdraw an outstanding sent invite by username (we navigate to the manager,
   // find the row matching the username, click the row's Withdraw button).
+  // dryRun=true: still finds the row + captures the trigger's aria-label so the operator
+  // can verify "this is who would actually be withdrawn" without burning the invite.
   async withdrawInvite(username, { dryRun = true } = {}) {
     const url = "https://www.linkedin.com/mynetwork/invitation-manager/sent/";
     await this.navigateTo(url);
-    if (dryRun) return { url, status: "would_withdraw", ok: true, dryRun: true };
+    // Scroll to load all sent invites before searching.
+    for (let i = 0; i < 6; i++) {
+      await this.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+      await sleep(700);
+    }
 
     // Find the withdraw control matching THIS specific user.
     // BUG FIX (2026-04-30, after live test mis-withdrew Dylan Patel when asked for evanchi):

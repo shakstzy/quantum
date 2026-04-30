@@ -6,17 +6,31 @@ import { toSlug } from "./slug.mjs";
 const PROFILE_URL_RE = /^https?:\/\/(?:www\.)?linkedin\.com\/in\/([^/?#]+)/i;
 const URN_RE = /^urn:li:fsd_profile:([A-Za-z0-9_-]+)$/;
 
+// Strictly validate a decoded public_id. LinkedIn vanities are alphanumeric + . _ -.
+// Per Codex P1 (withdraw-fix r2): user input flows into CSS selectors, so anything outside
+// this character class is a bug or attempted injection.
+function validPublicId(s) {
+  return typeof s === "string" && /^[A-Za-z0-9._-]+$/.test(s);
+}
+
 // Accepts: "janedoe", "/in/janedoe", "https://linkedin.com/in/janedoe/", "https://www.linkedin.com/in/janedoe?foo=bar".
 // Returns the bare public_id (no slashes) or null.
 export function urlOrIdToPublicId(input) {
   if (!input) return null;
   const s = String(input).trim();
   const m = s.match(PROFILE_URL_RE);
-  if (m) return decodeURIComponent(m[1]);
-  if (s.startsWith("/in/")) return s.slice(4).split(/[?#/]/)[0];
-  if (/^[A-Za-z0-9._-]+$/.test(s)) return s;
-  return null;
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    return validPublicId(id) ? id : null;
+  }
+  if (s.startsWith("/in/")) {
+    const id = decodeURIComponent(s.slice(4).split(/[?#/]/)[0]);
+    return validPublicId(id) ? id : null;
+  }
+  return validPublicId(s) ? s : null;
 }
+
+export { validPublicId };
 
 export function publicIdToUrl(publicId) {
   return `https://www.linkedin.com/in/${encodeURIComponent(publicId)}/`;
