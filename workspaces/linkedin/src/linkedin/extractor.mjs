@@ -469,12 +469,15 @@ export class LinkedInExtractor {
     await humanType(this.page, message);
     await sleep(jitter(500, 1100));
 
-    // Verify the typed message is in the compose box before clicking Send.
-    const typedOk = await this.page.evaluate((sel) => {
+    // Verify the typed message actually landed in the compose box (not just "non-empty").
+    // (Codex r3 P1: typedOk should require the expected message contents, not just length>0.)
+    const expectedNorm = message.replace(/\s+/g, " ").trim();
+    const typedOk = await this.page.evaluate(({ sel, expected }) => {
       const el = document.querySelector(sel);
       const t = (el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
-      return t.length > 0;
-    }, boxSelector).catch(() => false);
+      // Allow trailing newline differences; require a substantial substring match.
+      return t.length > 0 && t.includes(expected.slice(0, Math.min(60, expected.length)));
+    }, { sel: boxSelector, expected: expectedNorm }).catch(() => false);
     if (!typedOk) {
       return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "compose_typing_failed" };
     }
@@ -490,22 +493,30 @@ export class LinkedInExtractor {
       try { await this.page.keyboard.press("Meta+Enter"); } catch { /* ignore */ }
       try { await this.page.keyboard.press("Control+Enter"); } catch { /* ignore */ }
     }
-    await sleep(jitter(800, 1600));
+    await sleep(jitter(1200, 2000));
 
-    // Verify send: compose box should be empty (message sent + cleared) AND the message
-    // text should appear in the message thread surface.
-    const sendVerified = await this.page.evaluate(({ sel, expected }) => {
+    // Verify send: REQUIRE the expected message to be visible in the thread surface.
+    // (Codex r3 P1: "compose box cleared" is supplementary evidence only — not success
+    // by itself, since React can clear the box on session timeout, navigation, etc.)
+    const expectedSnippet = expectedNorm.slice(0, Math.min(80, expectedNorm.length));
+    const sendVerified = await this.page.evaluate(({ sel, snippet }) => {
       const box = document.querySelector(sel);
       const boxText = (box?.innerText || box?.textContent || "").replace(/\s+/g, " ").trim();
       const main = document.querySelector("main");
       const mainText = (main?.innerText || "").replace(/\s+/g, " ");
-      const expectedNorm = expected.replace(/\s+/g, " ").trim();
-      // Compose box cleared OR the message is visible somewhere on the page.
-      return (!boxText || boxText.length === 0) || mainText.includes(expectedNorm.slice(0, 60));
-    }, { sel: boxSelector, expected: message }).catch(() => false);
+      // Required: message visible in the conversation surface.
+      const visibleInThread = mainText.includes(snippet);
+      // Supplementary: compose box was cleared.
+      const boxCleared = !boxText || boxText.length === 0;
+      return { visibleInThread, boxCleared };
+    }, { sel: boxSelector, snippet: expectedSnippet }).catch(() => ({ visibleInThread: false, boxCleared: false }));
 
-    if (!sendVerified) {
-      return { url: profileUrl, composeUrl, status: "send_failed", ok: false, reason: "send_unverified" };
+    if (!sendVerified.visibleInThread) {
+      return {
+        url: profileUrl, composeUrl,
+        status: "send_failed", ok: false,
+        reason: sendVerified.boxCleared ? "send_unverified_box_cleared_only" : "send_unverified",
+      };
     }
     return { url: profileUrl, composeUrl, status: "sent", ok: true };
   }
