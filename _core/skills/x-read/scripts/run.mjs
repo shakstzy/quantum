@@ -190,12 +190,13 @@ async function whoami() {
       if (!restId) process.exitCode = 3;
       return;
     }
+    const userCore = ourUser?.core || {};
     const legacy = ourUser?.legacy || {};
     console.log(JSON.stringify({
       ok: true,
       id: ourUser?.rest_id || restId,
-      handle: legacy.screen_name || null,
-      name: legacy.name || null,
+      handle: userCore.screen_name || legacy.screen_name || null,
+      name: userCore.name || legacy.name || null,
       verified: !!(ourUser?.is_blue_verified ?? legacy.verified),
       premium: !!ourUser?.is_blue_verified,
       followers: legacy.followers_count ?? null,
@@ -361,7 +362,12 @@ function normalizeTweet(rawResult) {
   const text = noteResult?.text || legacy?.full_text || null;
 
   const userResult = tweet?.core?.user_results?.result;
+  // X 2026 moved screen_name + name from legacy.* to a new userResult.core.*
+  // block. Fall back to legacy for older shapes.
+  const userCore = userResult?.core || {};
   const userLegacy = userResult?.legacy || {};
+  const handle = userCore.screen_name || userLegacy.screen_name || null;
+  const displayName = userCore.name || userLegacy.name || null;
 
   // Retweet unwrap. legacy.retweeted_status_result.result is the original.
   const retweet = tweet?.legacy?.retweeted_status_result?.result;
@@ -387,8 +393,8 @@ function normalizeTweet(rawResult) {
     urls: extractUrls(legacy, noteEntities),
     author: {
       id: userResult?.rest_id || null,
-      handle: userLegacy?.screen_name || null,
-      name: userLegacy?.name || null,
+      handle,
+      name: displayName,
       verified: !!(userResult?.is_blue_verified ?? userLegacy?.verified)
     },
     retweet_of: retweet ? normalizeTweet(retweet) : null,
