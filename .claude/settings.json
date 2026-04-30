@@ -27,10 +27,6 @@
           {
             "type": "command",
             "command": "/Users/shakstzy/QUANTUM/scripts/hooks/learnings-session-start.sh"
-          },
-          {
-            "type": "command",
-            "command": "/Users/shakstzy/QUANTUM/scripts/hooks/imessage-ingest.sh"
           }
         ]
       }

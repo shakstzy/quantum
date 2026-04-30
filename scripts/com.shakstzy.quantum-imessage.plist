@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  iMessage ingest, every 12h. INDEPENDENT scheduled trigger.
+
+  Invokes ~/Applications/QuantumImessageIngest.app's bundle executable
+  directly. The .app is a real TCC subject (unlike /bin/bash and Homebrew
+  python3, whose FDA grants don't propagate to launchd-spawned processes
+  on this machine).
+
+  ONE-TIME SETUP: grant Full Disk Access to QuantumImessageIngest.app:
+    System Settings -> Privacy & Security -> Full Disk Access ->
+    click + -> Cmd+Shift+G -> ~/Applications/QuantumImessageIngest.app
+    -> Open -> toggle on.
+
+  Then: launchctl kickstart -k gui/$(id -u)/com.shakstzy.quantum-imessage
+  Verify: tail ~/Library/Logs/quantum-imessage.stderr.log (should show
+  "kept=0 review=0" or a small delta, not a PermissionError).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.shakstzy.quantum-imessage</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/shakstzy/Applications/QuantumImessageIngest.app/Contents/MacOS/QuantumImessageIngest</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>43200</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/shakstzy</string>
+    <key>PATH</key>
+    <string>/Users/shakstzy/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/shakstzy/Library/Logs/quantum-imessage.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/shakstzy/Library/Logs/quantum-imessage.stderr.log</string>
+</dict>
+</plist>
