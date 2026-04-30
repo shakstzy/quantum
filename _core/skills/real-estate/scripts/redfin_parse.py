@@ -283,6 +283,23 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
     buying_power = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/buyingPowerInfo") or {}
     home_tags = cache_entry(ctx, "/stingray/api/v1/home/details/belowTheFold/homeHighlightTagsInfo") or {}
     listing_status_banner = cache_entry(ctx, "/stingray/api/home/details/listingStatusBannerInfo/v1") or {}
+    # Phase-3 additions: high-value endpoints surfaced by the fixture audit.
+    activity = cache_entry(ctx, "/stingray/api/home/details/activityData") or {}
+    around_home = cache_entry(ctx, "/stingray/api/home/details/aroundThisHomeSectionInfo") or {}
+    comp_tags = cache_entry(ctx, "/stingray/api/home/details/compHomeTags/compHomeTagsInfo") or {}
+    hot_market = cache_entry(ctx, "/stingray/api/home/details/hotMarketInfo") or {}
+    local_insights = cache_entry(ctx, "/stingray/api/home/details/localInsights") or {}
+    agents_toured = cache_entry(ctx, "/stingray/api/home/details/tours/agentsWhoToured") or {}
+    shared_region = cache_entry(ctx, "/stingray/api/region/shared-region-info") or {}
+    page_tags = cache_entry(ctx, "/stingray/api/home/details/v1/pagetagsinfo") or {}
+    photo_tags = None
+    # photoTagsAndCaptions key includes a listingId; find the prefix match
+    cache = (ctx.get("ReactServerAgent.cache") or {}).get("dataCache") or {}
+    for k in cache:
+        if k.startswith("/stingray/api/photoTagsAndCaptions/"):
+            photo_tags = cache_entry(ctx, k.split("?")[0])
+            break
+    primary_region = cache_entry(ctx, "/stingray/api/home/details/primaryRegionInfo") or {}
 
     p_initial = initial.get("payload") or {}
     p_above = above.get("payload") or {}
