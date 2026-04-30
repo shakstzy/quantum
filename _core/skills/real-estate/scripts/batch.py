@@ -54,37 +54,54 @@ import rent_estimate  # type: ignore
 
 
 class _DomainLimiter:
-    """Per-domain semaphore + last-request timestamp.
+    """Per-domain semaphore + reservation-based pacing.
 
     Lets up to `concurrent` tasks hold the semaphore at once, and ensures
-    each task that completes leaves at least `min_gap` seconds before the
-    next acquirer can issue its request. Token-bucket-style.
+    each ENTRY happens at least `min_gap` seconds after the previous
+    entry. Reserves the next allowed start time INSIDE the lock so two
+    waiters that pass the gate simultaneously don't both see the stale
+    timestamp and bunch up.
     """
 
     def __init__(self, *, concurrent: int, min_gap: float):
         self.sem = asyncio.Semaphore(concurrent)
         self.min_gap = min_gap
-        self.last_release = 0.0
+        self.next_allowed_at = 0.0
         self._lock = asyncio.Lock()
 
     async def __aenter__(self):
         await self.sem.acquire()
         async with self._lock:
             now = time.monotonic()
-            wait = (self.last_release + self.min_gap) - now
-            if wait > 0:
-                await asyncio.sleep(wait)
+            wait = self.next_allowed_at - now
+            # Reserve our slot BEFORE sleeping so the next waiter sees the
+            # post-our-start timestamp, not the pre-our-start one.
+            start = max(now, self.next_allowed_at)
+            self.next_allowed_at = start + self.min_gap
+        if wait > 0:
+            await asyncio.sleep(wait)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        async with self._lock:
-            self.last_release = time.monotonic()
         self.sem.release()
 
 
-# Module-level limiters (per process). Conservative defaults:
-_REDFIN = _DomainLimiter(concurrent=2, min_gap=1.5)
-_ZILLOW = _DomainLimiter(concurrent=2, min_gap=2.0)
+# Per-event-loop limiter cache. Module-level singletons would bind to
+# whichever loop ran first and crash on a second `asyncio.run()` call.
+_LIMITER_CACHE: dict[int, dict[str, "_DomainLimiter"]] = {}
+
+
+def _limiters_for_current_loop() -> dict[str, "_DomainLimiter"]:
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    cached = _LIMITER_CACHE.get(key)
+    if cached is None:
+        cached = {
+            "redfin": _DomainLimiter(concurrent=2, min_gap=1.5),
+            "zillow": _DomainLimiter(concurrent=2, min_gap=2.0),
+        }
+        _LIMITER_CACHE[key] = cached
+    return cached
 
 
 async def _run_in_thread(fn: Callable[..., Any], *args, **kwargs):
@@ -94,7 +111,7 @@ async def _run_in_thread(fn: Callable[..., Any], *args, **kwargs):
 
 
 async def _safe_redfin_property(url: str, *, include_raw: bool = False) -> dict:
-    async with _REDFIN:
+    async with _limiters_for_current_loop()["redfin"]:
         try:
             return await _run_in_thread(redfin.property_details, url, include_raw=include_raw)
         except Exception as e:
@@ -102,19 +119,33 @@ async def _safe_redfin_property(url: str, *, include_raw: bool = False) -> dict:
 
 
 async def _safe_zillow_property(url: str, *, include_raw: bool = False) -> dict:
-    async with _ZILLOW:
+    async with _limiters_for_current_loop()["zillow"]:
         try:
             return await _run_in_thread(zillow.property_details, url, include_raw=include_raw)
         except Exception as e:
             return {"error": str(e), "url": url, "source": "zillow"}
 
 
+async def _resolve_zillow_url(address: str) -> str | None:
+    """Zillow URL resolution does live HTTP (the /homes/<slug>/ redirect),
+    so it MUST run under the Zillow limiter to count toward our cap.
+    """
+    async with _limiters_for_current_loop()["zillow"]:
+        return await _run_in_thread(lookup.find_zillow_url, address)
+
+
 async def _safe_lookup(address: str, *, include_raw: bool = False,
                         redfin_url: str | None = None,
                         zillow_url: str | None = None) -> dict:
-    """Resolve URLs (cheap, mostly local) then fetch BOTH sites concurrently."""
+    """Resolve URLs (cheap, mostly local) then fetch BOTH sites concurrently.
+
+    Zillow URL resolution is itself a live HTTP call (the /homes/<slug>/
+    redirect chain), so it goes through the Zillow limiter. Redfin URL
+    resolution shells out to brave-search (separate IP, our skill, not
+    counted against the Redfin domain).
+    """
     rf_url = redfin_url or await _run_in_thread(lookup.find_redfin_url, address)
-    zw_url = zillow_url or await _run_in_thread(lookup.find_zillow_url, address)
+    zw_url = zillow_url or await _resolve_zillow_url(address)
 
     rf_task = _safe_redfin_property(rf_url, include_raw=include_raw) if rf_url else \
               _aresult({"error": "no exact Redfin URL found via Brave (street number/name not in top results)."})
