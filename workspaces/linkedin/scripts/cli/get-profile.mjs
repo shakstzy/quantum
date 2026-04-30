@@ -1,61 +1,50 @@
 #!/usr/bin/env node
 import { launchPersistent } from "../../src/runtime/profile.mjs";
 import { ensureLoggedIn } from "../../src/linkedin/session.mjs";
-import { LinkedInClient } from "../../src/linkedin/client.mjs";
-import { getProfile, getContactInfo } from "../../src/linkedin/voyager/profile.mjs";
+import { LinkedInExtractor } from "../../src/linkedin/extractor.mjs";
 import { upsertPerson } from "../../src/runtime/entity-store.mjs";
-import { profileToSlug } from "../../src/runtime/identity.mjs";
+import { toSlug } from "../../src/runtime/slug.mjs";
+import { urlOrIdToPublicId } from "../../src/runtime/identity.mjs";
 import { gate, record } from "../../src/policy/rate-limits.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.profile) {
-  console.error("Usage: get-profile.mjs --profile <public_id_or_url> [--with-contact-info] [--no-write] [--json]");
+  console.error("Usage: get-profile.mjs --profile <public_id_or_url> [--no-write] [--json]");
   process.exit(1);
 }
 
 await gate("get_profile");
+const publicId = urlOrIdToPublicId(args.profile);
+if (!publicId) { console.error("Cannot derive public_id from input."); process.exit(1); }
 
 const { ctx, page } = await launchPersistent({ headless: false });
 let exitCode = 0;
 try {
   await ensureLoggedIn(page);
-  const client = new LinkedInClient({ ctx, page });
-  const profile = await getProfile(client, args.profile);
-  let contact = null;
-  if (args["with-contact-info"] && profile.publicIdentifier) {
-    contact = await getContactInfo(client, profile.publicIdentifier);
-  }
-  const slug = profileToSlug(profile);
+  const ext = new LinkedInExtractor(page);
+  const result = await ext.getPersonProfile(publicId);
+  const slug = result.displayName ? toSlug(result.displayName) : toSlug(publicId);
 
   if (!args["no-write"]) {
     const fm = {
       slug,
-      linkedin_public_id: profile.publicIdentifier,
-      linkedin_urn: profile.urn,
-      name: profile.fullName,
-      headline: profile.headline,
-      industry: profile.industryName,
-      location: profile.locationName,
-      email: contact?.emailAddress ?? null,
-      phone: contact?.phoneNumbers?.[0]?.number ?? null,
+      linkedin_public_id: publicId,
+      linkedin_url: result.url,
+      linkedin_urn: result.profileUrn,
+      name: result.displayName,
       source: "manual_url",
+      last_pulled_at: new Date().toISOString(),
     };
-    const summary =
-      `**${profile.fullName ?? "(no name)"}**  \n` +
-      `${profile.headline ?? ""}  \n` +
-      `${profile.locationName ? `Location: ${profile.locationName}  \n` : ""}` +
-      `${profile.industryName ? `Industry: ${profile.industryName}  \n` : ""}` +
-      (profile.summary ? `\n${profile.summary}\n` : "");
-    const file = await upsertPerson({ slug, frontmatter: fm, profileSnapshot: summary });
-    await record("get_profile", { target: profile.publicIdentifier, extra: { slug, file } });
+    const file = await upsertPerson({ slug, frontmatter: fm, profileSnapshot: result.sections.main_profile });
+    await record("get_profile", { target: publicId, extra: { slug, file } });
     if (args.json) {
-      console.log(JSON.stringify({ profile, contact, slug, file }, null, 2));
+      console.log(JSON.stringify({ slug, file, displayName: result.displayName, profileUrn: result.profileUrn, url: result.url }, null, 2));
     } else {
-      console.log(`OK ${profile.fullName ?? profile.publicIdentifier}  ->  ${file}`);
+      console.log(`OK  ${result.displayName ?? publicId}  ->  ${file}`);
     }
   } else {
-    if (args.json) console.log(JSON.stringify({ profile, contact }, null, 2));
-    else console.log(`${profile.fullName ?? profile.publicIdentifier}: ${profile.headline ?? ""}`);
+    if (args.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(result.sections.main_profile.slice(0, 600));
   }
 } catch (err) {
   console.error(`[get-profile] ${err.code ?? "ERR"} ${err.message}`);
@@ -70,7 +59,6 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--profile") out.profile = argv[++i];
-    else if (a === "--with-contact-info") out["with-contact-info"] = true;
     else if (a === "--no-write") out["no-write"] = true;
     else if (a === "--json") out.json = true;
   }

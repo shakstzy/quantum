@@ -1,30 +1,21 @@
 #!/usr/bin/env node
 import { launchPersistent } from "../../src/runtime/profile.mjs";
 import { ensureLoggedIn } from "../../src/linkedin/session.mjs";
-import { LinkedInClient } from "../../src/linkedin/client.mjs";
-import { listPendingInvites, pendingSentCount } from "../../src/linkedin/voyager/connections.mjs";
+import { LinkedInExtractor } from "../../src/linkedin/extractor.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const direction = args.direction ?? "received";
-const limit = Number(args.limit ?? 50);
 
 const { ctx, page } = await launchPersistent({ headless: false });
 let exit = 0;
 try {
   await ensureLoggedIn(page);
-  const client = new LinkedInClient({ ctx, page });
-  const invites = await listPendingInvites(client, { direction, limit });
-  let sentTotal = null;
-  if (direction === "sent") sentTotal = await pendingSentCount(client);
-  if (args.json) {
-    console.log(JSON.stringify({ direction, total_outstanding: sentTotal, invites }, null, 2));
-  } else {
-    if (sentTotal !== null) console.log(`Total outstanding sent invites: ${sentTotal}`);
-    for (const inv of invites) {
-      const ts = inv.sentAt ? new Date(inv.sentAt).toISOString() : "?";
-      console.log(`${ts}  ${inv.type ?? "?"}  ${inv.invitationUrn}`);
-      if (inv.message) console.log(`    note: ${inv.message.slice(0, 120)}`);
-    }
+  const ext = new LinkedInExtractor(page);
+  const result = await ext.listInvites({ direction });
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else {
+    console.log(`Invitations (${direction}) at ${result.url}:`);
+    console.log((result.sections.invites || "").slice(0, 4000));
   }
 } catch (err) {
   console.error(`[list-invites] ${err.code ?? "ERR"} ${err.message}`);
@@ -39,7 +30,6 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--direction") out.direction = argv[++i];
-    else if (a === "--limit") out.limit = argv[++i];
     else if (a === "--json") out.json = true;
   }
   return out;
