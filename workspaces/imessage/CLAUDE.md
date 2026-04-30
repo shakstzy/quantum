@@ -16,15 +16,34 @@ scripts/pull.sh          wrapper that calls ingest_all.py
 
 ## How the trigger works
 
-**This workspace does NOT use launchd.** chat.db is TCC-protected and macOS silently ignores FDA grants on the system binaries launchd actually invokes (`/bin/bash` is SIP-locked; even Homebrew python3 grants don't propagate cleanly through a launchd-spawned tree). Tried both, both fail with PermissionError.
+Independent scheduled trigger, every 12h, via launchd against an .app bundle.
 
-What works: the `SessionStart` Claude Code hook in `.claude/settings.json` fires `scripts/hooks/imessage-ingest.sh` every time Adithya opens a Claude Code session in QUANTUM. Claude Code is spawned from iTerm, iTerm has FDA, and FDA propagates through the session's process tree, so the hook reads chat.db without any extra grant.
+```
+~/Applications/QuantumImessageIngest.app    # bundle - real TCC subject
+~/Library/LaunchAgents/com.shakstzy.quantum-imessage.plist  # 12h schedule
+```
 
-- Incremental no-op = 0.07s, runs in background, never blocks session start.
-- Lockfile at `/tmp/quantum-imessage-ingest.lock` prevents concurrent Claude windows from racing.
-- Hook log: `~/Library/Logs/quantum-imessage.hook.log`.
-- Cadence is "whenever Claude Code opens." Adithya opens it many times a day; the watermark catches up regardless of how often. No 12h timer needed.
-- Manual ad-hoc: `bash workspaces/imessage/scripts/pull.sh` from any iTerm session.
+The launchd plist invokes `~/Applications/QuantumImessageIngest.app/Contents/MacOS/QuantumImessageIngest` directly (no /bin/bash, no system python). The bundle's executable runs Homebrew python3 against `scripts/ingest_all.py`. Because the .app is its own TCC subject, an FDA grant on the .app actually sticks - unlike grants on /bin/bash and standalone Homebrew python3, which TCC silently ignores under SIP / launchd's TCC scope on this machine.
+
+### One-time setup
+
+1. System Settings -> Privacy & Security -> Full Disk Access
+2. Click `+` -> Cmd+Shift+G -> `~/Applications/QuantumImessageIngest.app` -> Open
+3. Toggle the new entry on
+4. Verify:
+   ```
+   launchctl kickstart -k gui/$(id -u)/com.shakstzy.quantum-imessage
+   tail ~/Library/Logs/quantum-imessage.stderr.log
+   ```
+   Expect a "kept=N review=M" line, NOT `PermissionError`.
+
+### Why the previous "grant FDA to /bin/bash" advice was wrong
+
+`/bin/bash` is SIP-protected; the System Settings UI accepts the grant but TCC ignores it. Direct grants on the resolved Homebrew python3 binary also fail in launchd's TCC scope (verified 2026-04-30). App bundles bypass both issues because they get their own per-bundle TCC entry. See `raw/learnings/2026-04-28-launchd-needs-fda-for-chat-db.md`.
+
+### Manual ad-hoc
+
+`bash workspaces/imessage/scripts/pull.sh` from any iTerm session works at any time (iTerm has FDA, the spawn inherits). Use this if you want to force a sync between launchd ticks.
 
 ## Conventions
 
