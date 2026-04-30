@@ -32,15 +32,32 @@ None. Both sites are scraped from public HTML. The first request per session war
 From repo root:
 
 ```bash
-# Search a region
+# Basic regional search
 _core/skills/real-estate/re redfin search "Austin, TX" --max-price 700000 --min-beds 3 --num-homes 50
 _core/skills/real-estate/re zillow search "Austin, TX" --max-price 700000 --min-beds 3
 
-# Search with property-type filter (Redfin)
-_core/skills/real-estate/re redfin search "Austin, TX" --home-types house,condo --max-price 700000
+# All filter flags (both sites)
+_core/skills/real-estate/re redfin search "Austin, TX" \
+  --max-price 700000 --min-beds 3 --min-baths 2 \
+  --min-sqft 1500 --max-sqft 3500 --max-hoa 200 \
+  --year-built-min 2000 --year-built-max 2020 \
+  --lot-size-min 5000 --has-pool --has-garage \
+  --new-construction --home-types house,condo \
+  --status active --sort newest --page 1
 
-# Manual region override (skip Brave; useful when brave-search is unauthed)
-_core/skills/real-estate/re redfin search "anything" --region-id 30818 --region-type 6 --max-price 700000
+# Custom polygon (lat,lng pairs separated by ;)
+_core/skills/real-estate/re redfin search --polygon "30.27,-97.74;30.30,-97.74;30.30,-97.70;30.27,-97.70" --max-price 700000
+_core/skills/real-estate/re zillow search --polygon "30.27,-97.74;30.30,-97.74;30.30,-97.70;30.27,-97.70"
+
+# Bounding box (north,east,south,west)
+_core/skills/real-estate/re redfin search --bbox "30.30,-97.70,30.27,-97.80" --max-price 700000
+_core/skills/real-estate/re zillow search --bbox "30.30,-97.70,30.27,-97.80"
+
+# Multi-region OR (sequential, deduped, throttled)
+_core/skills/real-estate/re redfin search --regions "Austin, TX;Round Rock, TX;Cedar Park, TX" --max-price 600000
+
+# Manual Redfin region override (skip Brave; useful when brave-search is unauthed)
+_core/skills/real-estate/re redfin search --region-id 30818 --region-type 6 --max-price 700000
 
 # Property details
 _core/skills/real-estate/re redfin property "https://www.redfin.com/TX/Austin/.../home/<id>"
@@ -49,15 +66,40 @@ _core/skills/real-estate/re zillow property "https://www.zillow.com/homedetails/
 # Property details + full nested API payloads
 _core/skills/real-estate/re redfin property "<url>" --include-raw
 
-# Just the price + listing history (Redfin)
+# Just price + listing history (Redfin)
 _core/skills/real-estate/re redfin history "<redfin-url>"
 
-# Comparable / similar listings (Redfin)
+# Comps (Redfin)
 _core/skills/real-estate/re redfin comps "<redfin-url>"
 
 # Resolve a free-text query into a Redfin region (no listing fetch)
 _core/skills/real-estate/re redfin resolve "78704"
 ```
+
+## Filter flags reference
+
+Available on both `redfin search` and `zillow search` unless noted:
+
+| Flag | Type | Notes |
+|------|------|-------|
+| `--max-price`, `--min-price` | int | dollars |
+| `--min-beds` | int | |
+| `--min-baths` | float | |
+| `--min-sqft`, `--max-sqft` | int | |
+| `--max-hoa` | int | dollars/month |
+| `--year-built-min`, `--year-built-max` | int | |
+| `--lot-size-min`, `--lot-size-max` | int | sqft |
+| `--has-pool`, `--has-garage` | flag | |
+| `--new-construction` | flag | |
+| `--home-types` | list | Redfin only: `house,condo,townhouse,multi-family,land,mobile,coop` |
+| `--status` | choice | `active` (default), `pending`, `sold`, `coming-soon`, `off-market` (zillow), `contingent` (redfin) |
+| `--sort` | choice | `newest`, `price-asc`, `price-desc`, `sqft-asc`, `sqft-desc`, `lot-desc` |
+| `--page` | int | 1-indexed pagination |
+| `--polygon` | string | `lat,lng;lat,lng;...` ≥3 vertices |
+| `--bbox` | string | `north,east,south,west` |
+| `--regions` | string | multi-region OR: `City1, ST;City2, ST;...` |
+| `--region-id` + `--region-type` | int | Redfin only; manual override (6=city, 2=zip, 1=neighborhood, 5=county, 4=state) |
+| `--num-homes` | int | Redfin only; default 50, max 450 |
 
 All commands print one JSON document to stdout. Pipe through `jq` for filtering when results get large:
 
@@ -116,7 +158,61 @@ Both sites server-render their React pages and embed every API response into the
 }
 ```
 
-`property` returns flattened key fields plus full nested `raw` if `--include-raw`. Includes `history`, `tax_history`, `schools`, `risk_factors`, `comps` (Redfin), `zestimate`/`rent_zestimate` (Zillow when present).
+`property` returns the flattened union of every cached endpoint Redfin or Zillow embeds in the page. Notable fields beyond the basics:
+
+**Redfin property:**
+- `ai_summary`, `ai_property_details` (Redfin's auto-generated narrative)
+- `location_score`, `walk_score`, `transit_score`, `bike_score`
+- `commute` (commute time estimates), `weather` (monthly averages), `sun_exposure`
+- `parcel_info`, `parcel_boundaries`, `zoning`, `permits`
+- `neighborhood_stats`, `popularity`, `price_drop`, `home_highlight_tags`
+- `nearby_open_houses`, `newest_listings_nearby`
+- `tour_insights`, `buying_power`, `avm_historical`
+- `listing_agent` (name, license, phone, email, brokerage)
+- `mls_id`, `mls_source`, `apn`, `tax_info`
+- `photos[]` (full URL list), `photo_count`
+
+**Zillow property:**
+- `description`, `home_insights`, `home_status`, `listing_sub_type`, `contingent_listing_type`
+- `time_on_zillow`, `date_posted`, `date_sold`
+- `zestimate`, `rent_zestimate`, `zestimate_low`, `zestimate_high`, `tax_assessed_value`
+- `tax_history`, `price_history`, `value_history`
+- `property_tax_rate`, `monthly_hoa_fee`, `annual_homeowners_insurance`
+- `parking_features`, `garage_spaces`, `heating`, `cooling`, `appliances`, `fireplace`, `flooring`, `stories`
+- `interior_features`, `exterior_features`, `view_description`, `pool_features`
+- `is_new_construction`, `mls_id`, `mls_name`
+- `listing_agent` (name, phone, license, email, brokerage, brokerage_phone), `co_listing_agents`
+- `nearby_homes`, `nearby_cities`, `nearby_neighborhoods`, `nearby_zipcodes`
+- `walk_score`, `transit_score`, `bike_score`, `climate_risk`
+- `virtual_tour_url`, `open_houses`, `mortgage_rates`, `tour_eligibility`
+- `photos[]`, `photo_count`
+
+## Cross-source dedupe
+
+The `dedupe` module merges Redfin + Zillow result sets, keying on `zpid` /
+`property_id` first, then lat/lng proximity (≤25 m) AND matching beds AND
+sqft within 5%. Output is a unified list where each merged home has an
+`_other_sources` array with the duplicate-source rows for side-by-side
+price/zestimate comparison.
+
+```python
+from scripts import dedupe
+merged = dedupe.merge(redfin_homes, zillow_homes)
+```
+
+## Dev workflow (no live hits)
+
+If Claude needs to iterate on parsing logic, the rule is **fixture-only**.
+See `raw/learnings/2026-04-28-cache-html-during-scraper-dev.md`.
+
+1. Run `scripts/capture_fixtures.py` ONCE (1-2 live hits per site, max).
+   Saves full HTML + parsed JSON to `.dev-fixtures/` (gitignored).
+2. Run tests via `uv run python -m unittest discover tests`. Tests
+   monkey-patch `_fetch_html` / `_get_session` / subprocess to raise
+   `NetworkDisabledError`, so any test path that tries to hit live blows
+   up loudly.
+3. Iterate against the fixtures. Re-capture only when Redfin/Zillow
+   visibly changes their layout.
 
 ## Notes
 
