@@ -17,11 +17,11 @@ Do NOT fire for:
 - Linear's marketing site or public docs.
 - Building a public OAuth Linear integration for third-party users.
 - GitHub PR creation (that goes through `gh`; linctl can read the linked Linear issue but the PR itself is `gh pr create`).
-- Slack/Notion/Discord routing — those have their own skills.
+- Slack/Notion/Discord routing - those have their own skills.
 
 ## Auth model (IMPORTANT)
 
-Token is a **personal API key** (`lin_api_*`) tied to Adithya's `outerscope.xyz` Linear account. It acts AS Adithya — anything `linctl` writes is attributed to him, no bot prefix.
+Token is a **personal API key** (`lin_api_*`) tied to Adithya's `outerscope.xyz` Linear account. It acts AS Adithya - anything `linctl` writes is attributed to him, no bot prefix.
 
 - **Canonical store:** macOS Keychain `service=quantum-linear, account=$USER`.
 - **Working copy:** `~/.linctl-auth.json` (mode 600), written by `linctl auth login`. linctl reads this file on every invocation; it does NOT honor `LINEAR_API_KEY` env var for `whoami`/most reads in current versions.
@@ -38,23 +38,23 @@ These are NOT obvious from the help text. Read every time before running list/se
 2. **Completed/canceled filtered out by default** on `issue list` and `issue search`. Append `--include-completed` to see them. For archived issues in `issue search`, also add `--include-archived`.
 3. **Always pass `--json` (or `-j`) for reads.** This is the Quick Start guidance from linctl's own README directed at Claude/Cursor/Gemini. The default table output wastes tokens and is hard to parse reliably. Writes can stay default-mode if the user wants to see the confirmation, but reads are always JSON.
 4. **Issue IDs are `TEAM-NUM`** (e.g. `ENG-123`), not UUIDs. Most verbs accept either, but the human-friendly form is what shows up in URLs and commits.
-5. **Team scoping.** `linctl issue list` without `--team` returns issues across **all teams** Adithya has access to. To narrow, pass `--team <KEY>` (e.g. `--team OUT` for Outerscope). There is no `--all-teams` flag — omitting `--team` is the cross-team mode.
+5. **Team scoping.** `linctl issue list` without `--team` returns issues across **all teams** Adithya has access to. To narrow, pass `--team <KEY>` (e.g. `--team OUT` for Outerscope). There is no `--all-teams` flag - omitting `--team` is the cross-team mode.
 6. **No `issue mine` verb.** The way to list issues assigned to Adithya is `linctl issue list --assignee me --json`. (The schpet/linear-cli has `issue mine`; linctl does not.)
 
 ## Required caller inputs
 
 For every verb:
-- **None** for reads — auth file already on disk.
+- **None** for reads - auth file already on disk.
 
 For writes (`issue create`, `issue update`, `comment create`, `project create`, etc.):
 - Confirm the team and title with Adithya before firing if not specified. Do not invent a team slug.
-- For status changes (`issue update --state <name>`), use the exact state name from `linctl team state list <team> --json` — the matcher is fuzzy but case-sensitive on tokens.
+- For status changes (`issue update --state <name>`), use the exact state name from `linctl team state list <team> --json` - the matcher is fuzzy but case-sensitive on tokens.
 
 ## Procedure
 
 1. **Verify auth.** `linctl whoami --json`. Confirm `authenticated: true` and `user.email == adithya@outerscope.xyz`.
 2. **Resolve target.** If the user named an issue by partial title, run `linctl issue search "<query>" --json --include-completed --newer-than all_time` and disambiguate if multiple hits.
-3. **Preview writes.** For `issue create`, `issue update`, `comment create`, `project create`, print the resolved fields to stderr before the call. No `CONFIRM` gate by default — Linear writes are reversible (un-archive, edit, delete comment) and the token is scoped to Adithya's own account.
+3. **Preview writes.** For `issue create`, `issue update`, `comment create`, `project create`, print the resolved fields to stderr before the call. No `CONFIRM` gate by default - Linear writes are reversible (un-archive, edit, delete comment) and the token is scoped to Adithya's own account.
 4. **Execute.** Run the verb with `--json` (reads) or default mode (writes Adithya wants to see). Errors land on stderr with non-zero exit.
 5. **Audit.** Run the Audit table below.
 
@@ -86,9 +86,9 @@ Gate exception: cross-account or destructive ops (delete a project, bulk archive
 | `label list` | `linctl label list --json [--team T]` | Labels. |
 | `user me` | `linctl user me --json` | Same as `whoami` but with full user fields. |
 | `agent` | `linctl agent <ID> --json` | Inspect agent session for an issue (delegations, mentions). |
-| `graphql` | `cat query.graphql \| linctl graphql --variables '{"k":"v"}'` | Escape hatch — raw Linear GraphQL with linctl auth. Use sparingly when a verb doesn't cover the need. |
+| `graphql` | `cat query.graphql \| linctl graphql --variables '{"k":"v"}'` | Escape hatch - raw Linear GraphQL with linctl auth. Use sparingly when a verb doesn't cover the need. |
 
-linctl's `docs` verb (`linctl docs`) renders the upstream README. Do not re-document endpoints here — README is the source of truth.
+linctl's `docs` verb (`linctl docs`) renders the upstream README. Do not re-document endpoints here - README is the source of truth.
 
 ## Audit (Pattern 12)
 
@@ -112,10 +112,10 @@ linctl's `docs` verb (`linctl docs`) renders the upstream README. Do not re-docu
 
 ## Files
 
-- `/opt/homebrew/bin/linctl` — binary (Homebrew, `dorkitude/linctl/linctl` formula).
-- `~/.linctl-auth.json` — working credential cache (mode 600). DO NOT commit; not under QUANTUM control.
-- macOS Keychain `service=quantum-linear, account=$USER` — canonical mirror; survives binary reinstall.
-- This file — `_core/skills/linear/SKILL.md`. No `scripts/` dir; linctl is the script.
+- `/opt/homebrew/bin/linctl` - binary (Homebrew, `dorkitude/linctl/linctl` formula).
+- `~/.linctl-auth.json` - working credential cache (mode 600). DO NOT commit; not under QUANTUM control.
+- macOS Keychain `service=quantum-linear, account=$USER` - canonical mirror; survives binary reinstall.
+- This file - `_core/skills/linear/SKILL.md`. No `scripts/` dir; linctl is the script.
 
 ## Security notes
 
@@ -131,4 +131,4 @@ linctl's `docs` verb (`linctl docs`) renders the upstream README. Do not re-docu
 - **Reaction/emoji ops not supported.** Linear's API has them; linctl doesn't wrap them yet.
 - **No webhook/subscription support.** linctl is request/response only. For "notify me when X happens," wire a Linear webhook → your own handler, not through this skill.
 - **Sub-issue tree builds** require multiple `issue create --parent <ID>` calls; no single-shot tree builder.
-- **Markdown in descriptions/comments** passes through as-is — Linear renders it. Tables and complex embeds may render imperfectly; preview before bulk publishing.
+- **Markdown in descriptions/comments** passes through as-is - Linear renders it. Tables and complex embeds may render imperfectly; preview before bulk publishing.
