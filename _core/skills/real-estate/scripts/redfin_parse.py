@@ -351,7 +351,15 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         "public_records": public_records,
         "tax_info": public_records.get("allTaxInfo"),
         "apn": public_records.get("apn"),
-        "schools": (schools_resp.get("payload") or {}).get("schools") or [],
+        # Redfin nests schools under servingThisHomeSchools / schoolsToShowOnDP.
+        # Older fixture was looking at payload.schools which doesn't exist.
+        "schools": (
+            _payload_dict(schools_resp).get("servingThisHomeSchools")
+            or _payload_dict(schools_resp).get("schoolsToShowOnDP")
+            or _payload_dict(schools_resp).get("schools")
+            or []
+        ),
+        "school_districts": _payload_dict(schools_resp).get("districtsServingThisHome") or [],
         "risk_factors": (risk.get("payload") or {}),
         "comps": _summarize_comps(similars),
         "amenities": p_below.get("amenitiesInfo") or {},
