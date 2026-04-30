@@ -17,10 +17,11 @@ from concurrent.futures import ThreadPoolExecutor
 from instaloader import Instaloader, Post
 from instaloader.exceptions import InstaloaderException, LoginRequiredException
 
-# Delegate all daemon contract (URL, model, payload) to the local-llm skill.
-# If Gemma's port/model/host changes, only that skill's client.py is edited.
-sys.path.insert(0, "/Users/shakstzy/QUANTUM/_core/skills/local-llm")
-from client import chat as local_llm_chat, image_block, LocalLLMUnreachable, UNREACHABLE_HINT
+# Delegate cloud LLM dispatch (gemini cycling + claude fallback) to the cloud-llm
+# skill. If providers, model names, or cycling shape changes, only that skill's
+# client.py is edited.
+sys.path.insert(0, "/Users/shakstzy/QUANTUM/_core/skills/cloud-llm")
+from client import describe_images, ask_text, CloudLLMUnreachable
 
 SHORTCODE_RE = re.compile(
     r"instagram\.com/(?:share/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)"
@@ -148,10 +149,10 @@ def transcribe(audio: Path) -> str:
 
 
 def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str = "") -> str:
-    """Vision+text synthesis delegated to the shared local-llm skill.
+    """Vision+text synthesis delegated to the shared cloud-llm skill.
 
-    Daemon contract (URL, model, payload shape): `_core/skills/local-llm/client.py`.
-    No in-process MLX load; the daemon stays warm across calls.
+    Engine cycle (URL, models, accounts) lives in `_core/skills/cloud-llm/client.py`:
+    gemini Pro across cached accounts → gemini Flash → claude -p sonnet.
     """
     visual_desc = "frames sampled across the reel" if kind == "reel" else "images from the post"
     audio_line = f"AUDIO TRANSCRIPT: {transcript or '(no speech)'}\n\n" if kind == "reel" else ""
@@ -166,17 +167,11 @@ def analyze_visual(images: list[Path], caption: str, kind: str, transcript: str 
         "before/after), call that out. Do not pad. Do not restate the caption verbatim."
     )
 
-    content: list[dict] = [{"type": "text", "text": prompt_text}]
-    content.extend(image_block(img) for img in images)
-
     try:
-        return local_llm_chat(
-            [{"role": "user", "content": content}],
-            max_tokens=MAX_TOKENS,
-            temperature=0.3,
-        )
-    except LocalLLMUnreachable as e:
-        sys.exit(f"{e}\n{UNREACHABLE_HINT}")
+        result = describe_images([str(p) for p in images], prompt_text)
+    except CloudLLMUnreachable as e:
+        sys.exit(f"cloud-llm dispatch failed:\n{e}")
+    return result["output"]
 
 
 def handle_reel(url: str) -> None:
