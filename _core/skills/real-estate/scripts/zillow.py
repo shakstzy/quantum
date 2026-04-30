@@ -168,6 +168,12 @@ _STATUS_TO_FILTER: dict[str, dict[str, Any]] = {
     "off-market": {"isAllHomes": {"value": True}, "isForSaleByAgent": {"value": False},
                    "isForSaleByOwner": {"value": False}, "isNewConstruction": {"value": False},
                    "isComingSoon": {"value": False}},
+    # Rentals: flip the for-sale flags off and turn on for-rent.
+    "for-rent": {
+        "isForSaleByAgent": {"value": False}, "isForSaleByOwner": {"value": False},
+        "isNewConstruction": {"value": False}, "isComingSoon": {"value": False},
+        "isAuction": {"value": False}, "isForRent": {"value": True},
+    },
 }
 
 _SORT_VALUES = {

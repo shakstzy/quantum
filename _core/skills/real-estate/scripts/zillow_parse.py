@@ -151,9 +151,21 @@ def parse_property(data: dict, *, include_raw: bool = False) -> dict:
             elif isinstance(p.get("url"), str):
                 photos.append(p["url"])
 
+    static_map_sources = (prop.get("staticMap") or {}).get("sources") or []
+    static_map_url = (static_map_sources[0] or {}).get("url") if static_map_sources else None
     out = {
         "source": "zillow",
         "zpid": prop.get("zpid"),
+        "county": prop.get("county"),
+        "street_view_url": prop.get("streetViewTileImageUrlMediumAddress"),
+        "static_map_url": static_map_url,
+        "neighborhood_map_thumb": (prop.get("neighborhoodMapThumb") or [{}])[0].get("url") if prop.get("neighborhoodMapThumb") else None,
+        "keystone_home_status": prop.get("keystoneHomeStatus"),
+        "coming_soon_date": prop.get("comingSoonOnMarketDate"),
+        "third_party_virtual_tour": prop.get("thirdPartyVirtualTour"),
+        "mls_attribution_title": (attribution.get("attributionTitle") if isinstance(attribution, dict) else None),
+        "mls_true_status": (attribution.get("trueStatus") if isinstance(attribution, dict) else None),
+        "rental_applications_accepted": prop.get("rentalApplicationsAcceptedType"),
         "address": prop.get("streetAddress") or addr.get("streetAddress"),
         "city": prop.get("city") or addr.get("city"),
         "state": prop.get("state") or addr.get("state"),
