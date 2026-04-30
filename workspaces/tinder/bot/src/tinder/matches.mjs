@@ -121,12 +121,18 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
 
   const { els } = await pickAll(page, sels.thread_messages);
   const messages = [];
-  // CODEX-IMP-15: anchor banner detection on the literal "You Matched with " prefix
-  // (always at start, exact case+space) rather than a broad substring regex that
-  // would drop legitimate replies like "you matched with my mom haha".
-  const isBanner = (text) => /^You Matched with\b/.test(text)
-    || /Achievement unlocked!?$/.test(text)
-    || /^Looking for/.test(text); // Tinder shows this in chat header occasionally
+  // CODEX-IMP-15 + GEMINI-IMP-R2-8: anchor banner detection on the FULL Tinder
+  // welcome banner shape ("You Matched with X" + time-ago + "Achievement unlocked!").
+  // A bare "Looking for ..." prefix is NOT a banner — real users say it in messages.
+  // Empirically the welcome banner concatenates to:
+  //   "You Matched with <Name><N hours/days ago>...Achievement unlocked!"
+  // so we require BOTH the prefix and the achievement marker.
+  const isBanner = (text) => {
+    if (/^You Matched with\b.*Achievement unlocked!?/i.test(text)) return true;
+    // Also drop standalone "Achievement unlocked!" if it ever appears solo.
+    if (/^Achievement unlocked!?$/i.test(text)) return true;
+    return false;
+  };
   for (const el of els) {
     const text = (await el.textContent())?.trim();
     if (!text) continue;

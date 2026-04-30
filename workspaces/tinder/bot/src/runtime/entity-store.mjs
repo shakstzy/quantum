@@ -41,10 +41,16 @@ async function withEntityLock(fn) {
 
 // Atomic file write — temp + rename so a crash mid-write doesn't truncate a
 // well-formed entity file.
+// GEMINI-IMP-R2-6: clean up tmp on rename failure to prevent leak.
 async function atomicWrite(path, content) {
   const tmp = `${path}.tmp.${process.pid}`;
   await writeFile(tmp, content);
-  await rename(tmp, path);
+  try {
+    await rename(tmp, path);
+  } catch (e) {
+    try { const { unlink } = await import("node:fs/promises"); await unlink(tmp); } catch {}
+    throw e;
+  }
 }
 
 function fmYaml(meta) {
@@ -302,10 +308,15 @@ export async function upsertMatch({ matchId, personId, name, source = "tinder", 
         const newSlug = existingSlugs.has(candidate)
           ? await uniqueSlug({ name: ent.meta.first_name || name, source: ent.meta.source || source, city }, existingSlugs)
           : candidate;
-        previous = [...new Set([...previous, ent.slug])];
-        const newPath = resolve(RAW_DIR, `${newSlug}.md`);
-        await rename(ent.path, newPath);
-        slug = newSlug;
+        // GEMINI-BUG-R2-4: only record previous_slug + rename if slug actually changed.
+        // Otherwise we'd add ent.slug to its own previous_slugs (self-reference) and
+        // rename foo.md -> foo.md (no-op but burns an FS op).
+        if (newSlug !== ent.slug) {
+          previous = [...new Set([...previous, ent.slug])];
+          const newPath = resolve(RAW_DIR, `${newSlug}.md`);
+          await rename(ent.path, newPath);
+          slug = newSlug;
+        }
       }
 
       // Decide what to write into ## Profile and ## Profile changes.
@@ -387,11 +398,13 @@ function fmtMessageLine({ direction, text, ts }) {
   return `**${who}** ${t} ${text.replace(/\n/g, " ")}`;
 }
 
-// CODEX-IMP-17: dedupe identity = {direction, text}, NOT the rendered line which
-// includes a timestamp. Without this, a message scraped twice (no real ts from DOM)
-// gets two stamped-now lines that don't dedupe on the next pass.
+// CODEX-IMP-17: dedupe identity = {direction, normalized text}. Without this,
+// a message scraped twice (no real ts from DOM) gets two stamped-now lines.
+// GEMINI-IMP-R2-7: normalize NFC + lowercase + collapse whitespace to be robust
+// to Unicode normalization differences and case oscillation in the DOM.
 function messageIdentity(direction, text) {
-  return `${direction}::${text.replace(/\s+/g, " ").trim()}`;
+  const norm = String(text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+  return `${direction}::${norm}`;
 }
 function existingIdentities(conversationMd) {
   const out = new Set();

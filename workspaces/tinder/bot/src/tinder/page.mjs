@@ -85,12 +85,12 @@ export async function readThreadProfile(page) {
     if (!pane) return empty;
     const out = { ...empty };
 
-    // Name + age from H1
+    // Name + age from H1. Handles "Zoe25" (concatenated) and "Zoe, 25" (comma).
+    // GEMINI-BUG-R2-3: allow optional ", " between name and age.
     const h1 = pane.querySelector("h1");
     if (h1) {
       const t = (h1.textContent || "").trim();
-      // CODEX-MIN-19: Unicode-aware
-      const m = t.match(/^(\p{L}[\p{L}\s'\-]*?)(\d{2,3})$/u);
+      const m = t.match(/^(\p{L}[\p{L}\s'\-]*?)\s*,?\s*(\d{2,3})$/u);
       if (m) { out.name = m[1].trim(); out.age = parseInt(m[2], 10); }
       else out.name = t || null;
     }
