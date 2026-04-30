@@ -240,10 +240,10 @@ def open_chat_db_readonly() -> tuple[sqlite3.Connection, pathlib.Path]:
         shutil.copy2(CHAT_DB, tmp_db)
     except PermissionError:
         sys.exit(
-            "PermissionError reading chat.db. The invoking binary lacks Full Disk Access.\n"
-            "When run via launchd, grant FDA to /bin/bash:\n"
-            "  System Settings -> Privacy & Security -> Full Disk Access -> + -> Cmd+Shift+G -> /bin/bash\n"
-            "Then: launchctl kickstart -k gui/$(id -u)/com.shakstzy.quantum-imessage"
+            "PermissionError reading chat.db. This binary lacks Full Disk Access.\n"
+            "Run from an iTerm session (or via the Claude Code SessionStart hook),\n"
+            "which inherits FDA from iTerm. launchd-spawned runs do NOT inherit FDA\n"
+            "because /bin/bash is SIP-locked and direct python3 grants don't propagate."
         )
     # Also copy WAL/SHM if present so we get the latest committed state.
     for suffix in ("-wal", "-shm"):

@@ -14,13 +14,17 @@ scripts/ingest_all.py    chat.db -> NDJSON sharded by YYYY-MM, plus _review-list
 scripts/pull.sh          wrapper that calls ingest_all.py
 ```
 
-## Setup (one-time)
+## How the trigger works
 
-The launchd job fires `/bin/bash` to run the ingest. macOS TCC blocks any launchd-spawned binary from reading `chat.db` unless that binary has Full Disk Access. Grant it once:
+**This workspace does NOT use launchd.** chat.db is TCC-protected and macOS silently ignores FDA grants on the system binaries launchd actually invokes (`/bin/bash` is SIP-locked; even Homebrew python3 grants don't propagate cleanly through a launchd-spawned tree). Tried both, both fail with PermissionError.
 
-1. System Settings -> Privacy & Security -> Full Disk Access
-2. Click + -> Cmd+Shift+G -> type `/bin/bash` -> Open -> toggle on
-3. Verify: `launchctl kickstart -k gui/$(id -u)/com.shakstzy.quantum-imessage` then `tail -20 ~/Library/Logs/quantum-imessage.stderr.log`. Exit 0 = green. See `raw/learnings/2026-04-28-launchd-needs-fda-for-chat-db.md` for why.
+What works: the `SessionStart` Claude Code hook in `.claude/settings.json` fires `scripts/hooks/imessage-ingest.sh` every time Adithya opens a Claude Code session in QUANTUM. Claude Code is spawned from iTerm, iTerm has FDA, and FDA propagates through the session's process tree, so the hook reads chat.db without any extra grant.
+
+- Incremental no-op = 0.07s, runs in background, never blocks session start.
+- Lockfile at `/tmp/quantum-imessage-ingest.lock` prevents concurrent Claude windows from racing.
+- Hook log: `~/Library/Logs/quantum-imessage.hook.log`.
+- Cadence is "whenever Claude Code opens." Adithya opens it many times a day; the watermark catches up regardless of how often. No 12h timer needed.
+- Manual ad-hoc: `bash workspaces/imessage/scripts/pull.sh` from any iTerm session.
 
 ## Conventions
 
