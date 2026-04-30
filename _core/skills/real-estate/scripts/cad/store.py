@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 import duckdb
+import pyarrow as pa
 
 from .schema import (
     IMPROVEMENT_DETAIL_FIELDS,
@@ -24,6 +25,22 @@ from .schema import (
     PROPERTY_FIELDS,
     parse_line,
 )
+
+
+def _bulk_insert(con: duckdb.DuckDBPyConnection, table: str, columns: list[str],
+                 col_data: dict[str, list]) -> int:
+    """Fast bulk insert via pyarrow registration. Returns rows inserted."""
+    if not col_data or not col_data[columns[0]]:
+        return 0
+    tbl = pa.Table.from_pydict(col_data)
+    con.register("__bulk_in", tbl)
+    try:
+        con.execute(
+            f"INSERT INTO {table} ({', '.join(columns)}) SELECT {', '.join(columns)} FROM __bulk_in"
+        )
+    finally:
+        con.unregister("__bulk_in")
+    return len(col_data[columns[0]])
 
 
 DEFAULT_DB_PATH = Path.home() / ".quantum" / "real-estate" / "cad" / "cad.duckdb"
