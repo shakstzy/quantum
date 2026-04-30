@@ -98,39 +98,36 @@ export async function readThreadProfile(page) {
     // Photos count
     out.photos_count = pane.querySelectorAll("img[src*='gotinder.com']").length;
 
-    // CODEX-IMP-8+9: build a section model by walking H2s. Each H2 lives inside a
-    // wrapper div; the section CONTENT is the H2's wrapper's container's other
-    // children (typically the H2's grandparent). Concretely: H2 is in
-    // <div class="D(f) Ai(c) Mb(...)"> (the heading row), and the section's value
-    // children are siblings of THAT row inside the section's outer container.
+    // GEMINI-CRIT-R2-1: walk up only as far as the next-H2 boundary. Old approach
+    // (walk until text > heading+2) overshot for short content (e.g. bio="Hi"),
+    // climbing all the way to the pane root and capturing every section's text.
+    // New approach: the section container is the highest ancestor that does NOT
+    // contain ANY OTHER H2. This gives us the H2's exclusive subtree.
     const h2List = [...pane.querySelectorAll("h2")];
-    // For each H2, find its "section container" = the nearest ancestor that ALSO
-    // contains the value content. We walk up until the ancestor's text length
-    // exceeds the heading's text length by a meaningful margin.
     function sectionContainerFor(h2) {
-      const headingText = (h2.textContent || "").trim();
-      let cur = h2.parentElement;
-      for (let i = 0; i < 6 && cur; i++) {
-        const t = (cur.textContent || "").trim();
-        // The section container has more text than just the heading.
-        if (t.length > headingText.length + 2) return cur;
-        cur = cur.parentElement;
+      let cur = h2;
+      let last = h2.parentElement;
+      while (cur.parentElement) {
+        const parent = cur.parentElement;
+        if (parent === pane) break;
+        const otherH2s = [...parent.querySelectorAll("h2")].filter(o => o !== h2);
+        if (otherH2s.length > 0) {
+          // parent contains another section's heading — stop, return previous
+          return last;
+        }
+        last = parent;
+        cur = parent;
       }
-      return h2.parentElement || null;
+      return last;
     }
     function sectionContentText(h2) {
       const container = sectionContainerFor(h2);
       if (!container) return null;
-      // Clone container, remove the heading, return remaining text trimmed.
       const clone = container.cloneNode(true);
-      // Remove ALL h2/h3 inside (heading + sub-headings)
-      // For Basics/Lifestyle we don't want this — those are extracted differently.
-      // For About me / Looking for / Dream job: container has h2 + value div only.
       const headings = clone.querySelectorAll("h2, h3");
       for (const h of headings) h.remove();
       return (clone.textContent || "").trim().replace(/\s+/g, " ") || null;
     }
-    // Helpers for distance (lives inside Essentials section)
     function distanceFromSection(h2) {
       const container = sectionContainerFor(h2);
       if (!container) return null;

@@ -23,12 +23,13 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // C3 GUARD: verify the URL settled on the right matchId. Tinder's SPA can silently
-  // redirect on unmatched/expired matches; without this check we'd type the message
-  // into a different thread.
+  // C3 GUARD + GEMINI-CRIT-R2-2: verify URL settled. Pathname-segment match
+  // (not endsWith) to avoid prefix collisions and tolerate query params.
   const settledUrl = page.url();
-  if (!settledUrl.endsWith(matchId)) {
-    throw new Error(`thread_redirect: expected matchId=${matchId}, ended on url=${settledUrl}. Aborting send to prevent wrong-recipient.`);
+  let settledLast = "";
+  try { settledLast = new URL(settledUrl).pathname.split("/").pop() || ""; } catch {}
+  if (settledLast !== matchId) {
+    throw new Error(`thread_redirect: expected matchId=${matchId}, last_segment=${settledLast}, url=${settledUrl}. Aborting send to prevent wrong-recipient.`);
   }
 
   await idlePause({ min: 2200, max: 6500 });
@@ -53,10 +54,11 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
 
   await checkAndIncrement("message");
 
-  // C3 GUARD: re-check URL right before pressing send. If we somehow drifted to a
-  // different thread between typing and clicking (very rare but possible), abort.
+  // C3 GUARD + GEMINI-CRIT-R2-2: re-check URL right before send.
   const finalUrl = page.url();
-  if (!finalUrl.endsWith(matchId)) {
+  let finalLast = "";
+  try { finalLast = new URL(finalUrl).pathname.split("/").pop() || ""; } catch {}
+  if (finalLast !== matchId) {
     throw new Error(`thread_drift: url changed to ${finalUrl} during compose. Not sending.`);
   }
 

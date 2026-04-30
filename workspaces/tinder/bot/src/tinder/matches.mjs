@@ -68,12 +68,15 @@ export async function scrapeThread(page, matchId, { name = null, profile = null 
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // CODEX-CRIT-1: assert URL settled on the right matchId before reading anything.
-  // Tinder's SPA can silently redirect on unmatched/expired matches; without this
-  // we'd attribute the previous match's profile + messages to the new matchId.
+  // CODEX-CRIT-1 + GEMINI-CRIT-R2-2: assert URL settled on the right matchId.
+  // Use pathname-segment match (split('/').pop()) instead of .endsWith() so that
+  // (a) prefix collisions can't pass (matchId="abc" wouldn't match ".../xyzabc")
+  // and (b) trailing query params or fragments don't false-fail.
   const settledUrl = page.url();
-  if (!settledUrl.endsWith(matchId)) {
-    console.error(`scrapeThread: thread_redirect for ${matchId}, ended on ${settledUrl}; skipping`);
+  let lastSegment = "";
+  try { lastSegment = new URL(settledUrl).pathname.split("/").pop() || ""; } catch { lastSegment = ""; }
+  if (lastSegment !== matchId) {
+    console.error(`scrapeThread: thread_redirect for ${matchId}, last_segment=${lastSegment}, url=${settledUrl}; skipping`);
     return { matchId, slug: null, messages_total: 0, messages_new: 0, url_redirected: true };
   }
 
