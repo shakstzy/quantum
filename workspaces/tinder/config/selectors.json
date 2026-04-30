@@ -89,5 +89,17 @@
     "selector": "button:has-text('Log in'), [data-testid='login']",
     "alt": [],
     "last_verified": null
+  },
+  "thread_profile_pane": {
+    "_note": "Profile pane in the thread page. Contains H1 (name+age concat, e.g. 'Zoe25'), distance text, About me, Looking for, Basics (H3 k/v), Lifestyle (H3 k/v), Interests, photos.",
+    "selector": "[class*='profileContent']",
+    "alt": [],
+    "last_verified": "2026-04-30"
+  },
+  "thread_profile_name_age": {
+    "_note": "H1 inside the profile pane. textContent = '<Name><age>' concatenated, e.g. 'Zoe25'. Parse via regex.",
+    "selector": "[class*='profileContent'] h1",
+    "alt": [],
+    "last_verified": "2026-04-30"
   }
 }
