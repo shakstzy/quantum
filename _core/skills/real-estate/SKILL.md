@@ -277,6 +277,26 @@ Output:
 }
 ```
 
+## Batch / parallel ingest
+
+For multi-address pulls (10-100+ addresses), `re batch <verb> <addresses_file>` runs them in parallel with safe rate-limiting:
+
+```bash
+echo -e "6326 River Place Blvd Austin TX 78732\n5509 Casco Walk Austin TX 78724" > /tmp/addrs.txt
+./re batch lookup /tmp/addrs.txt > out.ndjson
+./re batch rent-estimate /tmp/addrs.txt --radius-miles 1.5 > rents.ndjson
+```
+
+Output is NDJSON (one JSON row per address) so you can `jq` / pipe through.
+
+How it stays safe:
+- **Cross-site parallel per address is free.** Redfin and Zillow are separate WAFs / IPs; hitting both for one address concurrently halves wall time at zero risk.
+- **Per-site cap: 2 concurrent + 1.5-2s minimum gap.** Token-bucket limiter keeps the per-domain request shape under the burst-detection threshold both WAFs use.
+- **Top-level concurrency cap (default 8).** Prevents task explosion on huge address lists.
+- **Honest per-row failure.** A Zillow PX block on row 47 doesn't kill rows 48-100; the row's `error` field surfaces it.
+
+For TRUE scale (>50 addresses without IP rotation): set `REAL_ESTATE_PROXY=socks5://...` to route Zillow through a residential proxy. Without proxies, every dozen addresses on the same IP raises the chance of a softlock; with cheap residential ($5/GB pay-as-go like IPRoyal, or your own WireGuard exit on a $5/mo VPS), that ceiling lifts.
+
 ## Cross-source dedupe
 
 The `dedupe` module merges Redfin + Zillow result sets, keying on `zpid` /
