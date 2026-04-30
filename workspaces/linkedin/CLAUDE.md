@@ -67,7 +67,7 @@ The persistent profile lives at `workspaces/linkedin/.profile/`. After login suc
 Layered. Any single one can short-circuit a run.
 
 1. **Halt-file check** at every entrypoint. `~/.quantum/linkedin/.halt` exists -> exit 2.
-2. **Volume caps** in `config/caps.json`. 10 connects/day, 50/wk (per Gemini-Flash 2026-04-30 adversarial review fix #3 — community-tested values dropped vs 2024). 5 cold DMs/day, 30 DMs to existing connections/day, 100 profile fetches/day, 30 searches/day. Daily counters survive process restarts.
+2. **Volume caps** in `config/caps.json`. **Bumped 2026-04-30 (Adithya has Premium):** 30 connects/day, 100/wk (Premium Career/Business hard ceiling; Sales Nav = 200/wk if confirmed). Cold-DM cap removed (200/day cosmetic ceiling); 50 DMs/day to existing connections; 200 profile fetches/day; 30 searches/day. Daily counters survive process restarts. Earlier 10/day, 50/wk values were conservative-by-default for a free account.
 3. **Active-hours guard.** 09:00-19:00 CST, weekdays only by default. Edit `config/caps.json` to change.
 4. **Pending-invite ceiling.** Before any `send_connect`, enforce <400 outstanding sent invitations. If above, force-withdraw the oldest 25 before adding more. The check visits `/mynetwork/invitation-manager/sent/` and counts rows with a Withdraw control. Per Gemini-Flash fix #4: the ban hammer drops at the ratio level, not the volume level.
 5. **Rate-limit detection** before AND after every navigation. Checks: URL on `/checkpoint/`, `/authwall/`; body-text rate-limit phrases on error-shaped pages (no `<main>`, body < 2KB).
