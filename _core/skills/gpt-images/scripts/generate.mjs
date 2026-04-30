@@ -50,19 +50,67 @@ export async function runGenerate({ prompt, force = false, debug = false, outDir
 
     const fullPrompt = `Please generate an image: ${prompt}`;
     await composer.click();
-    // Use type with small delay so the React-controlled contenteditable updates.
     await ctx.page.keyboard.type(fullPrompt, { delay: 8 });
     if (debug) process.stderr.write(`[gpt-images] typed prompt (${fullPrompt.length} chars)\n`);
 
-    // Send.
-    await ctx.page.keyboard.press('Enter');
+    // Wait for the send button to appear (it only renders once the composer
+    // has content). ChatGPT's send-button selectors have shifted; try several.
+    // If none resolves within 5s, fall back to Cmd+Enter (ProseMirror submit
+    // shortcut), then plain Enter as a last resort.
+    const sendSelectors = [
+      '[data-testid="send-button"]',
+      '[data-testid="composer-send-button"]',
+      'button[aria-label*="Send" i]',
+      'button[data-testid*="send" i]',
+      'main form button[type="submit"]'
+    ];
+    const sendDeadline = Date.now() + 5000;
+    let clickedSend = false;
+    while (Date.now() < sendDeadline && !clickedSend) {
+      for (const sel of sendSelectors) {
+        const btn = await ctx.page.$(sel);
+        if (btn) {
+          const visible = await btn.isVisible().catch(() => false);
+          const enabled = await btn.isEnabled().catch(() => false);
+          if (visible && enabled) {
+            try {
+              await btn.click({ timeout: 2000 });
+              if (debug) process.stderr.write(`[gpt-images] clicked send via ${sel}\n`);
+              clickedSend = true;
+              break;
+            } catch (_) {}
+          }
+        }
+      }
+      if (!clickedSend) await new Promise(r => setTimeout(r, 250));
+    }
+    if (!clickedSend) {
+      if (debug) process.stderr.write('[gpt-images] no send button found, falling back to Cmd+Enter\n');
+      await ctx.page.keyboard.press('Meta+Enter').catch(() => {});
+      await new Promise(r => setTimeout(r, 200));
+      await ctx.page.keyboard.press('Enter').catch(() => {});
+    }
 
     // Poll for image in newest assistant message.
     const result = await waitForGeneratedImage(ctx.page, { timeoutMs, debug });
 
     if (result.kind !== 'ready') {
       const summary = JSON.stringify(result).slice(0, 500);
-      throw new Error(`No image produced within ${Math.round(timeoutMs/1000)}s. Last poll: ${summary}`);
+      // Capture failure-state diagnostics next to the run dir.
+      try {
+        await ctx.page.screenshot({ path: join(runDir, 'failure.png'), fullPage: true });
+        const dom = await ctx.page.evaluate(() => ({
+          url: location.href,
+          title: document.title,
+          bodyText: (document.body?.innerText || '').slice(0, 4000),
+          assistantTurns: document.querySelectorAll('[data-message-author-role="assistant"]').length,
+          userTurns: document.querySelectorAll('[data-message-author-role="user"]').length,
+          articles: document.querySelectorAll('article[data-testid^="conversation-turn"]').length,
+          allMessages: document.querySelectorAll('[data-message-id]').length
+        }));
+        await writeFile(join(runDir, 'failure-dom.json'), JSON.stringify(dom, null, 2));
+      } catch (_) {}
+      throw new Error(`No image produced within ${Math.round(timeoutMs/1000)}s. Last poll: ${summary}. Diag in ${runDir}/failure.png + failure-dom.json`);
     }
 
     if (debug) process.stderr.write(`[gpt-images] image ready: ${result.src}\n`);
@@ -101,9 +149,18 @@ async function waitForGeneratedImage(page, { timeoutMs, debug }) {
   let last = { kind: 'init' };
   while (Date.now() < deadline) {
     const r = await page.evaluate((sel) => {
-      const msgs = document.querySelectorAll(sel);
+      // Try the canonical selector first, fall back to article-based selector
+      // that survives across ChatGPT UI revisions.
+      let msgs = document.querySelectorAll(sel);
+      if (!msgs.length) msgs = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+      if (!msgs.length) msgs = document.querySelectorAll('[data-message-id]');
       const lastMsg = msgs[msgs.length - 1];
-      if (!lastMsg) return { kind: 'no-message' };
+      if (!lastMsg) {
+        // Surface user-turn count for diagnostics: if there's no assistant
+        // message AND no user message, the submit didn't land.
+        const userTurns = document.querySelectorAll('[data-message-author-role="user"]').length;
+        return { kind: 'no-message', userTurns };
+      }
       // Look for any img inside the assistant turn that points at a real URL.
       const imgs = Array.from(lastMsg.querySelectorAll('img'));
       // ChatGPT renders the avatar img + the generated img; pick the one with
