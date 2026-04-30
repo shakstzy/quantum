@@ -1,5 +1,5 @@
 import { selectors } from "../runtime/detection.mjs";
-import { gotoMatches, openThread } from "./page.mjs";
+import { gotoMatches, openThread, readThreadProfile } from "./page.mjs";
 import { humanScroll, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { logSession } from "../runtime/logger.mjs";
 import { upsertMatch, appendMessages, findEntityByMatchId } from "../runtime/entity-store.mjs";
@@ -62,7 +62,7 @@ export async function upsertMatchProfile({ matchId, personId, name, profile, pho
   return await upsertMatch({ matchId, personId, name, source: "tinder", profile, phone });
 }
 
-export async function scrapeThread(page, matchId, { name = null, profile = {} } = {}) {
+export async function scrapeThread(page, matchId, { name = null, profile = null } = {}) {
   const sels = await selectors();
   const caps = await loadCaps();
   await openThread(page, matchId);
@@ -75,13 +75,25 @@ export async function scrapeThread(page, matchId, { name = null, profile = {} } 
     return { matchId, slug: null, messages_total: 0, messages_new: 0 };
   }
 
-  const entityResult = await upsertMatch({ matchId, personId: null, name, source: "tinder", profile });
+  // Capture the profile pane (bio, age, distance, interests, basics, lifestyle).
+  // If the caller already passed a profile (e.g. from card-stack swipe) prefer that.
+  let scraped = profile;
+  if (!scraped) {
+    try { scraped = await readThreadProfile(page); }
+    catch (e) { console.error(`readThreadProfile failed for ${matchId}: ${e.message}`); scraped = {}; }
+  }
+
+  const entityResult = await upsertMatch({ matchId, personId: null, name, source: "tinder", profile: scraped || {} });
 
   const { els } = await pickAll(page, sels.thread_messages);
   const messages = [];
+  // Filter out Tinder's "You Matched with X — Achievement unlocked!" banner that
+  // surfaces in [role='log'] alongside real chat messages on freshly-matched threads.
+  const BANNER_RE = /(you matched with|achievement unlocked|tinder gold|gold subscription|message blocked|profile blocked)/i;
   for (const el of els) {
     const text = (await el.textContent())?.trim();
     if (!text) continue;
+    if (BANNER_RE.test(text)) continue;
     const cls = await el.getAttribute("class") || "";
     const direction = /out|sent|from-me|self/i.test(cls) ? "out" : "in";
     messages.push({ direction, text, ts: null });
@@ -94,5 +106,11 @@ export async function scrapeThread(page, matchId, { name = null, profile = {} } 
   }
 
   await idlePause({ min: caps.scrape.between_thread_opens_ms[0], max: caps.scrape.between_thread_opens_ms[1] });
-  return { matchId, slug: entityResult?.slug || null, messages_total: messages.length, messages_new: added };
+  return {
+    matchId,
+    slug: entityResult?.slug || null,
+    messages_total: messages.length,
+    messages_new: added,
+    profile_diff: entityResult?.profile_diff || null,
+  };
 }

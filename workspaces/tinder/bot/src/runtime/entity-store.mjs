@@ -68,23 +68,31 @@ function parseFrontmatter(text) {
 }
 
 function splitSections(body) {
-  const sections = { profile: "", conversation: "", outbound: "" };
-  const re = /##\s+(Profile|Conversation|Outbound log)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
+  const sections = { profile: "", conversation: "", outbound: "", profile_changes: "" };
+  const re = /##\s+(Profile changes|Profile|Conversation|Outbound log)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
   let m;
   while ((m = re.exec(body)) !== null) {
-    const name = m[1].toLowerCase().replace(/\s+log$/, "");
-    sections[name === "outbound" ? "outbound" : name] = m[2].trim();
+    const heading = m[1].toLowerCase();
+    let key;
+    if (heading === "profile changes") key = "profile_changes";
+    else if (heading === "outbound log") key = "outbound";
+    else key = heading; // "profile" | "conversation"
+    sections[key] = m[2].trim();
   }
   return sections;
 }
 
-function renderEntity({ meta, profile, conversation, outbound }) {
+function renderEntity({ meta, profile, conversation, outbound, profile_changes = "" }) {
   return [
     fmYaml(meta),
     "",
     "## Profile",
     "",
     profile.trim() || "(no profile yet)",
+    "",
+    "## Profile changes",
+    "",
+    profile_changes.trim() || "(none yet)",
     "",
     "## Conversation",
     "",
