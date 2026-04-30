@@ -35,6 +35,61 @@ Do NOT use for: single-message ops (use `gog`), sending mail (use `gog gmail mes
 
 Same as gog skill: any batch >5 items needs the gate. The tool also enforces `--force` for `delete-permanent` (irrecoverable; not just trash).
 
+## Hardcoded SAFE-SENDER allowlist (NEVER trash these)
+
+Bulk-trash queries MUST exclude these sender patterns. Verified against `safe_senders.txt`. Adding to this list requires editing the file directly.
+
+**Travel and bookings** -- never trash these:
+- `southwest.com`, `iflyswa.com`, `ifly.southwest.com`
+- `airbnb.com`
+- `aa.com`, `americanairlines.com`
+- `delta.com`
+- `united.com`
+- `jetblue.com`, `alaskaair.com`, `spirit.com`, `frontier.com`
+- `expedia.com`, `kayak.com`, `booking.com`, `hotels.com`
+- `marriott.com`, `hilton.com`, `hyatt.com`
+- `lyft.com`, `lyftmail.com`, `uber.com`
+- `amtrak.com`, `tripit.com`
+
+**Financial / brokerage** -- never trash transactional, only marketing:
+- `stripe.com`, `paypal.com`, `venmo.com`, `wise.com`, `mercury.com`, `brex.com`
+- `chase.com`, `bofa.com`, `bankofamerica.com` (transactional only; promo subdomains may be killed)
+- `revolut.com`, `sofi.com`, `fidelity.com`
+- `coinbase.com`, `kraken.com`, `binance.com` (transactional only)
+- Real estate: `cmgfi.com` (Reed Hazard), Zillow Rental Manager, Redfin saved searches he opted into
+
+**Identity / account / security**:
+- `accounts.google.com` (always pass `Critical` through)
+- `apple.com` (Find My, Apple ID, iCloud)
+- `github.com`, `gitlab.com`
+- `docusign.com`, `hellosign.com`, `dropbox.com`
+
+**Recruiter cold pitches**:
+- Any sender at a `*.agency` domain (recruiters use these heavily)
+- Any sender that is a single individual at a personal-style address (`firstname@company.com`) -- these are humans, NOT bulk mailers. Use `from:firstname.lastname@company.com` only when caller explicitly names them.
+
+**Family**:
+- `ambalakr@gmail.com` (mom -- Ambal Balakrishnan)
+- `ambal_d2d@yahoo.com` (mom alt)
+- `creinv.kumar@gmail.com`, `nagarak@gmail.com` (Kumar Nagarajan)
+- Any `@gmail.com`, `@yahoo.com`, `@outlook.com`, `@hotmail.com`, `@icloud.com`, `@me.com` sender (default to KEEP, never bulk-trash)
+
+## Filter-construction rules (avoid past mistakes)
+
+- **Never use bare `subject:Canceled` / `subject:Accepted` / `subject:Invitation`**: Gmail's `subject:` matches the word anywhere in subject, so `subject:Canceled` catches "your reservation has been canceled" too. Use exact phrase quoting OR pair with sender filter (e.g. `from:calendar-notification@google.com`).
+- **Use specific senders for "old calendar" sweeps**: prefer `from:calendar-notification@google.com OR from:meet@google.com` over subject patterns.
+- **Never use `from:agency` / `from:engage` / single-word from filters that match too broadly** -- always include a domain anchor (`from:engage.X.com`).
+- **Never use `from:newsletter` alone** without a co-anchor; matches anywhere "newsletter" appears in the from field including legit personal emails.
+- **Per-domain marketing subdomains are safe**: `from:em1.X.com`, `from:email.X.com`, `from:marketing.X.com` -- these are infrastructure subdomains, never used for transactional.
+
+## Recovery procedure
+
+If a false-positive trash is reported:
+1. Run `python bulk.py --action untrash --input <ids.txt>` to recover.
+2. Identify which kill query caught it (grep the runs/ directory).
+3. Add the sender pattern to `safe_senders.txt`.
+4. Tighten or delete the offending Gmail filter (`gog gmail settings filters list` then `delete <id>`).
+
 ## Auth model
 
 - **Separate OAuth client from gog.** Created in Adithya's `claude` GCP project, named `quantum-gmail-bulk`, application type Desktop app.

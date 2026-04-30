@@ -1,0 +1,71 @@
+# DO NOT TRASH these senders. Patterns are matched as Gmail `from:` substrings.
+# Edit this file directly to add/remove. Bulk operations check this file before trashing.
+# One pattern per line. Comments begin with #.
+
+# --- TRAVEL ---
+southwest.com
+iflyswa.com
+ifly.southwest.com
+airbnb.com
+aa.com
+americanairlines.com
+delta.com
+united.com
+jetblue.com
+alaskaair.com
+spirit.com
+frontier.com
+expedia.com
+kayak.com
+booking.com
+hotels.com
+marriott.com
+hilton.com
+hyatt.com
+lyft.com
+lyftmail.com
+uber.com
+amtrak.com
+tripit.com
+
+# --- FINANCIAL / BANKING (transactional) ---
+stripe.com
+paypal.com
+venmo.com
+wise.com
+mercury.com
+brex.com
+chase.com
+bofa.com
+revolut.com
+sofi.com
+fidelity.com
+robinhood.com
+no-reply@robinhood.com
+noreply@robinhood.com
+coinbase.com
+kraken.com
+
+# --- ACCOUNT / IDENTITY / SECURITY ---
+accounts.google.com
+apple.com
+github.com
+gitlab.com
+docusign.com
+hellosign.com
+dropbox.com
+
+# --- REAL ESTATE / HOUSING ---
+cmgfi.com
+rhazard@cmgfi.com
+comet.zillow.com
+
+# --- FAMILY (do not auto-trash) ---
+ambalakr@gmail.com
+ambal_d2d@yahoo.com
+creinv.kumar@gmail.com
+nagarak@gmail.com
+
+# --- RECRUITER PATTERNS (humans cold-pitching are NOT bulk; default keep) ---
+.agency
+amya.agency
