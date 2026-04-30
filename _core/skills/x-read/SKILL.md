@@ -53,8 +53,8 @@ If any required input is missing, stop and ask.
 | Pidfile | `~/.quantum/chrome-profiles/x/.skill.pid` |
 | Breaker file | `~/.quantum/chrome-profiles/x/.breaker.json` |
 | Breaker policy | Single strike (any auth challenge -> 24h halt) |
-| Auth probe | Captured `Viewer` GraphQL op replayed via `pageApi` |
-| Write verbs | None. POST/PUT/PATCH/DELETE rejected at helper layer. |
+| Auth probe | Captured `Viewer` GraphQL response body from organic page traffic |
+| Write verbs | None. The replay helper (`pageApi`, kept for v2) hard-rejects non-GET methods, ops outside an allowlist, and non-X URLs. v1 verbs do not call replay at all — they parse the X client's organic response bodies. |
 
 Output destination: stdout JSON. The skill does NOT write to `raw/` itself — the caller decides whether a fetched thread is signal (promote to `raw/x/`) or bulk (keep ephemeral). This matches the higgsfield pattern: skills emit to stdout/skill-output, workspaces own `raw/` deposits.
 

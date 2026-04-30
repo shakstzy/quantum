@@ -120,6 +120,16 @@ async function openSessionAndCapture({ navUrl, expectedOp }) {
     await ctx.close();
     die(`[x-read] ${expectedOp} returned ${resp.status}: ${typeof resp.body === 'string' ? resp.body.slice(0, 400) : JSON.stringify(resp.body).slice(0, 400)}`);
   }
+  // Round 2 finding: parseError can mask body-read failures as null-body
+  // success. Treat as capture failure rather than parser failure downstream.
+  if (resp.parseError) {
+    await ctx.close();
+    die(`[x-read] ${expectedOp} response body capture failed: ${resp.parseError}`);
+  }
+  if (!resp.body || typeof resp.body !== 'object') {
+    await ctx.close();
+    die(`[x-read] ${expectedOp} body was not a JSON object (got ${typeof resp.body}). Likely a captcha interstitial or transient error.`);
+  }
 
   return { ctx, resp };
 }
@@ -130,16 +140,31 @@ async function whoami() {
     expectedOp: 'Viewer'
   });
   try {
+    // Viewer's user_results.result is User-shaped, not Tweet-shaped, so we do
+    // NOT unwrapVisibilityResult here (round 2 finding).
     const viewer = resp.body?.data?.viewer || resp.body?.data?.viewer_v2 || resp.body?.data;
     const userResult = viewer?.user_results?.result || viewer?.user_result?.result;
-    const tweet = unwrapVisibilityResult(userResult);
-    const legacy = tweet?.legacy || {};
+    const legacy = userResult?.legacy || {};
+    const id = userResult?.rest_id || null;
+    const handle = legacy.screen_name || null;
+    if (!id || !handle) {
+      const out = {
+        ok: false,
+        error: 'Viewer payload did not contain rest_id + legacy.screen_name. X response shape may have changed; check raw_keys to debug.',
+        raw_keys: Object.keys(resp.body?.data || {}),
+        viewer_keys: Object.keys(viewer || {}),
+        user_result_keys: Object.keys(userResult || {})
+      };
+      console.log(JSON.stringify(out, null, 2));
+      process.exitCode = 5;
+      return;
+    }
     const out = {
       ok: true,
-      id: tweet?.rest_id || null,
-      handle: legacy.screen_name || null,
+      id,
+      handle,
       name: legacy.name || null,
-      verified: !!(tweet?.is_blue_verified ?? legacy.verified),
+      verified: !!(userResult?.is_blue_verified ?? legacy.verified),
       followers: legacy.followers_count ?? null,
       following: legacy.friends_count ?? null
     };
@@ -195,14 +220,22 @@ function parseTweetDetail(body, focalId) {
       seen.add(key);
       tweets.push(t);
     }
-    const root = tweets.find(t => t.id === focalId) || null;
+    let root = tweets.find(t => t.id === focalId) || null;
+    // Round 2 finding: if the focal tweet is unavailable/tombstoned and X
+    // returned no rest_id on the tombstone result, the parser would otherwise
+    // bail with "not found" instead of surfacing the unavailable reason.
+    // Look for an unidentified tombstone among tweets and adopt it as root.
     if (!root) {
-      // Tombstone-only or unavailable: surface raw shape for debugging.
-      return {
-        ok: false,
-        error: `focal tweet ${focalId} not found in TweetDetail response`,
-        captured_ids: tweets.map(t => t.id).filter(Boolean)
-      };
+      const tombstone = tweets.find(t => t.tombstone && (t.id === null || t.id === focalId));
+      if (tombstone) {
+        root = { ...tombstone, id: focalId };
+      } else {
+        return {
+          ok: false,
+          error: `focal tweet ${focalId} not found in TweetDetail response (likely deleted, suspended, withheld, or behind a sensitive-media interstitial)`,
+          captured_ids: tweets.map(t => t.id).filter(Boolean)
+        };
+      }
     }
     const replies = tweets.filter(t => t.id !== root.id);
     return {
@@ -314,14 +347,21 @@ function normalizeTweet(rawResult) {
 }
 
 function extractMedia(legacy, noteEntities) {
+  // Note tweets carry media under the note's entity set; legacy media may
+  // be empty for long-form posts. Round 2 finding IMP-10: include note
+  // media as a fallback so long-form posts don't lose their attachments.
   const fromLegacy = (legacy?.entities?.media || []).map(m => ({
     type: m.type,
     url: m.media_url_https,
     expanded: m.expanded_url
   }));
-  // Note tweets sometimes carry their own media block, but legacy media is
-  // usually the canonical source. If both exist, prefer legacy.
-  return fromLegacy;
+  if (fromLegacy.length) return fromLegacy;
+  const fromNote = (noteEntities?.media || []).map(m => ({
+    type: m.type,
+    url: m.media_url_https,
+    expanded: m.expanded_url
+  }));
+  return fromNote;
 }
 
 function extractUrls(legacy, noteEntities) {

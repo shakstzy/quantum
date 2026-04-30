@@ -44,6 +44,46 @@ class TestApproxMatch(unittest.TestCase):
         self.assertFalse(dedupe._approx_match(a, b))
 
 
+class TestNormalizeAddress(unittest.TestCase):
+    def test_lowercases(self):
+        self.assertEqual(dedupe.normalize_address("123 MAIN ST"), "123 main st")
+
+    def test_canonicalizes_street_type(self):
+        self.assertEqual(dedupe.normalize_address("123 Main Avenue"), "123 main ave")
+        self.assertEqual(dedupe.normalize_address("100 Saint Charles"), "100 st charles")
+
+    def test_canonicalizes_direction(self):
+        self.assertEqual(dedupe.normalize_address("100 North Main St"), "100 n main st")
+
+    def test_strips_unit(self):
+        self.assertEqual(dedupe.normalize_address("123 Main St Unit 4B"), "123 main st")
+        self.assertEqual(dedupe.normalize_address("123 Main St Apt 12"), "123 main st")
+        self.assertEqual(dedupe.normalize_address("123 Main St #5"), "123 main st")
+
+    def test_strips_punctuation(self):
+        self.assertEqual(dedupe.normalize_address("123 Main St., Apt. 4"), "123 main st")
+
+
+class TestApproxMatchAddrFallback(unittest.TestCase):
+    def test_same_house_one_missing_coords(self):
+        # Zillow with zpid only (no lat/lng) vs Redfin with property_id + lat/lng.
+        z = {"source": "zillow", "zpid": "1", "address": "123 Main St",
+             "zip": "78704", "beds": 3, "sqft": 1500}
+        r = {"source": "redfin", "property_id": 1, "address": "123 MAIN STREET",
+             "zip": "78704", "beds": 3, "sqft": 1510, "lat": 30.0, "lng": -97.7}
+        self.assertTrue(dedupe._approx_match(z, r))
+
+    def test_different_zip_rejects(self):
+        z = {"source": "zillow", "address": "123 Main St", "zip": "78704", "beds": 3, "sqft": 1500}
+        r = {"source": "redfin", "address": "123 Main St", "zip": "78705", "beds": 3, "sqft": 1500}
+        self.assertFalse(dedupe._approx_match(z, r))
+
+    def test_unit_normalized_match(self):
+        z = {"source": "zillow", "address": "123 Main St Apt 4", "zip": "78704", "beds": 2, "sqft": 1000}
+        r = {"source": "redfin", "address": "123 MAIN STREET #4", "zip": "78704", "beds": 2, "sqft": 1000}
+        self.assertTrue(dedupe._approx_match(z, r))
+
+
 class TestMerge(unittest.TestCase):
     def test_merge_deduplicates_same_house(self):
         redfin = [{"source": "redfin", "property_id": 1, "lat": 30.0, "lng": -97.7,

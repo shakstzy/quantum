@@ -50,7 +50,8 @@ _DIRECTION_NORMS = {
     "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
 }
 _STRIP_UNIT_RE = re.compile(
-    r"\b(unit|apt|apartment|ste|suite|#)\s*\S+\b", re.IGNORECASE
+    r"(?:\b(?:unit|apt|apartment|ste|suite)\.?\b|#)\s*\S+",
+    re.IGNORECASE,
 )
 
 
@@ -66,8 +67,9 @@ def normalize_address(addr: str | None) -> str:
     if not addr:
         return ""
     s = addr.lower()
-    s = _STRIP_UNIT_RE.sub("", s)
+    # Punctuation to spaces FIRST so "Apt. 4" -> "apt 4" and "#3" stays.
     s = re.sub(r"[.,]", " ", s)
+    s = _STRIP_UNIT_RE.sub("", s)
     tokens = []
     for t in s.split():
         t = t.strip()

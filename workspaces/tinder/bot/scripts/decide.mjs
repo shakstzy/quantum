@@ -38,16 +38,52 @@ function parseMessages(conversation) {
 
 function profileFromEntity(ent) {
   const lines = (ent.profile || "").split("\n");
-  const out = { name: ent.meta.first_name };
+  const out = { name: ent.meta.first_name, basics: {}, lifestyle: {}, interests: [] };
   for (const line of lines) {
-    const m = line.match(/^- (\w+):\s*(.*)$/);
+    const m = line.match(/^- ([\w.]+):\s*(.*)$/);
     if (!m) continue;
     const [, k, v] = m;
     if (k === "age" || k === "distance_mi" || k === "photos_count") out[k] = parseInt(v, 10);
     else if (k === "schools" || k === "jobs" || k === "interests") out[k] = v.split(",").map(s => s.trim()).filter(Boolean);
-    else if (k === "bio") { try { out[k] = JSON.parse(v); } catch { out[k] = v; } }
+    else if (k === "bio" || k === "looking_for" || k === "dream_job") {
+      try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+    }
+    else if (k.startsWith("basics.")) {
+      try { out.basics[k.slice(7)] = JSON.parse(v); } catch { out.basics[k.slice(7)] = v; }
+    }
+    else if (k.startsWith("lifestyle.")) {
+      try { out.lifestyle[k.slice(10)] = JSON.parse(v); } catch { out.lifestyle[k.slice(10)] = v; }
+    }
     else out[k] = v;
   }
+  return out;
+}
+
+// Returns the most recent diff block from ## Profile changes, parsed back into
+// the same shape computeProfileDiff produces — so drafting can anchor on the
+// latest change set. Older blocks stay archived in the markdown for history.
+function latestProfileDiff(ent) {
+  const md = ent.profile_changes || "";
+  if (!md.trim() || md.trim() === "(none yet)") return null;
+  // Each block starts with "### <iso ts>"; keep only the LAST one.
+  const blocks = md.split(/\n\n(?=### )/);
+  const last = blocks[blocks.length - 1];
+  if (!last) return null;
+  const out = { added: {}, removed: {}, changed: {} };
+  for (const line of last.split("\n")) {
+    let m = line.match(/^- added (\S+):\s*(.*)$/);
+    if (m) { try { out.added[m[1]] = JSON.parse(m[2]); } catch { out.added[m[1]] = m[2]; } continue; }
+    m = line.match(/^- removed (\S+):\s*(.*)$/);
+    if (m) { try { out.removed[m[1]] = JSON.parse(m[2]); } catch { out.removed[m[1]] = m[2]; } continue; }
+    m = line.match(/^- changed (\S+):\s*(.*?)\s*->\s*(.*)$/);
+    if (m) {
+      let from, to;
+      try { from = JSON.parse(m[2]); } catch { from = m[2]; }
+      try { to = JSON.parse(m[3]); } catch { to = m[3]; }
+      out.changed[m[1]] = { from, to };
+    }
+  }
+  if (!Object.keys(out.added).length && !Object.keys(out.removed).length && !Object.keys(out.changed).length) return null;
   return out;
 }
 
@@ -78,10 +114,12 @@ async function main() {
 
     const finalIntent = channel === "tinder_reengage" ? "reengage_after_imessage_silence" : intent;
     const profile = profileFromEntity(ent);
+    const profileDiff = latestProfileDiff(ent);
     const context = {
       ...profile,
       thread: parseMessages(ent.conversation),
       imessage_summary: summarizeImessage(activity),
+      profile_diff: profileDiff,
     };
 
     let drafted;

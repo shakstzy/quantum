@@ -155,8 +155,14 @@ export async function launchContext({ force = false, visible = false } = {}) {
     return m ? { queryId: m[1], op: m[2] } : null;
   }
 
-  const cdp = await context.newCDPSession(page);
-  await cdp.send('Network.enable');
+  try {
+    cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+  } catch (e) {
+    try { await context.close(); } catch (_) {}
+    releasePidfile();
+    throw e;
+  }
   cdp.on('Network.requestWillBeSent', (e) => {
     try {
       const req = e?.request;
@@ -343,7 +349,7 @@ export async function pageApi(page, opName, template, { variables = null } = {})
     if (KEEP.has(k.toLowerCase())) headers[k] = v;
   }
 
-  return await page.evaluate(async ({ replayUrl, headers }) => {
+  const result = await page.evaluate(async ({ replayUrl, headers }) => {
     const r = await fetch(replayUrl, { method: 'GET', credentials: 'include', headers });
     const text = await r.text();
     let json = null;
@@ -355,6 +361,12 @@ export async function pageApi(page, opName, template, { variables = null } = {})
     };
     return { status: r.status, ok: r.ok, body: json, rateLimit: rl };
   }, { replayUrl, headers });
+  // Round 2 finding CRIT-2: pageApi must enforce single-strike breaker on
+  // auth failures so v2 callers can't accidentally hammer an expired session.
+  if (result.status === 401 || result.status === 403) {
+    tripBreaker(`pageApi-${result.status}:${opName}`);
+  }
+  return result;
 }
 
 // Convert X's Unix-epoch x-rate-limit-reset to seconds-from-now (uncapped).
