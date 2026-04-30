@@ -73,12 +73,36 @@ async function runGemini({ prompt, imageRefs, useFlash = false }) {
     : prompt;
   const args = ["-p", fullPrompt, "-o", "text"];
   if (!useFlash) { args.unshift("-m", GEMINI_PRO_MODEL); }
-  // Larger timeout: vision can take 10-30s
-  const { stdout } = await execFile("gemini", args, {
-    cwd: QUANTUM_ROOT,
-    timeout: 180000,
-    maxBuffer: 4 * 1024 * 1024,
-  });
+  // Gemini CLI exits 0 even when the API returned 429 (just logs the error to
+  // stderr + returns empty stdout). Detect that and treat it as a thrown error
+  // so the cycle logic can rotate accounts.
+  let stdout = "", stderr = "";
+  try {
+    const r = await execFile("gemini", args, {
+      cwd: QUANTUM_ROOT,
+      timeout: 180000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    stdout = r.stdout || "";
+    stderr = r.stderr || "";
+  } catch (e) {
+    // execFile rejected (non-zero exit). Read its captured streams.
+    stdout = (e.stdout || "").toString();
+    stderr = (e.stderr || "").toString();
+    if (!stderr) stderr = e.message || "";
+  }
+  // Quota error in stderr (regardless of exit code) → throw with a quota-shaped
+  // message so the outer cycle catches it via GEMINI_QUOTA_RE and rotates.
+  if (GEMINI_QUOTA_RE.test(stderr)) {
+    const e = new Error(`gemini 429: ${stderr.slice(0, 300)}`);
+    e.stderr = stderr;
+    throw e;
+  }
+  // Empty stdout with no quota signal also indicates a soft failure (e.g. safety
+  // filter, malformed prompt). Treat as non-quota error → bail out, don't cycle.
+  if (!stdout.trim()) {
+    throw new Error(`gemini returned empty output. stderr=${stderr.slice(0, 300)}`);
+  }
   return stdout.trim();
 }
 

@@ -82,9 +82,17 @@ def _run_gemini(prompt: str, image_refs: list[str], use_flash: bool = False) -> 
         text=True,
         timeout=180,
     )
+    stderr = proc.stderr or ""
+    stdout = proc.stdout or ""
+    # gemini CLI exits 0 on 429 (logs to stderr only). Detect quota in stderr
+    # regardless of exit code so the outer cycle can rotate accounts.
+    if QUOTA_RE.search(stderr):
+        raise RuntimeError(f"gemini 429: {stderr[:300]}")
     if proc.returncode != 0:
-        raise RuntimeError(f"gemini exit={proc.returncode}: {proc.stderr[:400]}")
-    return proc.stdout.strip()
+        raise RuntimeError(f"gemini exit={proc.returncode}: {stderr[:400]}")
+    if not stdout.strip():
+        raise RuntimeError(f"gemini returned empty output. stderr={stderr[:300]}")
+    return stdout.strip()
 
 
 def _run_claude(prompt: str, abs_paths: list[Path]) -> str:
