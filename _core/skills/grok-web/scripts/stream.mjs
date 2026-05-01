@@ -159,6 +159,7 @@ export class StreamAggregator {
 function unwrapGrok(obj) {
   if (obj?.result && typeof obj.result === 'object') {
     if (obj.result.response && typeof obj.result.response === 'object') return obj.result.response;
+    if (obj.result.conversation && typeof obj.result.conversation === 'object') return obj.result.conversation;
     return obj.result;
   }
   return obj;

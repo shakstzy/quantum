@@ -254,16 +254,22 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
       if (!isChatPath && !isSSE && !isNDJSON) return;
 
       const transport = isSSE ? 'sse' : (isNDJSON ? 'ndjson' : (isChatPath ? 'ndjson' : 'http'));
-      chatRequests.push({ url, method, status, transport, startedAt });
+      const rec = { url, method, status, transport, startedAt };
+      chatRequests.push(rec);
 
-      // Best-effort: read the full body once finished. (Streaming UX is
-      // captured by the page's own DOM updates; the network parser still
-      // gets the pristine final text.) For grok the body is JSON-per-line
-      // even though Content-Type says application/json.
-      const text = await response.text().catch(() => null);
+      // Read the full body once finished. Note: response.text() only resolves
+      // at `loadingFinished`, so for streaming responses this is end-of-stream
+      // timing, not first-chunk timing. Bounded with a hard timeout so a
+      // pathological never-finishing stream does not hang the listener.
+      let text = null;
+      try {
+        text = await Promise.race([
+          response.text(),
+          new Promise((_, rj) => setTimeout(() => rj(new Error('body-read-timeout')), 5 * 60 * 1000))
+        ]);
+      } catch (_) { return; }
       if (typeof text !== 'string') return;
-      const endedAt = Date.now();
-      chatRequests[chatRequests.length - 1].endedAt = endedAt;
+      rec.endedAt = Date.now();
 
       if (isSSE) {
         for (const ev of parseSSEChunk(text)) onChunk('sse', ev, null);
