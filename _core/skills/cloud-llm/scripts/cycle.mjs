@@ -28,10 +28,22 @@ export class CloudLLMUnreachable extends Error {
   constructor(message) { super(message); this.name = "CloudLLMUnreachable"; }
 }
 
+// Priority order. Avery is the Workspace AI Ultra plan (effectively unlimited
+// quota), so always try it first. The two adithya@ accounts are personal AI
+// Ultra and serve as backup. Anything else found on disk falls in alphabetical
+// after the priority list.
+const GEMINI_ACCOUNT_PRIORITY = ["avery@seedboxlabs.co", "adithya@outerscope.xyz", "adithya@eclipse.builders"];
+
 async function listGeminiAccounts() {
   try {
     const files = await readdir(GEMINI_ACCOUNTS_DIR);
-    return files.filter(f => f.endsWith(".json")).map(f => f.replace(/\.json$/, ""));
+    const found = new Set(files.filter(f => f.endsWith(".json")).map(f => f.replace(/\.json$/, "")));
+    const ordered = [];
+    for (const acct of GEMINI_ACCOUNT_PRIORITY) {
+      if (found.has(acct)) { ordered.push(acct); found.delete(acct); }
+    }
+    for (const acct of [...found].sort()) ordered.push(acct);
+    return ordered;
   } catch { return []; }
 }
 

@@ -419,6 +419,37 @@ def lookup(address: str, *, include_raw: bool = False,
     merged = _merge_views(rf, zw)
     if cad and not cad.get("error"):
         merged = _merge_cad_into(merged, cad)
+    # Tag empty-field root cause so the caller can tell "listing has no
+    # schools" from "we couldn't fetch it". Avoids the false-alarm pattern
+    # where every empty array looks like a bug.
+    rf_status = (rf or {}).get("status")
+    rf_unindexed = bool(rf.get("error")) and "not found" in str(rf.get("error", "")).lower()
+    rf_off_market = isinstance(rf_status, str) and "off market" in rf_status.lower()
+    diagnostics = {}
+    if rf.get("error"):
+        diagnostics["redfin_error"] = rf["error"]
+    if zw.get("error"):
+        diagnostics["zillow_error"] = zw["error"]
+    if rf_off_market:
+        diagnostics["redfin_off_market"] = (
+            "Redfin gates schools / tax_history / price_history / listing_agent / "
+            "nearby_homes for off-market listings. Field emptiness here is real, "
+            "not a parser bug."
+        )
+    # Zillow's initial HTML never embeds schools/tax_history/price_history -
+    # they fire as separate GraphQL after page load. Flag when we relied on
+    # Zillow for these without Redfin to fill in.
+    if not rf.get("error") and not rf_off_market:
+        pass  # Redfin is filling in - no warning needed
+    elif not zw.get("error"):
+        diagnostics["zillow_lazy_load_gap"] = (
+            "Zillow loads schools / tax_history / price_history via separate "
+            "GraphQL queries that fire AFTER initial page render. Our scraper "
+            "only sees initial HTML, so those fields are unavailable from "
+            "Zillow. Workaround: pass --redfin-url for an active listing."
+        )
+    if diagnostics:
+        merged["_diagnostics"] = diagnostics
     # Address-match warning. Brave-search returns the closest indexed
     # listing, which may not be the exact house the user typed. Flag when
     # the resolved Redfin and Zillow addresses disagree.

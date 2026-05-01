@@ -28,10 +28,12 @@ Single point of entry for cloud LLM calls (Gemini + Sonnet) with account cycling
 cp ~/.gemini/accounts/<email>.json ~/.gemini/oauth_creds.json
 ```
 
-Cached accounts on Adithya's machine (verified 2026-04-30):
-- `avery@seedboxlabs.co` (Workspace Ultra plan, highest quota)
-- `adithya@outerscope.xyz`
-- `adithya@eclipse.builders`
+Cached accounts on Adithya's machine (priority order, always tried in this sequence):
+1. `avery@seedboxlabs.co` (Workspace AI Ultra plan, effectively unlimited quota — always primary)
+2. `adithya@outerscope.xyz` (personal AI Ultra, backup)
+3. `adithya@eclipse.builders` (personal AI Ultra, backup)
+
+The cycle dispatcher (`scripts/cycle.mjs`) hard-codes this order via `GEMINI_ACCOUNT_PRIORITY` so avery is always first regardless of `readdir` ordering. Adithya-only accounts get used only on avery's quota miss.
 
 ## Consumer surface (Python)
 
