@@ -238,9 +238,7 @@ async function main() {
   const candidates = [];
   for (const ent of allEntities) {
     if (ent.meta.status === "unmatched" || ent.meta.status === "gone_dark") continue;
-    if (forceSlugs.has(ent.slug)) { candidates.push(ent); continue; }
-    if (forceSlugs.size > 0) continue; // FORCE mode: only the named slugs
-    if (await entityHasVisual(ent.slug)) continue;
+    if (forceSlugs.size > 0 && !forceSlugs.has(ent.slug)) continue; // FORCE mode: only the named slugs
     candidates.push(ent);
   }
 
@@ -260,6 +258,9 @@ async function main() {
         // captureProfilePhotoUrls navigates to the thread + waits for pane render.
         // We piggy-back the same pane visit to (1) full-profile re-scrape, then
         // (2) photo carousel walk. One sweep, all the data.
+        // Skip the Visual LLM call when entity already has one — but ALWAYS
+        // re-scrape Profile so the cohort gets uniform field coverage.
+        const skipVisualLlm = !forceSlugs.has(ent.slug) && await entityHasVisual(ent.slug);
         const urls = await captureProfilePhotoUrls(page, ent.meta.match_id);
 
         // Re-scrape the FULL profile pane while we're here (Essentials, Looking
@@ -290,6 +291,11 @@ async function main() {
           console.error(`${ent.slug}: profile re-scrape failed (continuing): ${e.message}`);
         }
 
+        if (skipVisualLlm) {
+          console.log(`${ent.slug}: visual=already-done, profile=${profileRescrapeStatus}`);
+          await sleep(jitter(2000, 4000));
+          continue;
+        }
         if (urls.length === 0) {
           console.log(`${ent.slug}: no photos found (profile=${profileRescrapeStatus}), skipping visual`);
           skipped_no_photos += 1;
