@@ -78,22 +78,24 @@ node scripts/run.mjs reset-breaker
 
 ## Procedure (chat verb)
 
-1. **Boot.** Off-screen patchright Chrome, persistent profile, atomic pidfile, breaker check.
-2. **Probe session.** Fast-fail with exit 2 if logged out.
-3. **Challenge probe.** Cloudflare / Turnstile / captcha / account-locked text in body. Trip breaker on hit.
-4. **Attach multi-transport capture** (P0 from Codex+Gemini): subscribes to `page.on('response')` for SSE / NDJSON / streamed JSON, and `page.on('websocket')` for token frames. Quota responses (path matches `/rate-limits` etc.) are extracted in parallel.
-5. **Pre-submit snapshot.** Count of user-turn nodes (whichever selector matches most: `[data-message-author-role="user"]`, `[data-testid^="conversation-turn"]`, `[role="article"]`). Used to verify submission landed.
-6. **Steer.** If `--model`: open the picker (any button matching grok / model), click the option matching the requested name. If `--mode think`/`deepsearch`: click the matching toggle. Loose selectors -- diag.mjs is the source of truth when they break.
-7. **Compose + send.** Type prompt into first visible composer (`textarea` / `[contenteditable]` / `[role="textbox"]`). Click the first visible+enabled send button (`button[type="submit"]` / `[data-testid*=send]` / `[aria-label*=send]`); fall back to `Cmd+Enter` (NEVER plain Enter -- contenteditable would insert newline).
-8. **Verify submit.** User-turn count must increment within 10s, else exit 6 (steering failure).
-9. **Collect stream.** StreamAggregator (network-first) ingests SSE / NDJSON / WS frames. Watchdogs:
-   - **Shadow-ban** (no chunks within 30s of submit): try DOM-text fallback first; if also empty, exit 4.
-   - **Idle** (no new chunks for 8s after first chunk): treat as terminal.
+Live-verified 2026-04-30 against grok.com.
+
+1. **Boot.** Off-screen patchright Chrome (`channel: 'chrome'`, `--disable-blink-features=AutomationControlled`), persistent profile at `~/.quantum/chrome-profiles/grok/`, atomic pidfile (`openSync wx`), breaker check. Single launch per profile.
+2. **Probe session.** `GET /rest/user-settings` (200 JSON = signed in). Fast-fail with exit 2 if logged out. User id read from the `x-userid` cookie.
+3. **Challenge probe.** Cloudflare / Turnstile / captcha / account-locked text in body. Trip breaker on hit (single-strike, 24h).
+4. **Attach multi-transport capture** (P0 from Codex+Gemini): subscribes to `page.on('response')` for SSE / NDJSON / streamed JSON, plus `page.on('websocket')` for token frames. Quota responses (`POST /rest/rate-limits`) parsed in parallel. URL filter is POST-only and restricted to `/rest/app-chat/conversations/(new|<id>/responses)` so listing GETs do not falsely terminate the aggregator.
+5. **Submit-timing listener.** `page.on('request')` filtered to chat-POST URLs records `submittedRequestAt` -- the true "submit landed" signal. (Round-1 P0 fix: `onChatChunk` only fires after the entire response body downloads, which can be >12s for Think/DeepSearch and would falsely time out submit verification.)
+6. **Steer.** If `--model`: click `button[aria-label="Model select"]` to open the unified picker (the live setting `useModelModeSelector3: true` means model + mode share one menu), then click the `[role="menuitem"]` matching the requested name. If `--mode think|deepsearch`: same picker, match against `MODE_LABELS`. NEVER press Escape after picking -- live-observed 2026-04-30 it raced with composer focus and clipped subsequent typing. The follow-on composer click safely closes any leftover picker state.
+7. **Compose + send.** Type prompt into the live-discovered Tiptap/ProseMirror composer (`div.tiptap.ProseMirror[contenteditable="true"]`). Click `[data-testid="chat-submit"]` once it flips from disabled+invisible to enabled+visible; fall back to `Cmd+Enter` (NEVER plain Enter -- inserts newline in Tiptap). `submittedAt` = click time.
+8. **Verify submit.** Wait up to 12s for `submittedRequestAt` to be set by the request listener. Exit 6 if not.
+9. **Collect stream.** `StreamAggregator` ingests NDJSON lines from `POST /rest/app-chat/conversations/new`. Each event is `{result: {response: {...}}}` (or `{result: {conversation: {...}}}`); `unwrapGrok` peels both. Tokens with `isThinking: true` route to `thinkingText`; `isThinking: false` tokens route to the main answer. Citations + images extracted from `modelResponse.webSearchResults`, `modelResponse.steps[].webSearchResults`, `modelResponse.generatedImageUrls`, `modelResponse.imageAttachments` (deduped by URL). Watchdogs:
+   - **Shadow-ban** (no body-read complete within 90s of click): try DOM-text fallback; else exit 4.
+   - **Idle** (no new chunks for 12s after first): treat as terminal.
    - **Hard timeout**: `--timeout` ms, default 240000.
-   - **Quota fast-fail**: if `/rate-limits` returns ok=false or 429 lands, exit 5 with `wait_seconds`.
-   - **Network terminal signals**: SSE `[DONE]`, JSON `{done|final|completed|finishReason|...}`, WS close, `loadingFinished`.
-10. **DOM supplement.** If aggregator text is suspiciously short (< 8 chars), scrape last assistant turn from DOM and use it as ground truth.
-11. **Persist.** `response.md` (the answer), `metadata.json` (run id, prompt, requested model/mode, transport stats, citation list, image refs with signed URLs redacted, quota snapshot). NO cookies, auth headers, account email, or conversation/message IDs in metadata (per Codex P1).
+   - **Quota fast-fail**: if quota probe returns `ok=false` or 429, exit 5 with `wait_seconds`.
+   - **Network terminal signals**: NDJSON `isSoftStop: true`, `modelResponse.message` appearance, `finalMetadata`, `loadingFinished` on chat URL, generic `done`/`final`/`completed`/`finishReason` fields.
+10. **Pick text source.** Trust network text whenever the stream terminated cleanly (json-terminal, http-loadingFinished from chat URL). Fall back to DOM-scrape of the last assistant turn ONLY when network yielded nothing -- network is ground truth otherwise.
+11. **Persist.** `response.md` (just the answer; thinking-trace separate in metadata if any), `metadata.json` with run_id, prompt, requested model/mode, `submitted_to_request_ms` + `body_complete_ms` timing, transport list, citations (URLs + titles + snippet ≤200 chars), image URLs with signed query params redacted, follow-up suggestions, quota snapshot. **Failure paths** (`shadowban-network.json`, `failure-network.json`) redact UUIDs and `rid=` query params from URLs (round-1 P1 fix). NO cookies, auth headers, account email, or conversation/message IDs anywhere in output.
 
 ## Failure modes (handled)
 
