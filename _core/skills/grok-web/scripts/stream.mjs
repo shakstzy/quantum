@@ -1,20 +1,25 @@
-// stream.mjs -- transport-agnostic aggregator for grok.com chat responses.
+// stream.mjs -- aggregator for grok.com chat responses.
 //
-// Grok streams over an unknown mix of SSE / fetch-stream NDJSON / WebSocket frames.
-// This parser ingests raw payloads from any transport, classifies them, and
-// builds a unified {text, citations, images, terminal, terminalReason} object.
+// Live-discovered 2026-04-30: grok.com's chat surface is
+//   POST https://grok.com/rest/app-chat/conversations/new   (NDJSON body)
+// with each line wrapped as `{"result": {"response"|"conversation": {...}}}`.
+// Token shape:
+//   { token: "<text>", isThinking: bool, messageTag: "header"|"final", isSoftStop: bool }
+// Terminal: `isSoftStop: true` (with empty token), or appearance of
+//   `finalMetadata` / `modelResponse`. Citations and images come in the
+//   final `modelResponse.steps[].webSearchResults` / `modelResponse.generatedImageUrls`.
 //
-// Design: handle the OpenAI-compatible shape that xAI's API doc advertises,
-// plus generic terminal markers. Grok web-specific shapes get plugged in via
-// `extractDeltaText` / `extractCitations` / `extractImages` once `diag.mjs`
-// reveals the actual wire format. Do not speculate beyond what is observed.
+// This parser also handles the OpenAI-compatible shape (xAI's API doc
+// advertises it) so the same code works against api.x.ai if a future
+// grok-cli skill wants to reuse it.
 
-const TERMINAL_BOOL_FIELDS = ['done', 'final', 'completed', 'isFinal', 'is_final', 'responseComplete'];
+const TERMINAL_BOOL_FIELDS = ['done', 'final', 'completed', 'isFinal', 'is_final', 'responseComplete', 'isSoftStop'];
 const TERMINAL_STR_FIELDS = ['finishReason', 'finish_reason'];
 
 export class StreamAggregator {
   constructor() {
     this._textParts = [];
+    this._thinkingParts = [];
     this.citations = [];
     this.images = [];
     this.terminal = false;
@@ -22,9 +27,13 @@ export class StreamAggregator {
     this.objectsSeen = 0;
     this.firstChunkAt = null;
     this.lastChunkAt = null;
+    this.modelHash = null;
+    this.modelName = null;
+    this.followUpSuggestions = [];
   }
 
   get text() { return this._textParts.join(''); }
+  get thinkingText() { return this._thinkingParts.join(''); }
 
   // SSE event payload (the part after "data: ").
   ingestSSE(payload) {
@@ -58,16 +67,43 @@ export class StreamAggregator {
     if (this.firstChunkAt == null) this.firstChunkAt = now;
     this.lastChunkAt = now;
 
-    const text = extractDeltaText(obj);
-    if (text) this._textParts.push(text);
+    const u = unwrapGrok(obj);
+    const text = extractDeltaText(u);
+    if (text) {
+      // Grok separates thinking-trace tokens from final-answer tokens.
+      // Keep them apart so callers can render or discard the trace.
+      if (u.isThinking === true) this._thinkingParts.push(text);
+      else this._textParts.push(text);
+    }
 
-    const cites = extractCitations(obj);
+    // Capture model identity when grok exposes it.
+    if (u.llmInfo?.modelHash && !this.modelHash) this.modelHash = u.llmInfo.modelHash;
+    if (u.metadata?.request_metadata?.model && !this.modelName) {
+      this.modelName = u.metadata.request_metadata.model;
+    }
+
+    // Citations + images can come in token chunks OR in the final modelResponse.
+    const cites = extractCitations(u);
     if (cites.length) this.citations.push(...cites);
 
-    const imgs = extractImages(obj);
+    const imgs = extractImages(u);
     if (imgs.length) this.images.push(...imgs);
 
-    if (hasTerminalMarker(obj)) this._terminate('json-terminal');
+    // Final-metadata follow-ups (grok-specific, useful for callers).
+    if (u.finalMetadata?.followUpSuggestions && Array.isArray(u.finalMetadata.followUpSuggestions)) {
+      for (const s of u.finalMetadata.followUpSuggestions) {
+        if (s?.label) this.followUpSuggestions.push({ label: s.label, type: s.properties?.followUpType || null });
+      }
+    }
+    // The terminal modelResponse carries the canonical model name.
+    if (u.modelResponse?.metadata?.request_metadata?.model && !this.modelName) {
+      this.modelName = u.modelResponse.metadata.request_metadata.model;
+    }
+    if (u.modelResponse?.metadata?.request_metadata?.mode && !this.modeName) {
+      this.modeName = u.modelResponse.metadata.request_metadata.mode;
+    }
+
+    if (hasTerminalMarker(u, obj)) this._terminate('json-terminal');
   }
 
   // Transport-level close (WS close frame, HTTP loadingFinished).
@@ -91,8 +127,13 @@ export class StreamAggregator {
   toJSON() {
     return {
       text: this.text,
+      thinkingText: this.thinkingText,
       citations: this.citations,
       images: this.images,
+      followUpSuggestions: this.followUpSuggestions,
+      modelName: this.modelName,
+      modelHash: this.modelHash,
+      modeName: this.modeName ?? null,
       terminal: this.terminal,
       terminalReason: this.terminalReason,
       objectsSeen: this.objectsSeen,
@@ -100,6 +141,16 @@ export class StreamAggregator {
       lastChunkAt: this.lastChunkAt
     };
   }
+}
+
+// grok wraps every event as `{result: {response: {...}}}` or `{result: {conversation: {...}}}`.
+// Unwrap to the inner shape so generic extractors work on both grok and OpenAI-style payloads.
+function unwrapGrok(obj) {
+  if (obj?.result && typeof obj.result === 'object') {
+    if (obj.result.response && typeof obj.result.response === 'object') return obj.result.response;
+    return obj.result;
+  }
+  return obj;
 }
 
 function extractDeltaText(obj) {
@@ -120,16 +171,37 @@ function extractDeltaText(obj) {
 
 function extractCitations(obj) {
   const out = [];
-  const candidates = [];
-  if (Array.isArray(obj.citations)) candidates.push(...obj.citations);
-  if (Array.isArray(obj.sources)) candidates.push(...obj.sources);
-  for (const c of candidates) {
-    if (c && typeof c.url === 'string') {
-      out.push({
-        url: c.url,
-        title: typeof c.title === 'string' ? c.title : null,
-        snippet: typeof c.snippet === 'string' ? c.snippet : (typeof c.text === 'string' ? c.text : null)
-      });
+  const seen = new Set();
+  const push = (c) => {
+    if (!c?.url || seen.has(c.url)) return;
+    seen.add(c.url);
+    out.push({
+      url: c.url,
+      title: typeof c.title === 'string' ? c.title : null,
+      snippet: typeof c.snippet === 'string' ? c.snippet
+              : (typeof c.text === 'string' ? c.text
+              : (typeof c.preview === 'string' ? c.preview : null))
+    });
+  };
+  // Generic
+  if (Array.isArray(obj.citations)) for (const c of obj.citations) push(c);
+  if (Array.isArray(obj.sources)) for (const c of obj.sources) push(c);
+  // Grok shape: webSearchResults / citedWebSearchResults at multiple levels.
+  for (const key of ['webSearchResults', 'citedWebSearchResults']) {
+    if (Array.isArray(obj[key])) for (const c of obj[key]) push(c);
+  }
+  // Grok modelResponse + nested steps.
+  const mr = obj.modelResponse;
+  if (mr) {
+    for (const key of ['webSearchResults', 'citedWebSearchResults']) {
+      if (Array.isArray(mr[key])) for (const c of mr[key]) push(c);
+    }
+    if (Array.isArray(mr.steps)) {
+      for (const s of mr.steps) {
+        for (const key of ['webSearchResults', 'citedWebSearchResults']) {
+          if (Array.isArray(s[key])) for (const c of s[key]) push(c);
+        }
+      }
     }
   }
   return out;
@@ -137,22 +209,39 @@ function extractCitations(obj) {
 
 function extractImages(obj) {
   const out = [];
-  if (typeof obj.imageUrl === 'string') out.push({ url: obj.imageUrl });
-  if (Array.isArray(obj.images)) {
-    for (const im of obj.images) {
-      if (im && typeof im.url === 'string') out.push({ url: im.url, w: im.width ?? null, h: im.height ?? null });
-    }
+  const seen = new Set();
+  const push = (url, im = {}) => {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push({ url, w: im.width ?? null, h: im.height ?? null });
+  };
+  if (typeof obj.imageUrl === 'string') push(obj.imageUrl);
+  if (Array.isArray(obj.images)) for (const im of obj.images) if (im?.url) push(im.url, im);
+  // Grok-specific
+  if (Array.isArray(obj.generatedImageUrls)) for (const url of obj.generatedImageUrls) push(url);
+  if (Array.isArray(obj.imageAttachments)) for (const im of obj.imageAttachments) if (im?.url) push(im.url, im);
+  // Final modelResponse
+  const mr = obj.modelResponse;
+  if (mr) {
+    if (Array.isArray(mr.generatedImageUrls)) for (const url of mr.generatedImageUrls) push(url);
+    if (Array.isArray(mr.imageAttachments)) for (const im of mr.imageAttachments) if (im?.url) push(im.url, im);
   }
   return out;
 }
 
-function hasTerminalMarker(obj) {
-  if (obj.choices?.[0]?.finish_reason) return true;
+function hasTerminalMarker(unwrapped, original) {
+  // OpenAI shape: choices[0].finish_reason
+  if (original?.choices?.[0]?.finish_reason) return true;
+  // Grok soft-stop: the empty-token event with isSoftStop:true is the canonical end-of-stream signal.
+  if (unwrapped.isSoftStop === true) return true;
+  // Grok's modelResponse wrapper appearance with a final message also signals end.
+  if (unwrapped.modelResponse && typeof unwrapped.modelResponse.message === 'string') return true;
+  if (unwrapped.finalMetadata) return true;
   for (const k of TERMINAL_BOOL_FIELDS) {
-    if (obj[k] === true) return true;
+    if (unwrapped[k] === true) return true;
   }
   for (const k of TERMINAL_STR_FIELDS) {
-    const v = obj[k];
+    const v = unwrapped[k];
     if (typeof v === 'string' && v.length > 0 && v !== 'null' && v !== 'pending') return true;
   }
   return false;
