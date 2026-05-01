@@ -115,19 +115,17 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       }
     });
 
-    // ---- Pre-submit snapshot ----
-    const preSubmit = await ctx.page.evaluate(() => {
-      const turnSelectors = [
-        '[data-message-author-role="user"]',
-        '[data-testid^="conversation-turn"]',
-        '[role="article"]'
-      ];
-      let userTurns = 0;
-      for (const sel of turnSelectors) {
-        const n = document.querySelectorAll(sel).length;
-        if (n > userTurns) userTurns = n;
-      }
-      return { userTurns };
+    // ---- Submission verification: capture-based ----
+    // grok.com creates a new conversation on every chat from root by hitting
+    // POST /rest/app-chat/conversations/new. That request firing within 10s of
+    // the click is unambiguous proof the submit landed. The DOM-turn count
+    // approach used by other UI-driver skills doesn't apply here because
+    // grok.com navigates to /c/<id>?rid=<rid> after submit and the conversation
+    // turn DOM shape isn't exposed via [data-message-author-role].
+    let submitObservedAt = null;
+    capture.onChatChunk(({ transport, raw, parsed }) => {
+      // First chunk seen on a chat path proves the POST landed.
+      if (submitObservedAt == null) submitObservedAt = Date.now();
     });
 
     // ---- Steering: model + mode ----
@@ -176,12 +174,15 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       await ctx.page.keyboard.press('Meta+Enter');
     }
 
-    // ---- Verify submission landed (user-turn increment) ----
-    const submitted = await waitForUserTurnIncrement(ctx.page, preSubmit.userTurns, 10000);
-    if (!submitted) {
-      throw exitErr(EXIT.STEERING, `Submit did not register: user-turn count stayed at ${preSubmit.userTurns} for 10s.`);
+    // ---- Verify submission landed (chat POST observed) ----
+    const verifyDeadline = Date.now() + 12000;
+    while (Date.now() < verifyDeadline && submitObservedAt == null) {
+      await new Promise(r => setTimeout(r, 300));
     }
-    if (debug) process.stderr.write('[chat] submission landed (user turn appeared)\n');
+    if (submitObservedAt == null) {
+      throw exitErr(EXIT.STEERING, 'Submit did not register: no chat POST observed within 12s. Composer click may have missed.');
+    }
+    if (debug) process.stderr.write(`[chat] submission landed (chat POST observed at +${submitObservedAt - Date.now() + 12000 | 0}ms)\n`);
 
     // ---- Wait for stream terminal (network-first, multi-signal) ----
     const submittedAt = Date.now();

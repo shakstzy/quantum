@@ -241,11 +241,13 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
         onQuota(parse429Response({ status, headers, body }));
       }
 
-      // Chat-stream-shape: text/event-stream OR ndjson OR streamed json.
+      // Chat surface (live-confirmed): POST /rest/app-chat/conversations/new
+      // and /rest/app-chat/conversations/<id>/responses. Body is NDJSON
+      // even though Content-Type says application/json.
+      const isChatPath = /\/rest\/app-chat\/conversations(\/new|\/[^?]+\/responses?)?(\?|$)/.test(url);
       const isSSE = /text\/event-stream/i.test(ct);
       const isNDJSON = /(application\/x-ndjson|application\/jsonl|application\/stream\+json)/i.test(ct);
-      const isMaybeChat = isSSE || isNDJSON || /chat|message|conversation|response|completion|generate/i.test(url);
-      if (!isMaybeChat) return;
+      if (!isChatPath && !isSSE && !isNDJSON) return;
 
       const transport = isSSE ? 'sse' : (isNDJSON ? 'ndjson' : (isChatPath ? 'ndjson' : 'http'));
       chatRequests.push({ url, method, status, transport, startedAt });
