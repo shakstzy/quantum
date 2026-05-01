@@ -147,18 +147,22 @@ When a `chat` call breaks (composer missing, no stream, wrong model selected):
 
 Run `npm test` from skill root to exercise the parsers without a browser.
 
-## Hardenings (codex+gemini reviewed)
+## Hardenings (codex+gemini reviewed, 2 rounds)
 
-- **Drive UI, read network** (P0): hybrid pattern. Not pure DOM scraping.
-- **Multi-transport capture** (P0): SSE, NDJSON, WS frames -- transport is unknown until diag.
-- **Multi-signal terminal** (P0): SSE [DONE], JSON `done|final|completed|finishReason`, WS close, idle-after-data, transport `loadingFinished`.
-- **DOM fallback** when network-text is empty: covers transports the classifier hasn't learned yet, while still surfacing the answer to the user.
+- **Drive UI, read network** (round 0 P0): hybrid pattern. Not pure DOM scraping.
+- **Multi-transport capture** (round 0 P0): SSE, NDJSON, WS frames; live-discovered grok.com uses NDJSON over a single POST.
+- **Multi-signal terminal** (round 0 P0): isSoftStop, finalMetadata, modelResponse.message, http-loadingFinished, NDJSON-line terminal markers (`done`/`final`/`completed`/`finishReason`).
+- **POST-only chat URL filter** (round 1 P0): listing GETs (`/rest/app-chat/conversations?pageSize=...`) MUST be excluded; they return finite JSON and would falsely terminate the aggregator.
+- **page.on('request') for submit timing** (round 1 P0): `onChatChunk` fires only after `response.text()` resolves (= loadingFinished), which can be >12s for Think/DeepSearch. The request listener fires at POST send time, so submit verification works for any prompt length.
+- **DOM fallback** when network-text is empty: covers transports the classifier hasn't learned yet, while still surfacing the answer.
 - **Distinct exit codes** for shadow-ban (4), rate-limit (5), steering failure (6), timeout (7).
-- **Pre-submit user-turn count** verifies submission landed in 10s -- avoids wasting timeoutMs on a no-op click.
-- **Quota probe at chat time** captures `/rate-limits` JSON in parallel with chat capture; explicit fast-fail on `ok=false`.
-- **Storage redaction**: metadata.json strips signed query params from image URLs, omits account email, cookies, auth headers, conversation/message IDs.
-- **Single-strike breaker** on any challenge surface (Codex: "do not soften").
-- **No mouse/typing jitter** (Codex: brittle and adversarial-evasion territory).
+- **Quota probe at chat time** captures `/rest/rate-limits` JSON in parallel; explicit fast-fail on `ok=false`.
+- **No Escape after picker pick** (round 1 P2): live-observed it raced with composer focus and clipped typing. Trusted composer.click() dismisses leftover picker state safely.
+- **No mouse/typing jitter** (round 0 P1): brittle and adversarial-evasion territory; patchright fingerprint hardening is sufficient.
+- **Storage redaction**: `metadata.json` strips signed query params from image URLs, omits account email, cookies, auth headers, conversation/message IDs. Failure paths (`shadowban-network.json`, `failure-network.json`) ALSO redact UUIDs and `rid=` query params (round 1 P1).
+- **Race-free chatRequests record** (round 1 P1): each request's record is captured in a local `const` before push; later `endedAt` mutation targets that record, not `array[length-1]`.
+- **Bounded body read** (round 1 P2): `Promise.race` with 5min ceiling on `response.text()` so a future endpoint that streams indefinitely cannot lock the listener.
+- **Single-strike breaker** on any challenge surface.
 
 ## Known limitations (v1)
 
