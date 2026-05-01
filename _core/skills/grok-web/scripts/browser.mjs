@@ -323,35 +323,57 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
 }
 
 // ---------------------------------------------------------------------------
-// Session probe -- best-effort across a few likely auth surfaces.
-// First diag run will tell us which one grok.com actually uses; until then
-// we try the most common shapes.
+// Session probe -- live-tested 2026-04-30 against grok.com.
+//
+// grok.com's web API lives at /rest/* (NOT /api/*; /api/* falls through to
+// the Next.js SPA HTML shell). No /rest/me endpoint exists. We use any
+// authenticated /rest/ endpoint as proof of session: a 200 JSON response
+// proves cookies are valid; a 401/403 means logged out.
+//
+// Enrichment: read the x-userid cookie for user id, and pull /rest/user-settings
+// for profile fields when available.
 // ---------------------------------------------------------------------------
+const AUTH_PROOF_CANDIDATES = [
+  'https://grok.com/rest/user-settings',
+  'https://grok.com/rest/app-chat/conversations?pageSize=1',
+  'https://grok.com/rest/workspaces?pageSize=1'
+];
+
 export async function probeSession(page) {
-  const candidates = [
-    'https://grok.com/api/auth/session',
-    'https://grok.com/rest/auth/session',
-    'https://accounts.x.ai/api/auth/session',
-    'https://grok.com/api/user'
-  ];
-  for (const url of candidates) {
+  for (const url of AUTH_PROOF_CANDIDATES) {
     try {
       const res = await page.evaluate(async (u) => {
         const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
         const text = await r.text();
+        const ct = r.headers.get('content-type') || '';
         let body = null;
         try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-        return { status: r.status, ok: r.ok, body };
+        return { status: r.status, ok: r.ok, contentType: ct, body };
       }, url);
-      if (res.ok && res.body && typeof res.body === 'object') {
-        // Heuristic: any object with .user / .id / .email / .username
-        if (res.body.user || res.body.id || res.body.email || res.body.username) {
-          return { ...res.body, _probe_url: url };
-        }
+      // Must be 200 + JSON. The Next.js SPA returns 200 + text/html which
+      // would be a false positive.
+      if (res.ok && /json/i.test(res.contentType) && res.body && typeof res.body === 'object') {
+        const userId = await readUserIdCookie(page).catch(() => null);
+        const enriched = url.includes('user-settings') ? res.body : null;
+        return {
+          ok: true,
+          _probe_url: url,
+          user_id: userId,
+          email: enriched?.email || null,
+          name: enriched?.displayName || enriched?.name || null,
+          settings: enriched
+        };
       }
+      if (res.status === 401 || res.status === 403) return null;
     } catch (_) {}
   }
   return null;
+}
+
+async function readUserIdCookie(page) {
+  const cookies = await page.context().cookies('https://grok.com/');
+  const c = cookies.find(c => c.name === 'x-userid');
+  return c?.value || null;
 }
 
 export async function waitForSignedIn(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 3000, debug = false } = {}) {
