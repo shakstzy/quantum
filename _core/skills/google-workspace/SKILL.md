@@ -102,7 +102,21 @@ Env policy: do NOT set `GOG_ACCOUNT` (skill requires explicit `-a`). Do NOT set 
 
 - OAuth in Testing mode: 7-day refresh-token expiry. Publishing triggers Google verification for sensitive scopes (Gmail+Drive); not worth it for a 4-account personal setup.
 - `--gmail-no-send` is Gmail-only. No blanket-block for Calendar/Drive writes; rely on `CONFIRM`.
-- `gog` is single-maintainer (steipete). If upstream stalls, vendor or fork.
 - Docs/Sheets/Slides/Chat/Tasks/Keep/Forms supported by `gog` but not documented here. Extend before using.
-- **Drive shortcuts not auto-resolved.** `drive get` on a shortcut omits `shortcutDetails.targetId` (field mask issue) and `drive download` rejects shortcut IDs (`400 badRequest: The requested conversion is not supported`). When ingesting, filter `mimeType == application/vnd.google-apps.shortcut` and read the target file directly (same name, different ID, visible in the same `ls --all` result if access is shared).
 - `drive ls --query` defaults to `--parent root` and silently returns empty when the match lives in a subfolder. For cross-Drive search, always pair `--query` with `--all`.
+
+## Drive shortcut + canDownload handling (locally patched)
+
+`gog` upstream (steipete/gogcli v0.14.0 and earlier) does NOT resolve Drive shortcuts and does NOT surface sharer-disabled-download cleanly. Adithya runs a locally vendored fork that does. Foolproof guarantees:
+
+- `drive get` and `drive ls` field mask includes `shortcutDetails(targetId, targetMimeType)`, `capabilities(canDownload, canCopy)`, and `trashed`. JSON consumers can resolve targets and detect restricted/trashed files without extra API calls.
+- `drive download` on a shortcut auto-walks the chain (depth cap 5, cycle detection via seen-map) and downloads the final non-shortcut target. Folders, trashed targets, and sharer-disabled-download all produce loud actionable errors that include both the original shortcut id/name AND the resolved target id/name.
+- Behavioral coverage: 7 unit tests in `internal/cmd/drive_shortcut_resolve_test.go` (one-hop, chain, cycle, missing target, inaccessible target, folder pass-through, depth cap) plus the existing httptest-based download tests.
+
+Sources of truth:
+- Vendored fork: `~/.local/share/gogcli/` (branch `fix-shortcuts-and-capabilities` off main).
+- Patch diff (PR-ready): `~/.local/share/gogcli/PATCH-shortcuts-and-capabilities.diff` (~375 lines).
+- Installed binary: `~/.local/bin/gog` (shadows `/opt/homebrew/bin/gog` because `~/.local/bin` is earlier on PATH).
+- Verify with `gog --version` -> should show `v0.14.0-2-...-dirty`. If it shows a clean release tag, brew installed a newer upstream and the override is no longer in effect; rebuild from `~/.local/share/gogcli/` or upstream the PR.
+
+`brew upgrade gogcli` does NOT silently revert the patch (it only updates `/opt/homebrew/bin/gog`, which is shadowed). When upstream merges the fix, delete `~/.local/bin/gog` and let brew take over.
