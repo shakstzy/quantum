@@ -250,9 +250,11 @@ export async function runDiag({ outDir, prompt = 'Hello, who are you?', debug = 
       await writeFile(join(RUN_DIR, '08b-submit-method.txt'), submittedHow);
 
       await new Promise(r => setTimeout(r, 30000));
-      await ctx.page.screenshot({ path: join(RUN_DIR, '09-after-submit.png'), fullPage: true });
+      try { await ctx.page.screenshot({ path: join(RUN_DIR, '09-after-submit.png'), fullPage: true }); }
+      catch (e) { await writeFile(join(RUN_DIR, '09-screenshot-error.txt'), e.message); }
 
-      const messageSurvey = await ctx.page.evaluate(() => {
+      let messageSurvey = null;
+      try { messageSurvey = await ctx.page.evaluate(() => {
         const out = [];
         const candidates = [
           '[data-message-author-role="assistant"]',
@@ -278,14 +280,15 @@ export async function runDiag({ outDir, prompt = 'Hello, who are you?', debug = 
           });
         }
         return out;
-      });
+      }); } catch (e) { messageSurvey = { error: e.message }; }
       await writeFile(join(RUN_DIR, '10-message-survey.json'), JSON.stringify(messageSurvey, null, 2));
 
-      const metaAfter = await ctx.page.evaluate(() => ({
+      let metaAfter = null;
+      try { metaAfter = await ctx.page.evaluate(() => ({
         url: location.href,
         title: document.title,
         bodyText: (document.body?.innerText || '').slice(0, 4000)
-      }));
+      })); } catch (e) { metaAfter = { error: e.message }; }
       await writeFile(join(RUN_DIR, '12-page-meta-after.json'), JSON.stringify(metaAfter, null, 2));
     }
 
