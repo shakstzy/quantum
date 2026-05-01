@@ -77,6 +77,10 @@ export async function readThreadProfile(page) {
       bio: null, looking_for: null, dream_job: null,
       basics: {}, lifestyle: {}, interests: [],
       photos_count: 0,
+      // Essentials section (verified from screenshots 2026-05-01):
+      height_cm: null, photo_verified: false,
+      lives_in: null, pronouns: null, sexuality: null,
+      jobs: [], schools: [],
     };
     // CODEX-CRIT-2: scope to the most-visible profileContent (skips stale/hidden
     // panes). On desktop there's only one rendered, but be defensive.
@@ -136,12 +140,30 @@ export async function readThreadProfile(page) {
       return h2List.find(h => (h.textContent || "").trim().toLowerCase() === norm) || null;
     }
 
-    // Looking for: typically prefixed with an emoji
+    // Looking for: a section of pills (e.g. "Long-term, open to short" + "Monogamy").
+    // Walk leaves and join with " · " so multi-pill values stay readable instead of
+    // concatenating to "Long-term, open to shortMonogamy".
     const lookingFor = findH2("Looking for");
     if (lookingFor) {
-      let v = sectionContentText(lookingFor);
-      if (v) v = v.replace(/^[\u{1F300}-\u{1FAFF}☀-➿\u{2700}-\u{27BF}]+\s*/u, "").trim();
-      out.looking_for = v || null;
+      const container = sectionContainerFor(lookingFor);
+      if (container) {
+        const headingText = (lookingFor.textContent || "").trim();
+        const EMOJI_RE = /[\u{1F300}-\u{1FAFF}☀-➿\u{2700}-\u{27BF}]/u;
+        const pills = [];
+        const seen = new Set();
+        for (const el of container.querySelectorAll("span, div, li, button, p")) {
+          if (el.children.length > 0) continue; // leaf nodes only
+          let t = (el.textContent || "").trim();
+          if (!t || t === headingText) continue;
+          // Strip leading emoji (Tinder prefixes the first pill with one)
+          t = t.replace(/^[\u{1F300}-\u{1FAFF}☀-➿\u{2700}-\u{27BF}]+\s*/u, "").trim();
+          // Skip pure-emoji or pure-whitespace lines
+          if (!t || (EMOJI_RE.test(t) && t.replace(EMOJI_RE, "").trim() === "")) continue;
+          if (t.length > 80) continue;
+          if (!seen.has(t)) { seen.add(t); pills.push(t); }
+        }
+        out.looking_for = pills.length ? pills.join(" · ") : null;
+      }
     }
 
     // About me (bio)
