@@ -150,6 +150,7 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
     await composer.click();
     await ctx.page.keyboard.type(prompt, { delay: 6 });
     if (debug) process.stderr.write(`[chat] typed prompt (${prompt.length} chars)\n`);
+    const submittedAt = Date.now();
 
     // The submit button starts disabled+invisible and only enables once the
     // composer has content. Wait up to 8s for it to flip; then click.
@@ -185,7 +186,6 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
     if (debug) process.stderr.write(`[chat] submission landed (chat POST observed at +${submitObservedAt - Date.now() + 12000 | 0}ms)\n`);
 
     // ---- Wait for stream terminal (network-first, multi-signal) ----
-    const submittedAt = Date.now();
     // grok streams the entire conversations/new response in one shot
     // (Playwright's response.text() resolves only after loadingFinished),
     // so the first network chunk lands AFTER the model is fully done.
