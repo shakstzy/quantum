@@ -97,12 +97,12 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       if (parsed) aggregator.ingestObject(parsed);
       else if (transport === 'sse') aggregator.ingestSSE(raw);
       else if (transport === 'ndjson') aggregator.ingestNDJSONLine(raw);
-      else if (transport === 'ws') {
-        // Try JSON first, fall back to raw text accumulation as content.
-        try { const o = JSON.parse(raw); aggregator.ingestObject(o); }
-        catch { /* skip non-JSON ws frames; tokens come as JSON in known UIs */ }
+      else if (transport === 'json') {
+        try { aggregator.ingestObject(JSON.parse(raw)); } catch (_) {}
+      } else if (transport === 'ws') {
+        try { aggregator.ingestObject(JSON.parse(raw)); } catch (_) {}
       }
-      if (debug) process.stderr.write(`[chat] chunk via ${transport} (text now ${aggregator.text.length} chars)\n`);
+      if (debug) process.stderr.write(`[chat] chunk via ${transport} (text now ${aggregator.text.length} chars, terminal=${aggregator.terminal})\n`);
     });
     capture.onChatTerminal(({ reason }) => {
       if (debug) process.stderr.write(`[chat] terminal signal: ${reason}\n`);
@@ -153,9 +153,11 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
     await ctx.page.keyboard.type(prompt, { delay: 6 });
     if (debug) process.stderr.write(`[chat] typed prompt (${prompt.length} chars)\n`);
 
-    // Click send; fall back to Cmd+Enter (NEVER plain Enter -- can insert newline in contenteditable).
+    // The submit button starts disabled+invisible and only enables once the
+    // composer has content. Wait up to 8s for it to flip; then click.
+    // Fall back to Cmd+Enter (NEVER plain Enter -- inserts newline in Tiptap).
     let sent = false;
-    const sendDeadline = Date.now() + 5000;
+    const sendDeadline = Date.now() + 8000;
     while (Date.now() < sendDeadline && !sent) {
       for (const sel of SEND_SELECTORS) {
         const btn = await ctx.page.$(sel);
@@ -163,14 +165,14 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
         const visible = await btn.isVisible().catch(() => false);
         const enabled = await btn.isEnabled().catch(() => false);
         if (visible && enabled) {
-          try { await btn.click({ timeout: 1500 }); sent = true; if (debug) process.stderr.write(`[chat] clicked send via ${sel}\n`); break; }
+          try { await btn.click({ timeout: 2000 }); sent = true; if (debug) process.stderr.write(`[chat] clicked send via ${sel}\n`); break; }
           catch (_) {}
         }
       }
-      if (!sent) await new Promise(r => setTimeout(r, 200));
+      if (!sent) await new Promise(r => setTimeout(r, 250));
     }
     if (!sent) {
-      if (debug) process.stderr.write('[chat] no send button; pressing Cmd+Enter\n');
+      if (debug) process.stderr.write('[chat] send button never enabled; pressing Cmd+Enter\n');
       await ctx.page.keyboard.press('Meta+Enter');
     }
 
@@ -183,8 +185,12 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
 
     // ---- Wait for stream terminal (network-first, multi-signal) ----
     const submittedAt = Date.now();
-    const SHADOW_BAN_TIMEOUT = 30 * 1000;        // no chunks at all within 30s = shadow-ban
-    const IDLE_TIMEOUT = 8 * 1000;                // no new chunks for 8s after first chunk = idle
+    // grok streams the entire conversations/new response in one shot
+    // (Playwright's response.text() resolves only after loadingFinished),
+    // so the first network chunk lands AFTER the model is fully done.
+    // Shadow-ban window covers slowest realistic case: DeepSearch + Think.
+    const SHADOW_BAN_TIMEOUT = 90 * 1000;
+    const IDLE_TIMEOUT = 12 * 1000;
     const HARD_TIMEOUT = timeoutMs;
 
     while (true) {
@@ -311,61 +317,58 @@ async function firstVisibleSelector(page, selectors) {
   return null;
 }
 
-async function trySelectModel(page, modelName, debug) {
-  // Strategy: look for any button whose label/text contains "model" or a
-  // grok version name; click; then click an option matching modelName.
-  const opened = await page.evaluate(() => {
-    const all = Array.from(document.querySelectorAll('button, [role="button"], [role="combobox"]'));
-    for (const e of all) {
-      const t = ((e.innerText || '') + ' ' + (e.getAttribute('aria-label') || '')).toLowerCase();
-      if (/grok|model/.test(t)) {
-        const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
-        e.dispatchEvent(ev);
-        return true;
-      }
-    }
+// Live-discovered: model picker is `button[aria-label="Model select"]`,
+// currently shows the active model name as text (e.g. "Fast"). Clicking opens
+// a menu of [role="menuitem"] / [role="option"] entries. Per
+// `useModelModeSelector3: true`, the same picker handles BOTH model and mode
+// selection, so trySelectModel and tryToggleMode use the same picker.
+async function openModelPicker(page, debug) {
+  const btn = await page.$(MODEL_PICKER_SELECTOR);
+  if (!btn) {
+    if (debug) process.stderr.write('[chat] model picker not found\n');
     return false;
-  });
-  if (!opened) return false;
-  await page.waitForTimeout(800);
-  const clicked = await page.evaluate((target) => {
-    const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [role="menuitemradio"], button'));
+  }
+  await btn.click({ timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(600);
+  return true;
+}
+
+async function pickFromOpenMenu(page, candidates, debug) {
+  const result = await page.evaluate((wanted) => {
+    const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"], [role="menuitemradio"]'));
+    const visible = items.filter(e => e.offsetWidth > 0 && e.offsetHeight > 0);
     const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    const want = norm(target);
-    for (const e of items) {
-      const t = norm(e.innerText || e.getAttribute('aria-label') || '');
-      if (t === want || t.includes(want)) {
-        e.click();
-        return t;
+    const labels = visible.map(e => norm(e.innerText || e.getAttribute('aria-label') || ''));
+    for (const w of wanted) {
+      const target = norm(w);
+      // Exact match first, then contains.
+      let idx = labels.findIndex(l => l === target);
+      if (idx === -1) idx = labels.findIndex(l => l.includes(target));
+      if (idx !== -1) {
+        visible[idx].click();
+        return { matched: labels[idx] };
       }
     }
-    return null;
-  }, modelName);
-  if (debug) process.stderr.write(`[chat] model select clicked: ${clicked || '(none matched)'}\n`);
-  return !!clicked;
+    return { matched: null, available: labels.slice(0, 20) };
+  }, candidates);
+  if (debug) process.stderr.write(`[chat] picker pick: ${JSON.stringify(result)}\n`);
+  return result.matched || null;
+}
+
+async function trySelectModel(page, modelName, debug) {
+  if (!await openModelPicker(page, debug)) return false;
+  const matched = await pickFromOpenMenu(page, [modelName], debug);
+  // Close any leftover menu state.
+  await page.keyboard.press('Escape').catch(() => {});
+  return !!matched;
 }
 
 async function tryToggleMode(page, mode, debug) {
   const labels = MODE_LABELS[mode] || [mode];
-  const clicked = await page.evaluate((wanted) => {
-    const all = Array.from(document.querySelectorAll('button, [role="button"], [role="switch"], [role="radio"]'));
-    for (const e of all) {
-      const t = ((e.innerText || '') + ' ' + (e.getAttribute('aria-label') || '')).toLowerCase();
-      for (const w of wanted) {
-        if (t.includes(w)) {
-          // Don't click if already enabled.
-          const pressed = e.getAttribute('aria-pressed');
-          const checked = e.getAttribute('aria-checked');
-          if (pressed === 'true' || checked === 'true') return `already-on:${t.slice(0,40)}`;
-          e.click();
-          return `clicked:${t.slice(0,40)}`;
-        }
-      }
-    }
-    return null;
-  }, labels);
-  if (debug) process.stderr.write(`[chat] mode toggle: ${clicked || '(no match)'}\n`);
-  return !!clicked;
+  if (!await openModelPicker(page, debug)) return false;
+  const matched = await pickFromOpenMenu(page, labels, debug);
+  await page.keyboard.press('Escape').catch(() => {});
+  return !!matched;
 }
 
 async function waitForUserTurnIncrement(page, beforeCount, timeoutMs) {
