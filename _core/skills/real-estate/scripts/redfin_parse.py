@@ -335,12 +335,24 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
     # Listing agent + brokerage. Real path on active listings is
     # mainHouseInfoPanelInfo.payload.mainHouseInfo.listingAgents[0], where
     # the agent name is nested ANOTHER level under .agentInfo.agentName.
-    agents = (p_above.get("listingAgents") or {}).get("agents") or []
+    # Defensive: aboveTheFold.listingAgents is sometimes a dict {agents:[...]} ,
+    # sometimes a bare list of agents, sometimes None.
+    above_la = p_above.get("listingAgents")
+    if isinstance(above_la, dict):
+        agents = above_la.get("agents") or []
+    elif isinstance(above_la, list):
+        agents = above_la
+    else:
+        agents = []
     if not agents:
-        agents = p_panel_main.get("listingAgents") or []
+        panel_la = p_panel_main.get("listingAgents")
+        agents = panel_la if isinstance(panel_la, list) else []
     if not agents:
-        agents = (p_main.get("mainHouseInfo") or {}).get("listingAgents") or []
+        main_la = (p_main.get("mainHouseInfo") or {}).get("listingAgents")
+        agents = main_la if isinstance(main_la, list) else []
     raw_agent = (agents[0] if agents else {}) or {}
+    if not isinstance(raw_agent, dict):
+        raw_agent = {}
     # Some payloads put name/email/phone at the top level, others nest under agentInfo.
     agent_info = raw_agent.get("agentInfo") if isinstance(raw_agent.get("agentInfo"), dict) else {}
     listing_agent = {
@@ -394,11 +406,16 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         }]
 
     # nearby_homes - similars/listings has up to ~18 entries; flatten to a
-    # lightweight summary shape for the merged view.
+    # lightweight summary shape for the merged view. Defensive: payload.homes
+    # is normally a list but Redfin sometimes returns a dict shell.
     p_similars = (similars or {}).get("payload") or {}
-    nearby_homes_raw = p_similars.get("homes") or []
+    nearby_homes_raw = p_similars.get("homes")
+    if not isinstance(nearby_homes_raw, list):
+        nearby_homes_raw = []
     nearby_homes = []
     for h in nearby_homes_raw[:25]:
+        if not isinstance(h, dict):
+            continue
         addr = h.get("streetLine") or h.get("addressLine1") or {}
         if isinstance(addr, dict):
             addr = addr.get("value")
