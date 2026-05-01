@@ -364,8 +364,7 @@ async function pickFromOpenMenu(page, candidates, debug) {
 async function trySelectModel(page, modelName, debug) {
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, [modelName], debug);
-  // Close any leftover menu state.
-  await page.keyboard.press('Escape').catch(() => {});
+  await closeModelPickerIfOpen(page, debug);
   return !!matched;
 }
 
@@ -373,8 +372,29 @@ async function tryToggleMode(page, mode, debug) {
   const labels = MODE_LABELS[mode] || [mode];
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, labels, debug);
-  await page.keyboard.press('Escape').catch(() => {});
+  await closeModelPickerIfOpen(page, debug);
   return !!matched;
+}
+
+// After picking from the menu, the picker usually closes itself. Confirm by
+// checking aria-expanded on the picker button. If still open, click outside
+// to dismiss. NEVER press Escape -- it can race with the composer focus and
+// truncate subsequent typing (live-observed 2026-04-30 with --mode think).
+async function closeModelPickerIfOpen(page, debug) {
+  await page.waitForTimeout(400);
+  const stillOpen = await page.evaluate((sel) => {
+    const btn = document.querySelector(sel);
+    return btn?.getAttribute('aria-expanded') === 'true';
+  }, MODEL_PICKER_SELECTOR);
+  if (!stillOpen) return;
+  // Click on document body (outside the picker) to dismiss without sending
+  // a keyboard event.
+  await page.evaluate(() => {
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 1, clientY: 1 });
+    document.body.dispatchEvent(ev);
+  });
+  await page.waitForTimeout(200);
+  if (debug) process.stderr.write('[chat] picker still open after pick; dismissed via body click\n');
 }
 
 async function waitForUserTurnIncrement(page, beforeCount, timeoutMs) {
