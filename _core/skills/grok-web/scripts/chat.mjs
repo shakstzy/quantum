@@ -253,6 +253,7 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
 
     chatRequestsLog = capture.chatRequests;
     capture.stop();
+    ctx.page.off('request', onRequestForSubmit);
 
     // ---- Pick final text source ----
     // Trust the network text whenever the stream terminated via a confirmed
@@ -286,8 +287,14 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       stream: {
         terminal_reason: aggregator.terminalReason,
         objects_seen: aggregator.objectsSeen,
-        first_chunk_ms: firstChunkAt ? firstChunkAt - submittedAt : null,
-        last_chunk_ms: lastChunkAt ? lastChunkAt - submittedAt : null,
+        // submitted_to_request_ms = how long after click the POST headers
+        //   went out. Real network latency to the chat backend.
+        // body_complete_ms = how long after click until the response body
+        //   finished downloading (= model done generating, since grok streams
+        //   the whole NDJSON in one shot and Playwright's response.text()
+        //   only resolves at loadingFinished). NOT first-chunk latency.
+        submitted_to_request_ms: submittedRequestAt ? submittedRequestAt - submittedAt : null,
+        body_complete_ms: bodyReadCompleteAt ? bodyReadCompleteAt - submittedAt : null,
         transports_seen: Array.from(new Set(chatRequestsLog.map(r => r.transport)))
       },
       citations_count: aggregator.citations.length,
