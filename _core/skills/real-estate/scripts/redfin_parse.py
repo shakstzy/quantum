@@ -306,11 +306,16 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
     p_below = below.get("payload") or {}
     p_avm = avm.get("payload") or {}
     p_main = main_house.get("payload") or {}
+    # The active fixture proves the real listing agent + open house data live
+    # in mainHouseInfoPanelInfo, not aboveTheFold. Use it as the primary source
+    # for those fields, with aboveTheFold as a fallback.
+    p_panel = main_panel.get("payload") or {}
+    p_panel_main = p_panel.get("mainHouseInfo") or {}
 
     asi = p_above.get("addressSectionInfo") or {}
     listing_info = (p_above.get("listingAgents") or {})
     if not listing_info:
-        listing_info = p_main.get("mainHouseInfo") or {}
+        listing_info = p_main.get("mainHouseInfo") or p_panel_main or {}
     history_events = ((p_below.get("propertyHistoryInfo") or {}).get("events")) or []
     public_records = p_below.get("publicRecordsInfo") or {}
     media = (p_above.get("mediaBrowserInfoBySection") or {}).get("photosInfo") or {}
