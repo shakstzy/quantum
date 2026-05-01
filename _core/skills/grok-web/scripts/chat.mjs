@@ -115,17 +115,25 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       }
     });
 
-    // ---- Submission verification: capture-based ----
-    // grok.com creates a new conversation on every chat from root by hitting
-    // POST /rest/app-chat/conversations/new. That request firing within 10s of
-    // the click is unambiguous proof the submit landed. The DOM-turn count
-    // approach used by other UI-driver skills doesn't apply here because
-    // grok.com navigates to /c/<id>?rid=<rid> after submit and the conversation
-    // turn DOM shape isn't exposed via [data-message-author-role].
-    let submitObservedAt = null;
+    // ---- Submission verification: page.on('request') for chat POSTs ----
+    // Listening for chunks is the WRONG signal: Playwright's response.text()
+    // only resolves at loadingFinished, so chunk-based "submission landed"
+    // actually means "model finished generating" -- which guarantees timeout
+    // for any Think/DeepSearch run >12s (Codex+Gemini round 1 P0).
+    // page.on('request') fires the moment the POST headers go out; that is
+    // the true "submit landed" signal.
+    let submittedRequestAt = null;
+    let bodyReadCompleteAt = null;
+    const onRequestForSubmit = (req) => {
+      const u = req.url();
+      if (req.method() === 'POST' && /\/rest\/app-chat\/conversations\/(new|[^/?]+\/responses?)(\?|$)/.test(u)) {
+        if (submittedRequestAt == null) submittedRequestAt = Date.now();
+      }
+    };
+    ctx.page.on('request', onRequestForSubmit);
     capture.onChatChunk(({ transport, raw, parsed }) => {
-      // First chunk seen on a chat path proves the POST landed.
-      if (submitObservedAt == null) submitObservedAt = Date.now();
+      // First chunk seen on a chat path = body has finished downloading.
+      if (bodyReadCompleteAt == null) bodyReadCompleteAt = Date.now();
     });
 
     // ---- Steering: model + mode ----
@@ -175,15 +183,15 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       await ctx.page.keyboard.press('Meta+Enter');
     }
 
-    // ---- Verify submission landed (chat POST observed) ----
+    // ---- Verify submission landed (chat POST request observed) ----
     const verifyDeadline = Date.now() + 12000;
-    while (Date.now() < verifyDeadline && submitObservedAt == null) {
-      await new Promise(r => setTimeout(r, 300));
+    while (Date.now() < verifyDeadline && submittedRequestAt == null) {
+      await new Promise(r => setTimeout(r, 200));
     }
-    if (submitObservedAt == null) {
-      throw exitErr(EXIT.STEERING, 'Submit did not register: no chat POST observed within 12s. Composer click may have missed.');
+    if (submittedRequestAt == null) {
+      throw exitErr(EXIT.STEERING, 'Submit did not register: no chat POST request observed within 12s. Composer click may have missed.');
     }
-    if (debug) process.stderr.write(`[chat] submission landed (chat POST observed at +${submitObservedAt - Date.now() + 12000 | 0}ms)\n`);
+    if (debug) process.stderr.write(`[chat] submission landed (POST observed at +${submittedRequestAt - submittedAt}ms)\n`);
 
     // ---- Wait for stream terminal (network-first, multi-signal) ----
     // grok streams the entire conversations/new response in one shot
@@ -204,7 +212,7 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
         // Hard timeout. Capture failure DOM for diag.
         try {
           await ctx.page.screenshot({ path: join(runDir, 'failure.png'), fullPage: true });
-          await writeFile(join(runDir, 'failure-network.json'), JSON.stringify(capture.chatRequests, null, 2));
+          await writeFile(join(runDir, 'failure-network.json'), JSON.stringify(redactRequestList(capture.chatRequests), null, 2));
         } catch (_) {}
         throw exitErr(EXIT.TIMEOUT, `Stream did not terminate within ${Math.round(HARD_TIMEOUT/1000)}s.`);
       }
@@ -223,9 +231,9 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
           }
           try {
             await ctx.page.screenshot({ path: join(runDir, 'shadowban.png'), fullPage: true });
-            await writeFile(join(runDir, 'shadowban-network.json'), JSON.stringify(capture.chatRequests, null, 2));
+            await writeFile(join(runDir, 'shadowban-network.json'), JSON.stringify(redactRequestList(capture.chatRequests), null, 2));
           } catch (_) {}
-          throw exitErr(EXIT.SHADOW_BAN, 'Submit accepted but no stream within 30s. Possible shadow-ban or undetected transport. See shadowban.png + shadowban-network.json.');
+          throw exitErr(EXIT.SHADOW_BAN, `Submit accepted but no stream within ${Math.round(SHADOW_BAN_TIMEOUT/1000)}s. Possible shadow-ban or undetected transport. See shadowban.png + shadowban-network.json.`);
         }
       } else {
         if (now - lastChunkAt > IDLE_TIMEOUT) {
@@ -364,7 +372,10 @@ async function pickFromOpenMenu(page, candidates, debug) {
 async function trySelectModel(page, modelName, debug) {
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, [modelName], debug);
-  await closeModelPickerIfOpen(page, debug);
+  // Picker self-closes after click. The follow-on composer.click() in chat.mjs
+  // dismisses any leftover state via a TRUSTED click (Gemini round 1 P2:
+  // synthetic body-mousedown can hit React-router top-left navigation; Escape
+  // truncates typing; trusted composer click is the safest dismissal).
   return !!matched;
 }
 
@@ -372,29 +383,7 @@ async function tryToggleMode(page, mode, debug) {
   const labels = MODE_LABELS[mode] || [mode];
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, labels, debug);
-  await closeModelPickerIfOpen(page, debug);
   return !!matched;
-}
-
-// After picking from the menu, the picker usually closes itself. Confirm by
-// checking aria-expanded on the picker button. If still open, click outside
-// to dismiss. NEVER press Escape -- it can race with the composer focus and
-// truncate subsequent typing (live-observed 2026-04-30 with --mode think).
-async function closeModelPickerIfOpen(page, debug) {
-  await page.waitForTimeout(400);
-  const stillOpen = await page.evaluate((sel) => {
-    const btn = document.querySelector(sel);
-    return btn?.getAttribute('aria-expanded') === 'true';
-  }, MODEL_PICKER_SELECTOR);
-  if (!stillOpen) return;
-  // Click on document body (outside the picker) to dismiss without sending
-  // a keyboard event.
-  await page.evaluate(() => {
-    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 1, clientY: 1 });
-    document.body.dispatchEvent(ev);
-  });
-  await page.waitForTimeout(200);
-  if (debug) process.stderr.write('[chat] picker still open after pick; dismissed via body click\n');
 }
 
 async function waitForUserTurnIncrement(page, beforeCount, timeoutMs) {
@@ -455,6 +444,21 @@ function redactSig(url) {
     }
     return u.toString();
   } catch (_) { return url; }
+}
+
+// Redact UUIDs and rid= query params from network capture URLs before writing
+// to failure / shadow-ban diagnostic JSON files. Per Codex+Gemini round 1 P1:
+// raw chatRequests carry the conversation UUID in path segments and a `rid=`
+// response-id query param, which the metadata.json policy explicitly omits;
+// the failure paths must enforce the same.
+function redactRequestList(reqs) {
+  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+  return (reqs || []).map(r => ({
+    ...r,
+    url: typeof r.url === 'string'
+      ? r.url.replace(uuidRe, 'UUID').replace(/([?&]rid=)[^&]+/gi, '$1REDACTED')
+      : r.url
+  }));
 }
 
 function ts() {
