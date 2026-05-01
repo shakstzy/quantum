@@ -1,0 +1,17 @@
+{
+  "name": "grok-web-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "QUANTUM skill: drive grok.com via patchright (uses Adithya's X Premium-linked grok.com session, no xAI API key)",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome",
+    "test": "node --test tests/"
+  }
+}
