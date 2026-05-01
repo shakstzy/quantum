@@ -96,28 +96,29 @@ async function quota(argv) {
     await ctx.page.goto('https://grok.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     const sess = await probeSession(ctx.page);
     if (!sess) die('[grok-web] not signed in. Run: node scripts/run.mjs login', 3);
-    // Try common quota paths. First diag run will pin the right one.
-    const candidates = [
-      'https://grok.com/rest/rate-limits',
-      'https://grok.com/api/rate-limits',
-      'https://grok.com/rest/usage',
-      'https://grok.com/api/usage'
-    ];
-    let raw = null;
-    let pickedUrl = null;
-    for (const url of candidates) {
-      const res = await ctx.page.evaluate(async (u) => {
-        try {
-          const r = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
-          const text = await r.text();
-          let body = null;
-          try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-          return { status: r.status, ok: r.ok, body };
-        } catch (e) { return { error: e.message }; }
-      }, url);
-      if (res?.ok && res.body && typeof res.body === 'object') { raw = res.body; pickedUrl = url; break; }
+    // Live-confirmed: POST /rest/rate-limits with JSON body. The site's own
+    // client sends `{requestKind: "DEFAULT", modelName: "grok-3"}` — we mirror
+    // that minimal shape so the response actually applies to chat use.
+    const url = 'https://grok.com/rest/rate-limits';
+    const res = await ctx.page.evaluate(async (u) => {
+      try {
+        const r = await fetch(u, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestKind: 'DEFAULT', modelName: 'grok-3' })
+        });
+        const text = await r.text();
+        let body = null;
+        try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+        return { status: r.status, ok: r.ok, body };
+      } catch (e) { return { error: e.message }; }
+    }, url);
+    if (!res?.ok || !res.body || typeof res.body !== 'object') {
+      die(`[grok-web] /rest/rate-limits returned ${res?.status || 'error'}: ${JSON.stringify(res?.body || res?.error).slice(0,200)}`, 4);
     }
-    if (!raw) die('[grok-web] could not locate a rate-limit endpoint. Run diag to discover.', 4);
+    const raw = res.body;
+    const pickedUrl = url;
     const { parseRateLimitJSON } = await import('./quota.mjs');
     const effort = argv.flags.effort || null;
     const parsed = parseRateLimitJSON(raw, { effort });

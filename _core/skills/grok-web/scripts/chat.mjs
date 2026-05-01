@@ -14,25 +14,29 @@ import { StreamAggregator } from './stream.mjs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+// Live-discovered selectors (2026-04-30 against grok.com).
+// Composer is a Tiptap/ProseMirror contenteditable div. Send button starts
+// disabled+invisible and becomes enabled+visible once the composer has content.
 const COMPOSER_SELECTORS = [
-  'textarea',
+  'div.tiptap.ProseMirror[contenteditable="true"]',
   '[contenteditable="true"]',
-  '[role="textbox"]',
-  '[data-testid*="prompt" i]',
-  '[data-testid*="composer" i]'
+  'textarea'
 ];
 
 const SEND_SELECTORS = [
-  'button[type="submit"]',
-  '[data-testid*="send" i]',
-  'button[aria-label*="send" i]',
-  'button[aria-label*="submit" i]'
+  '[data-testid="chat-submit"]',
+  'button[aria-label="Submit"]',
+  'button[type="submit"]'
 ];
 
+const MODEL_PICKER_SELECTOR = 'button[aria-label="Model select"]';
+
+// Mode is unified into the model picker per the live setting
+// `useModelModeSelector3: true`. Each picker option doubles as a mode toggle.
 const MODE_LABELS = {
-  think: ['think', 'thinking'],
-  deepsearch: ['deepsearch', 'deep search'],
-  default: []
+  think: ['think', 'thinking', 'expert'],
+  deepsearch: ['deepsearch', 'deep search', 'research'],
+  default: ['fast', 'auto']
 };
 
 // Exit codes (used by run.mjs / cron pipelines)

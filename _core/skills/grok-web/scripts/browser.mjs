@@ -218,8 +218,9 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
       const ct = headers['content-type'] || '';
       const startedAt = Date.now();
 
-      // Quota endpoint: heuristic match by URL path.
-      const isQuotaPath = /\/(api\/)?(rate[-_]?limits?|usage|quota)(\/|\?|$)/i.test(url);
+      // Quota endpoint (live-confirmed): POST /rest/rate-limits, JSON body
+      // { remainingQueries, totalQueries, windowSizeSeconds, low/highEffortRateLimits }.
+      const isQuotaPath = /\/rest\/rate-limits\b/.test(url);
       if (isQuotaPath) {
         try {
           const body = await response.json().catch(() => null);
@@ -246,11 +247,13 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
       const isMaybeChat = isSSE || isNDJSON || /chat|message|conversation|response|completion|generate/i.test(url);
       if (!isMaybeChat) return;
 
-      chatRequests.push({ url, method, status, transport: isSSE ? 'sse' : (isNDJSON ? 'ndjson' : 'http'), startedAt });
+      const transport = isSSE ? 'sse' : (isNDJSON ? 'ndjson' : (isChatPath ? 'ndjson' : 'http'));
+      chatRequests.push({ url, method, status, transport, startedAt });
 
       // Best-effort: read the full body once finished. (Streaming UX is
       // captured by the page's own DOM updates; the network parser still
-      // gets the pristine final text.)
+      // gets the pristine final text.) For grok the body is JSON-per-line
+      // even though Content-Type says application/json.
       const text = await response.text().catch(() => null);
       if (typeof text !== 'string') return;
       const endedAt = Date.now();
@@ -258,15 +261,16 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
 
       if (isSSE) {
         for (const ev of parseSSEChunk(text)) onChunk('sse', ev, null);
-      } else if (isNDJSON) {
-        for (const line of text.split(/\r?\n/)) {
-          if (line.trim()) onChunk('ndjson', line, null);
+      } else {
+        // Try NDJSON-by-line; if there's only one line and it parses as JSON,
+        // emit as a single object.
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (lines.length > 1) {
+          for (const line of lines) onChunk('ndjson', line, null);
+        } else if (lines.length === 1) {
+          try { onChunk('json', lines[0], JSON.parse(lines[0])); }
+          catch (_) { onChunk('ndjson', lines[0], null); }
         }
-      } else if (/application\/json/i.test(ct)) {
-        try {
-          const obj = JSON.parse(text);
-          onChunk('json', text, obj);
-        } catch (_) {}
       }
       onTerminal(`http-loadingFinished:${response.url().slice(0, 80)}`);
     } catch (e) {
