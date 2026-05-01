@@ -104,3 +104,5 @@ Env policy: do NOT set `GOG_ACCOUNT` (skill requires explicit `-a`). Do NOT set 
 - `--gmail-no-send` is Gmail-only. No blanket-block for Calendar/Drive writes; rely on `CONFIRM`.
 - `gog` is single-maintainer (steipete). If upstream stalls, vendor or fork.
 - Docs/Sheets/Slides/Chat/Tasks/Keep/Forms supported by `gog` but not documented here. Extend before using.
+- **Drive shortcuts not auto-resolved.** `drive get` on a shortcut omits `shortcutDetails.targetId` (field mask issue) and `drive download` rejects shortcut IDs (`400 badRequest: The requested conversion is not supported`). When ingesting, filter `mimeType == application/vnd.google-apps.shortcut` and read the target file directly (same name, different ID, visible in the same `ls --all` result if access is shared).
+- `drive ls --query` defaults to `--parent root` and silently returns empty when the match lives in a subfolder. For cross-Drive search, always pair `--query` with `--all`.
