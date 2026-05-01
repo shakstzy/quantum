@@ -29,7 +29,10 @@ export class StreamAggregator {
     this.lastChunkAt = null;
     this.modelHash = null;
     this.modelName = null;
+    this.modeName = null;
     this.followUpSuggestions = [];
+    this._citationUrls = new Set();
+    this._imageUrls = new Set();
   }
 
   get text() { return this._textParts.join(''); }
@@ -83,11 +86,19 @@ export class StreamAggregator {
     }
 
     // Citations + images can come in token chunks OR in the final modelResponse.
-    const cites = extractCitations(u);
-    if (cites.length) this.citations.push(...cites);
-
-    const imgs = extractImages(u);
-    if (imgs.length) this.images.push(...imgs);
+    // Dedupe by URL across the whole aggregator lifetime, not just per-call.
+    for (const c of extractCitations(u)) {
+      if (!this._citationUrls.has(c.url)) {
+        this._citationUrls.add(c.url);
+        this.citations.push(c);
+      }
+    }
+    for (const im of extractImages(u)) {
+      if (!this._imageUrls.has(im.url)) {
+        this._imageUrls.add(im.url);
+        this.images.push(im);
+      }
+    }
 
     // Final-metadata follow-ups (grok-specific, useful for callers).
     if (u.finalMetadata?.followUpSuggestions && Array.isArray(u.finalMetadata.followUpSuggestions)) {
