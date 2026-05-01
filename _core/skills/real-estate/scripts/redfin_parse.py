@@ -332,12 +332,96 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
                     photos.append(urls[k])
                     break
 
-    # Listing agent + brokerage (when present)
+    # Listing agent + brokerage. Real path on active listings is
+    # mainHouseInfoPanelInfo.payload.mainHouseInfo.listingAgents[0], where
+    # the agent name is nested ANOTHER level under .agentInfo.agentName.
     agents = (p_above.get("listingAgents") or {}).get("agents") or []
     if not agents:
-        # main listingAgents path
+        agents = p_panel_main.get("listingAgents") or []
+    if not agents:
         agents = (p_main.get("mainHouseInfo") or {}).get("listingAgents") or []
-    listing_agent = (agents[0] if agents else {}) or {}
+    raw_agent = (agents[0] if agents else {}) or {}
+    # Some payloads put name/email/phone at the top level, others nest under agentInfo.
+    agent_info = raw_agent.get("agentInfo") if isinstance(raw_agent.get("agentInfo"), dict) else {}
+    listing_agent = {
+        "name": agent_info.get("agentName") or raw_agent.get("agentName"),
+        "license": agent_info.get("licenseNumber") or raw_agent.get("licenseNumber"),
+        "email": agent_info.get("emailAddress") or raw_agent.get("emailAddress"),
+        "phone": (agent_info.get("redfinPhoneNumber") or agent_info.get("phoneNumber")
+                  or raw_agent.get("redfinPhoneNumber") or raw_agent.get("phoneNumber")),
+        "brokerage": raw_agent.get("brokerName") or raw_agent.get("brokerage"),
+        "is_redfin_agent": agent_info.get("isRedfinAgent") or raw_agent.get("isRedfinAgent"),
+    }
+    if not any(v for v in listing_agent.values()):
+        listing_agent = None
+
+    # Split history events into price-related and tax-related buckets. Redfin's
+    # historyEventType encodes the kind: 1=Listed, 2=Sold, 3=PriceChange, 9=Tax,
+    # 16=Pending, 17=ContractAccepted, etc. Price history = anything with a
+    # price field; tax history is keyed by historyEventType==9 OR comes from
+    # publicRecordsInfo.taxInfo when no per-year tax events exist.
+    price_history: list[dict] = []
+    tax_history: list[dict] = []
+    for ev in history_events:
+        eh = {
+            "date_epoch_ms": ev.get("eventDate"),
+            "event": ev.get("eventDescription"),
+            "mls_status": ev.get("mlsDescription"),
+            "price": ev.get("price"),
+            "source": ev.get("source"),
+            "history_event_type": ev.get("historyEventType"),
+        }
+        if (ev.get("historyEventType") == 9) or (
+            isinstance(ev.get("eventDescription"), str)
+            and "tax" in ev["eventDescription"].lower()
+        ):
+            tax_history.append(eh)
+        elif ev.get("price") is not None or "list" in (ev.get("eventDescription") or "").lower() \
+                or "sold" in (ev.get("eventDescription") or "").lower() \
+                or "price" in (ev.get("eventDescription") or "").lower():
+            price_history.append(eh)
+    # Fallback: if no per-year tax events, expose the current taxInfo as a
+    # one-row "tax_history" so the field isn't empty for any house with
+    # public records.
+    if not tax_history and isinstance(public_records.get("taxInfo"), dict):
+        ti = public_records["taxInfo"]
+        tax_history = [{
+            "year": ti.get("rollYear"),
+            "taxes_due": ti.get("taxesDue"),
+            "taxable_land_value": ti.get("taxableLandValue"),
+            "taxable_improvement_value": ti.get("taxableImprovementValue"),
+            "source": "redfin_publicRecordsInfo",
+        }]
+
+    # nearby_homes - similars/listings has up to ~18 entries; flatten to a
+    # lightweight summary shape for the merged view.
+    p_similars = (similars or {}).get("payload") or {}
+    nearby_homes_raw = p_similars.get("homes") or []
+    nearby_homes = []
+    for h in nearby_homes_raw[:25]:
+        addr = h.get("streetLine") or h.get("addressLine1") or {}
+        if isinstance(addr, dict):
+            addr = addr.get("value")
+        nearby_homes.append({
+            "address": addr,
+            "city": h.get("city"),
+            "state": h.get("state"),
+            "zip": h.get("zip"),
+            "price": (h.get("price") or {}).get("value") if isinstance(h.get("price"), dict) else h.get("price"),
+            "sqft": (h.get("sqFt") or {}).get("value") if isinstance(h.get("sqFt"), dict) else h.get("sqFt"),
+            "beds": h.get("beds"),
+            "baths": h.get("baths"),
+            "url": h.get("url"),
+            "mls_status": h.get("mlsStatus"),
+        })
+
+    # open_houses - listing-specific list lives on mainHouseInfoPanelInfo,
+    # NOT aboveTheFold. Combine listing's own + nearbyOpenHouses.
+    own_oh = ((p_panel.get("openHouseInfo") or {}).get("openHouseList")
+              or (p_above.get("openHouseInfo") or {}).get("openHouseList")
+              or [])
+    nearby_oh_homes = (_payload_dict(nearby_oh).get("homes")) or []
+    open_houses = list(own_oh)  # always include listing's own first
 
     out = {
         "source": "redfin",
@@ -370,9 +454,12 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         "redfin_estimate": p_avm.get("predictedValue") or (p_avm.get("predictedPrice") or {}).get("amount"),
         "rent_estimate": (rental.get("payload") or {}).get("predictedValue"),
         "history": history_events,
+        "price_history": price_history,
+        "tax_history": tax_history,
         "public_records": public_records,
-        "tax_info": public_records.get("allTaxInfo"),
+        "tax_info": public_records.get("allTaxInfo") or public_records.get("taxInfo"),
         "apn": public_records.get("apn"),
+        "nearby_homes": nearby_homes,
         # Redfin nests schools under servingThisHomeSchools / schoolsToShowOnDP.
         # Older fixture was looking at payload.schools which doesn't exist.
         "schools": (
@@ -386,17 +473,12 @@ def parse_property(ctx: dict, *, include_raw: bool = False) -> dict:
         "comps": _summarize_comps(similars),
         "amenities": p_below.get("amenitiesInfo") or {},
         "description": p_above.get("marketingRemarks") or p_main.get("publicRemarks"),
-        "listing_agent": {
-            "name": listing_agent.get("agentName"),
-            "license": listing_agent.get("licenseNumber"),
-            "email": listing_agent.get("emailAddress"),
-            "phone": listing_agent.get("redfinPhoneNumber") or listing_agent.get("phoneNumber"),
-            "brokerage": listing_agent.get("brokerName") or listing_agent.get("brokerage"),
-        } if listing_agent else None,
+        "listing_agent": listing_agent,
         "mls_source": p_main.get("mlsId") or p_main.get("listingMls"),
         "photos": photos,
         "photo_count": photo_count or len(photos) or None,
-        "open_houses": (p_above.get("openHouseInfo") or {}).get("openHouseList") or [],
+        "open_houses": open_houses,
+        "nearby_open_houses": nearby_oh_homes,
     }
     # Add the new high-value fields. Payload shape varies endpoint by endpoint.
     ai_summary_payload = _payload(ai_summary)
