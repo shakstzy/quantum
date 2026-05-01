@@ -354,14 +354,37 @@ export async function probeSession(page) {
   return null;
 }
 
-export async function waitForSignedIn(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 3000 } = {}) {
+export async function waitForSignedIn(ctx, { timeoutMs = 15 * 60 * 1000, probeEveryMs = 3000, debug = false } = {}) {
   const deadline = Date.now() + timeoutMs;
+  let iterations = 0;
+  let lastErr = null;
   while (Date.now() < deadline) {
-    const sess = await probeSession(ctx.page);
-    if (sess) return sess;
-    await new Promise(r => setTimeout(r, probeEveryMs));
+    iterations += 1;
+    let sess = null;
+    try {
+      sess = await probeSession(ctx.page);
+    } catch (e) {
+      lastErr = e;
+      if (debug) process.stderr.write(`[waitForSignedIn] iter ${iterations}: probeSession threw ${e.message}\n`);
+    }
+    if (sess) {
+      if (debug) process.stderr.write(`[waitForSignedIn] signed in after ${iterations} iterations\n`);
+      return sess;
+    }
+    if (debug && iterations % 10 === 0) {
+      process.stderr.write(`[waitForSignedIn] iter ${iterations}, ${Math.round((deadline - Date.now())/1000)}s remaining\n`);
+    }
+    try {
+      await new Promise((r, rj) => {
+        const t = setTimeout(r, probeEveryMs);
+        ctx.page.once?.('close', () => { clearTimeout(t); rj(new Error('page-closed')); });
+      });
+    } catch (e) {
+      // page closed mid-wait. Exit cleanly with a useful error.
+      throw new Error(`waitForSignedIn: page closed mid-wait (${e.message}); user likely closed Chrome window. Iterations: ${iterations}.`);
+    }
   }
-  throw new Error('waitForSignedIn: timed out waiting for valid session probe');
+  throw new Error(`waitForSignedIn: timed out after ${iterations} iterations over ${Math.round(timeoutMs/1000)}s. Last probe error: ${lastErr?.message || 'none'}.`);
 }
 
 export async function detectChallenge(page) {

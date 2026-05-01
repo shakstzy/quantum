@@ -26,7 +26,7 @@ export async function runLogin({ force = false } = {}) {
     console.error('[grok-web] Waiting up to 15 minutes for signed-in session...');
     let sess;
     try {
-      sess = await waitForSignedIn(ctx, { timeoutMs: 15 * 60 * 1000, probeEveryMs: 3000 });
+      sess = await waitForSignedIn(ctx, { timeoutMs: 15 * 60 * 1000, probeEveryMs: 3000, debug: true });
     } catch (e) {
       // Timeout = user didn't sign in. Not a bot-detection signal -- DO NOT
       // trip the breaker for a UX timeout.
