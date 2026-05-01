@@ -379,10 +379,7 @@ async function pickFromOpenMenu(page, candidates, debug) {
 async function trySelectModel(page, modelName, debug) {
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, [modelName], debug);
-  // Picker self-closes after click. The follow-on composer.click() in chat.mjs
-  // dismisses any leftover state via a TRUSTED click (Gemini round 1 P2:
-  // synthetic body-mousedown can hit React-router top-left navigation; Escape
-  // truncates typing; trusted composer click is the safest dismissal).
+  await waitForPickerClosed(page, debug);
   return !!matched;
 }
 
@@ -390,7 +387,31 @@ async function tryToggleMode(page, mode, debug) {
   const labels = MODE_LABELS[mode] || [mode];
   if (!await openModelPicker(page, debug)) return false;
   const matched = await pickFromOpenMenu(page, labels, debug);
+  await waitForPickerClosed(page, debug);
   return !!matched;
+}
+
+// After picking from the menu, the picker animates closed (~200-500ms in
+// most React/headlessui transitions). If we proceed to composer.click()
+// during that window, the click may land on the still-open menu overlay
+// instead of the composer, leaving the composer unfocused -- subsequent
+// keyboard.type() fires into the wrong target and the prompt is lost.
+// Live-observed 2026-04-30 with --mode think on a 240-char prompt.
+//
+// Fix: poll aria-expanded on the picker button until it flips to false,
+// up to 1500ms. Never use Escape (round 1 P2: clips typing) or synthetic
+// body mousedown (round 1 P2 from Gemini: can hit router/logo).
+async function waitForPickerClosed(page, debug) {
+  const deadline = Date.now() + 1500;
+  while (Date.now() < deadline) {
+    const open = await page.evaluate((sel) => {
+      const btn = document.querySelector(sel);
+      return btn?.getAttribute('aria-expanded') === 'true';
+    }, MODEL_PICKER_SELECTOR).catch(() => false);
+    if (!open) return;
+    await page.waitForTimeout(80);
+  }
+  if (debug) process.stderr.write('[chat] picker still expanded after 1500ms wait; proceeding anyway\n');
 }
 
 async function waitForUserTurnIncrement(page, beforeCount, timeoutMs) {
