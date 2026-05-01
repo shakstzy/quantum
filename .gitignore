@@ -42,3 +42,7 @@ workspaces/tinder/bot/.dev-fixtures/
 
 # library: scraper HTML cache, never commit
 workspaces/library/.dev-fixtures/
+
+# cloud-llm: ephemeral staged copies of images for gemini sandbox (must be a
+# non-dot, non-gitignored path under QUANTUM_ROOT — see cycle.mjs comments).
+_core/skills/cloud-llm/staging/

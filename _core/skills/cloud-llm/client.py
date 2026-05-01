@@ -17,9 +17,12 @@ import uuid
 from pathlib import Path
 
 QUANTUM_ROOT = Path("/Users/shakstzy/QUANTUM")
-# Staging lives inside the skill itself (NOT raw/) so gemini's .gitignore-respect
-# behavior doesn't filter out the staged image files at file-read time.
-STAGING_DIR = QUANTUM_ROOT / "_core" / "skills" / "cloud-llm" / ".staging"
+# Staging lives inside the skill itself (NOT raw/, NOT a dot-folder) so gemini's
+# workspace sandbox accepts the staged image files. Two filters apply:
+#   1) raw/* is gitignored — gemini skips gitignored paths at file-read time
+#   2) .dot-folders are excluded by gemini's default ignore policy
+# Both must be cleared.
+STAGING_DIR = QUANTUM_ROOT / "_core" / "skills" / "cloud-llm" / "staging"
 GEMINI_ACCOUNTS_DIR = Path.home() / ".gemini" / "accounts"
 GEMINI_ACTIVE_CREDS = Path.home() / ".gemini" / "oauth_creds.json"
 GEMINI_PRO_MODEL = "gemini-3-pro-preview"

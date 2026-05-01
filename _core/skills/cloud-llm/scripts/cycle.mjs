@@ -16,10 +16,13 @@ import { randomUUID } from "node:crypto";
 const execFile = promisify(_execFile);
 
 const QUANTUM_ROOT = "/Users/shakstzy/QUANTUM";
-// Staging lives inside the skill itself (NOT raw/) so gemini's .gitignore-respect
-// behavior doesn't filter out the staged image files. raw/* is gitignored so any
-// path under raw/ would be skipped by gemini at file-read time.
-const STAGING_DIR = resolve(QUANTUM_ROOT, "_core/skills/cloud-llm/.staging");
+// Staging lives inside the skill itself (NOT raw/, NOT a dot-folder) so gemini's
+// workspace sandbox accepts the staged image files. Two filters apply:
+//   1) raw/* is gitignored — gemini skips gitignored paths at file-read time
+//   2) .dot-folders are excluded by gemini's default ignore policy
+// Both must be cleared. raw/.cloud-llm-staging/ failed (1). .staging/ failed (2).
+// _core/skills/cloud-llm/staging/ clears both.
+const STAGING_DIR = resolve(QUANTUM_ROOT, "_core/skills/cloud-llm/staging");
 const GEMINI_ACCOUNTS_DIR = resolve(homedir(), ".gemini/accounts");
 const GEMINI_ACTIVE_CREDS = resolve(homedir(), ".gemini/oauth_creds.json");
 const GEMINI_PRO_MODEL = "gemini-3-pro-preview";
