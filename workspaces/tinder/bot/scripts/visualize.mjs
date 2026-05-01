@@ -226,17 +226,26 @@ async function main() {
   await abortIfHalted();
   await mkdir(PHOTOS_DIR, { recursive: true });
 
+  // QUANTUM_TINDER_VISUALIZE_FORCE = comma-separated slugs to re-run even if
+  // they already have a ## Visual section. Useful for redoing matches whose
+  // earlier run hit a regression (e.g. carousel only captured 1 photo, or
+  // gemini surfaced an in-band file-access error).
+  const forceSlugs = new Set((process.env.QUANTUM_TINDER_VISUALIZE_FORCE || "")
+    .split(",").map(s => s.trim()).filter(Boolean));
+
   const allEntities = await listAllEntities();
   const candidates = [];
   for (const ent of allEntities) {
     if (ent.meta.status === "unmatched" || ent.meta.status === "gone_dark") continue;
+    if (forceSlugs.has(ent.slug)) { candidates.push(ent); continue; }
+    if (forceSlugs.size > 0) continue; // FORCE mode: only the named slugs
     if (await entityHasVisual(ent.slug)) continue;
     candidates.push(ent);
   }
 
   const testLimit = parseInt(process.env.QUANTUM_TINDER_VISUALIZE_LIMIT || "0", 10);
   const todo = testLimit > 0 ? candidates.slice(0, testLimit) : candidates;
-  console.log(`visualize: ${candidates.length} need visual; processing ${todo.length}`);
+  console.log(`visualize: ${candidates.length} ${forceSlugs.size > 0 ? "forced" : "need visual"}; processing ${todo.length}`);
 
   const { ctx, page } = await launchPersistent({ headless: false });
   let done = 0, failed = 0, skipped_no_photos = 0;
