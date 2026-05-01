@@ -67,6 +67,24 @@ async function cleanupStage(stage) {
 }
 
 const GEMINI_QUOTA_RE = /(429|exhausted|quota|rate.?limit)/i;
+// Gemini sometimes apologizes IN-BAND when the workspace sandbox blocks a file
+// read (gitignore / geminiignore / outside-cwd). It still produces structurally
+// valid bullets, so the agentic-chatter check above misses it. Match on the
+// apology phrasing directly so we throw and fall back to claude.
+const GEMINI_ACCESS_ERROR_RE = /\b(image inaccessible|images? (?:are|is) inaccessible|cannot access (?:the )?(?:image|file)|could not access (?:the )?(?:image|file)|unable to (?:read|access) (?:the )?(?:image|file)|configured ignore patterns?|\.gemini ?ignore|skipped due to (?:gitignore|gemini ?ignore)|move the file to a non-ignored)/i;
+// One more failure shape: gemini returns the bullet template fully filled with
+// "(none observed)" everywhere — that means it answered without seeing any
+// image (sandbox blocked silently, or no images attached). Treat as failure.
+function allBulletsEmpty(text) {
+  const bullets = text.match(/^[-*]\s+\w+:\s*(.*)$/gm) || [];
+  if (bullets.length < 5) return false; // not the structured response we asked for
+  const filled = bullets.filter(b => {
+    const m = b.match(/^[-*]\s+\w+:\s*(.*)$/);
+    const v = (m && m[1] ? m[1].trim().toLowerCase() : "");
+    return v && v !== "(none observed)" && v !== "none observed" && v !== "none";
+  });
+  return filled.length === 0;
+}
 
 async function runGemini({ prompt, imageRefs, useFlash = false }) {
   // imageRefs: array of relative-to-QUANTUM_ROOT paths (already staged)
@@ -114,6 +132,14 @@ async function runGemini({ prompt, imageRefs, useFlash = false }) {
   const hasBullets = /^[-*]\s+\w+:/m.test(trimmed);
   if (looksAgentic && !hasBullets) {
     throw new Error(`gemini returned agentic chatter (likely ignored file). first 200 chars: ${trimmed.slice(0, 200)}`);
+  }
+  // Detect gemini's "I could not read this file" error embedded INSIDE bullet
+  // values (it complies with format but stuffs the apology into one field).
+  // Seen wild: "Image inaccessible due to configured ignore patterns (.gitignore
+  // or .geminiignore). Please move the file to a non-ignored directory ..."
+  // Fall through to claude when this happens.
+  if (GEMINI_ACCESS_ERROR_RE.test(trimmed)) {
+    throw new Error(`gemini reported file-access error in output (likely sandbox or ignore-pattern issue). first 250 chars: ${trimmed.slice(0, 250)}`);
   }
   return trimmed;
 }
