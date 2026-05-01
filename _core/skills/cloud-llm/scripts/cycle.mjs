@@ -57,6 +57,12 @@ async function rotateGeminiAccount(email) {
 
 // Stage images so they live under QUANTUM_ROOT (gemini's workspace sandbox
 // rejects paths outside cwd). Returns array of relative-to-QUANTUM_ROOT paths.
+//
+// Always copies into staging/ even when the source is already under
+// QUANTUM_ROOT — the source path may be inside a gitignored subtree (e.g.
+// workspaces/tinder/bot/.photos/, raw/, ~/.quantum/...), and gemini's
+// workspace sandbox refuses gitignored paths regardless of cwd. Staging
+// dir itself is non-gitignored and non-dot, so reads succeed.
 async function stageImages(absPaths) {
   const runId = randomUUID().slice(0, 8);
   const stage = resolve(STAGING_DIR, runId);
@@ -64,15 +70,10 @@ async function stageImages(absPaths) {
   const staged = [];
   for (let i = 0; i < absPaths.length; i++) {
     const src = absPaths[i];
-    if (src.startsWith(QUANTUM_ROOT + "/")) {
-      // already under QUANTUM, no copy
-      staged.push({ rel: src.slice(QUANTUM_ROOT.length + 1), copied: null });
-    } else {
-      const ext = (basename(src).match(/\.[a-z0-9]+$/i) || [".jpg"])[0];
-      const target = resolve(stage, `img-${i}${ext}`);
-      await copyFile(src, target);
-      staged.push({ rel: target.slice(QUANTUM_ROOT.length + 1), copied: target });
-    }
+    const ext = (basename(src).match(/\.[a-z0-9]+$/i) || [".jpg"])[0];
+    const target = resolve(stage, `img-${i}${ext}`);
+    await copyFile(src, target);
+    staged.push({ rel: target.slice(QUANTUM_ROOT.length + 1), copied: target });
   }
   return { runId, stage, staged };
 }

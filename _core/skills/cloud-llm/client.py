@@ -46,7 +46,10 @@ def _rotate_gemini_account(email: str) -> None:
 
 
 def _stage_images(abs_paths: list[Path]) -> tuple[Path, list[str]]:
-    """Copy images into raw/.cloud-llm-staging/<runId>/ if outside QUANTUM_ROOT.
+    """Always copy images into staging/<runId>/ — gemini's workspace sandbox
+    refuses gitignored paths, and source paths are often under gitignored
+    subtrees (raw/, ~/.quantum/, workspaces/*/.photos/). Staging dir is
+    non-gitignored + non-dot so reads succeed.
     Returns (stage_dir, list_of_paths_relative_to_QUANTUM_ROOT).
     """
     run_id = uuid.uuid4().hex[:8]
@@ -55,14 +58,10 @@ def _stage_images(abs_paths: list[Path]) -> tuple[Path, list[str]]:
     rel_paths = []
     for i, src in enumerate(abs_paths):
         src = Path(src).resolve()
-        try:
-            rel = src.relative_to(QUANTUM_ROOT)
-            rel_paths.append(str(rel))
-        except ValueError:
-            ext = src.suffix or ".jpg"
-            target = stage / f"img-{i}{ext}"
-            shutil.copy2(src, target)
-            rel_paths.append(str(target.relative_to(QUANTUM_ROOT)))
+        ext = src.suffix or ".jpg"
+        target = stage / f"img-{i}{ext}"
+        shutil.copy2(src, target)
+        rel_paths.append(str(target.relative_to(QUANTUM_ROOT)))
     return stage, rel_paths
 
 
