@@ -191,6 +191,58 @@ export async function readThreadProfile(page) {
       if (m) out.distance_mi = parseInt(m[1], 10);
     }
 
+    // Essentials line-by-line: walk leaves, pattern-match each line. Tinder
+    // renders Essentials as flex rows (icon + text). The text is the leaf node.
+    // Regex anchors are strict so "Lives in Austin" doesn't get matched as job.
+    if (essentials) {
+      const container = sectionContainerFor(essentials);
+      if (container) {
+        const PRONOUN_RE = /^(She\/Her|He\/Him|They\/Them|She\/They|He\/They|They\/She|They\/He|Other)$/;
+        const SEXUALITY_RE = /^(Straight|Gay|Lesbian|Bisexual|Bi|Pansexual|Asexual|Demisexual|Demi|Queer|Questioning|Other)$/;
+        const SCHOOL_RE = /\b(University|College|School|Institute|Academy)\b/i;
+        const HEIGHT_RE = /^\s*(\d{2,3})\s*cm\s*$/i;
+        const DIST_RE = /^\s*\d+\s*miles?\s*away\s*$/i;
+        const headingText = (essentials.textContent || "").trim();
+        const lines = [];
+        const seen = new Set();
+        for (const el of container.querySelectorAll("span, div, li, p, button")) {
+          if (el.children.length > 0) continue;
+          const t = (el.textContent || "").trim();
+          if (!t || t === headingText || t.length > 200) continue;
+          if (!seen.has(t)) { seen.add(t); lines.push(t); }
+        }
+        // photo_verified: badge appears as its own line
+        out.photo_verified = lines.includes("Photo Verified");
+        // height
+        for (const t of lines) {
+          const m = t.match(HEIGHT_RE);
+          if (m) { out.height_cm = parseInt(m[1], 10); break; }
+        }
+        // lives_in
+        for (const t of lines) {
+          const m = t.match(/^Lives in (.+)$/);
+          if (m) { out.lives_in = m[1].trim(); break; }
+        }
+        // pronouns
+        for (const t of lines) { if (PRONOUN_RE.test(t)) { out.pronouns = t; break; } }
+        // sexuality (the bare label, not "Looking for sexuality")
+        for (const t of lines) { if (SEXUALITY_RE.test(t)) { out.sexuality = t; break; } }
+        // schools (could be multiple)
+        const schools = [...new Set(lines.filter(t => SCHOOL_RE.test(t)))];
+        if (schools.length) out.schools = schools;
+        // jobs: the remaining lines that aren't already classified.
+        const used = new Set([
+          ...(out.photo_verified ? ["Photo Verified"] : []),
+          ...lines.filter(t => HEIGHT_RE.test(t) || DIST_RE.test(t)),
+          ...lines.filter(t => /^Lives in /.test(t)),
+          ...lines.filter(t => PRONOUN_RE.test(t) || SEXUALITY_RE.test(t)),
+          ...schools,
+        ]);
+        const jobs = lines.filter(t => !used.has(t) && t.length <= 80 && t !== "Essentials");
+        if (jobs.length) out.jobs = jobs;
+      }
+    }
+
     // Basics + Lifestyle: H3 (heading, value) pairs scoped to their H2 section.
     // GEMINI-IMP-R2-9: position-based slice (heading is always FIRST). Old approach
     // (`parentText.replace(heading, "")`) mangled values that contained the heading

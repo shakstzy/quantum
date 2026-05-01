@@ -16,10 +16,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { launchPersistent } from "../src/runtime/profile.mjs";
-import { listAllEntities, loadEntity, saveEntity } from "../src/runtime/entity-store.mjs";
+import { listAllEntities, loadEntity, saveEntity, upsertMatch } from "../src/runtime/entity-store.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { logSession } from "../src/runtime/logger.mjs";
 import { sleep, jitter } from "../src/runtime/humanize.mjs";
+import { readThreadProfile } from "../src/tinder/page.mjs";
 import { describeImages, CloudLLMUnreachable } from "../../../../_core/skills/cloud-llm/scripts/cycle.mjs";
 
 const PHOTOS_DIR = resolve(process.cwd(), "bot/.photos");
@@ -256,15 +257,47 @@ async function main() {
 
     for (const ent of todo) {
       try {
+        // captureProfilePhotoUrls navigates to the thread + waits for pane render.
+        // We piggy-back the same pane visit to (1) full-profile re-scrape, then
+        // (2) photo carousel walk. One sweep, all the data.
         const urls = await captureProfilePhotoUrls(page, ent.meta.match_id);
+
+        // Re-scrape the FULL profile pane while we're here (Essentials, Looking
+        // for, Bio, Basics, Lifestyle, Interests, Dream job, height, school,
+        // job, pronouns, sexuality, photo_verified, lives_in). upsertMatch
+        // handles diff vs. existing Profile and emits a profile_changes block
+        // for any field deltas; Visual section is preserved by saveEntity.
+        let profileRescrapeStatus = "skipped";
+        try {
+          const profile = await readThreadProfile(page);
+          const meaningful = profile && (profile.name || profile.age || profile.bio || profile.looking_for
+            || (profile.basics && Object.keys(profile.basics).length)
+            || (profile.lifestyle && Object.keys(profile.lifestyle).length)
+            || (Array.isArray(profile.interests) && profile.interests.length)
+            || (Array.isArray(profile.jobs) && profile.jobs.length)
+            || (Array.isArray(profile.schools) && profile.schools.length));
+          if (meaningful) {
+            await upsertMatch({
+              matchId: ent.meta.match_id,
+              personId: ent.meta.person_id || null,
+              name: profile.name || ent.meta.first_name,
+              source: "tinder",
+              profile,
+            });
+            profileRescrapeStatus = "rescraped";
+          }
+        } catch (e) {
+          console.error(`${ent.slug}: profile re-scrape failed (continuing): ${e.message}`);
+        }
+
         if (urls.length === 0) {
-          console.log(`${ent.slug}: no photos found, skipping`);
+          console.log(`${ent.slug}: no photos found (profile=${profileRescrapeStatus}), skipping visual`);
           skipped_no_photos += 1;
           continue;
         }
         const paths = await downloadPhotos(ctx, urls, ent.slug);
         if (paths.length === 0) {
-          console.log(`${ent.slug}: all photo downloads failed, skipping`);
+          console.log(`${ent.slug}: all photo downloads failed (profile=${profileRescrapeStatus}), skipping visual`);
           skipped_no_photos += 1;
           continue;
         }
@@ -273,7 +306,7 @@ async function main() {
         const body = buildVisualSection(result.output, result.engine, result.account, ts);
         const wrote = await writeVisualToEntity(ent.slug, body);
         done += 1;
-        console.log(`${ent.slug}: ${paths.length} photos, ${result.engine} (${result.account || "—"}), ${wrote.mode}`);
+        console.log(`${ent.slug}: ${paths.length} photos, ${result.engine} (${result.account || "—"}), ${wrote.mode}, profile=${profileRescrapeStatus}`);
         // Pace between matches: random gap to look human-ish to Tinder + give cloud breathing room
         await sleep(jitter(4000, 9000));
       } catch (e) {
