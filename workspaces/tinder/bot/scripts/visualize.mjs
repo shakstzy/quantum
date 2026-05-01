@@ -45,23 +45,30 @@ Return only the bullets. No preamble, no other prose.`;
 
 async function captureProfilePhotoUrls(page, matchId) {
   await page.goto(`https://tinder.com/app/messages/${matchId}`, { waitUntil: "domcontentloaded" });
-  await sleep(jitter(3000, 4500));
+  await sleep(jitter(3500, 5000));
 
-  // Tinder shows ONE carousel slide by default. To get all 4-7 photos we need to
-  // advance through the carousel. The "next photo" button lives in the profile
-  // pane carousel. Easiest: send keyboard arrow-right inside the pane focus,
-  // capturing URLs after each advance. Stop when no new URL appears (looped).
+  // Photos can come from three places in modern Tinder builds:
+  //   (1) the carousel <img>, swappable via Next button or ArrowRight keypress
+  //   (2) <img srcset="..."> with multiple resolution variants
+  //   (3) inline style backgroundImage on stacked-layout cards
+  // Snapshot pulls all three. Container scope is widened from the inner
+  // profileContent div up to its enclosing dialog/section so stacked layouts
+  // (where photos live as siblings, not children) still get caught.
   const collected = new Set();
 
   async function snapshotPaneUrls() {
     const urls = await page.evaluate(() => {
-      const pane = document.querySelector("[class*='profileContent']");
-      if (!pane) return [];
+      const inner = document.querySelector("[class*='profileContent']");
+      if (!inner) return [];
+      const root = inner.closest("section, dialog, [role='dialog'], [class*='profileCard'], [class*='profileWrap']") || inner;
       const hits = new Set();
-      for (const img of pane.querySelectorAll("img")) {
-        if (img.src && img.src.includes("images-ssl.gotinder.com")) hits.add(img.src);
+      const collect = (s) => { if (s && s.includes("images-ssl.gotinder.com")) hits.add(s); };
+      for (const img of root.querySelectorAll("img")) {
+        collect(img.src);
+        collect(img.currentSrc);
+        if (img.srcset) for (const part of img.srcset.split(",")) collect(part.trim().split(/\s+/)[0]);
       }
-      for (const el of pane.querySelectorAll("*")) {
+      for (const el of root.querySelectorAll("*")) {
         const bg = (el.style && el.style.backgroundImage) || "";
         const m = bg.match(/url\("([^"]*images-ssl\.gotinder\.com[^"]*)"/);
         if (m) hits.add(m[1]);
@@ -71,34 +78,87 @@ async function captureProfilePhotoUrls(page, matchId) {
     for (const u of urls) collected.add(u);
   }
 
+  // Force lazy-loaded photos in stacked layouts to mount by scrolling the pane to bottom.
+  async function scrollPaneToBottom() {
+    await page.evaluate(() => {
+      const inner = document.querySelector("[class*='profileContent']");
+      if (!inner) return;
+      const scroller = inner.closest("[class*='profileScroll'], [class*='profileWrap'], section, dialog, [role='dialog']") || inner;
+      try { scroller.scrollTo({ top: scroller.scrollHeight, behavior: "instant" }); } catch { scroller.scrollTop = scroller.scrollHeight; }
+    });
+  }
+
   // Initial capture
   await snapshotPaneUrls();
 
-  // Click the carousel to focus, then advance with arrow-right up to 10 times.
+  // Strategy A: scroll the pane (cheap; covers stacked layouts where photos
+  // are vertical siblings, not carousel slides). Repeat while it keeps
+  // revealing new URLs.
+  for (let i = 0; i < 6; i++) {
+    const before = collected.size;
+    await scrollPaneToBottom();
+    await sleep(jitter(900, 1300));
+    await snapshotPaneUrls();
+    if (collected.size === before) break;
+  }
+
+  // Strategy B: explicit Next button if present.
   try {
     const carouselNext = await page.$("[class*='profileContent'] button[aria-label*='Next' i], [class*='profileContent'] [class*='carousel'] button[aria-label*='Next' i]");
     if (carouselNext) {
-      // Some Tinder builds expose a clickable "next" button — preferred when present.
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 12; i++) {
         const before = collected.size;
         try { await carouselNext.click({ timeout: 800 }); } catch { break; }
-        await sleep(jitter(500, 900));
+        await sleep(jitter(1100, 1600));
         await snapshotPaneUrls();
-        if (collected.size === before) break; // looped or no more
+        if (collected.size === before) {
+          // Lazy-load can lag the click. Give it one more pass before declaring done.
+          await sleep(900);
+          await snapshotPaneUrls();
+          if (collected.size === before) break;
+        }
       }
-    } else {
-      // Fallback: keyboard arrow-right on the pane. Click the pane first to focus.
-      const pane = await page.$("[class*='profileContent']");
-      if (pane) await pane.click({ timeout: 800 }).catch(() => {});
-      for (let i = 0; i < 10; i++) {
-        const before = collected.size;
-        await page.keyboard.press("ArrowRight").catch(() => {});
-        await sleep(jitter(500, 900));
+    }
+  } catch { /* selector miss is OK */ }
+
+  // Strategy C: keyboard arrow-right with focus. Click pane first, then press.
+  try {
+    const pane = await page.$("[class*='profileContent']");
+    if (pane) await pane.click({ timeout: 800 }).catch(() => {});
+    for (let i = 0; i < 12; i++) {
+      const before = collected.size;
+      await page.keyboard.press("ArrowRight").catch(() => {});
+      await sleep(jitter(1100, 1600));
+      await snapshotPaneUrls();
+      if (collected.size === before) {
+        await sleep(900);
         await snapshotPaneUrls();
         if (collected.size === before) break;
       }
     }
-  } catch { /* selector miss is OK; we still have the initial capture */ }
+  } catch { /* fine */ }
+
+  // Strategy D: click the right edge of the visible carousel image (some
+  // Tinder builds advance only on tap-right, not on keyboard or button).
+  try {
+    const carouselImg = await page.$("[class*='profileContent'] img[src*='images-ssl.gotinder.com']");
+    if (carouselImg) {
+      const box = await carouselImg.boundingBox();
+      if (box) {
+        for (let i = 0; i < 12; i++) {
+          const before = collected.size;
+          await page.mouse.click(box.x + box.width * 0.85, box.y + box.height / 2).catch(() => {});
+          await sleep(jitter(1100, 1600));
+          await snapshotPaneUrls();
+          if (collected.size === before) {
+            await sleep(900);
+            await snapshotPaneUrls();
+            if (collected.size === before) break;
+          }
+        }
+      }
+    }
+  } catch { /* fine */ }
 
   return [...collected];
 }

@@ -141,6 +141,9 @@ async function runGemini({ prompt, imageRefs, useFlash = false }) {
   if (GEMINI_ACCESS_ERROR_RE.test(trimmed)) {
     throw new Error(`gemini reported file-access error in output (likely sandbox or ignore-pattern issue). first 250 chars: ${trimmed.slice(0, 250)}`);
   }
+  if (allBulletsEmpty(trimmed)) {
+    throw new Error(`gemini returned all-empty bullet template (likely never saw any image). falling back to claude.`);
+  }
   return trimmed;
 }
 
