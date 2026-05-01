@@ -62,11 +62,11 @@ async function whoami() {
     if (!sess) die('[grok-web] not signed in. Run: node scripts/run.mjs login', 3);
     console.log(JSON.stringify({
       ok: true,
-      email: sess.email || sess.user?.email || null,
-      name: sess.name || sess.user?.name || sess.username || sess.user?.username || null,
-      id: sess.id || sess.user?.id || null,
+      user_id: sess.user_id || null,
+      email: sess.email || null,
+      name: sess.name || null,
       probe_url: sess._probe_url || null,
-      raw_keys: Object.keys(sess).filter(k => !k.startsWith('_'))
+      settings_keys: sess.settings && typeof sess.settings === 'object' ? Object.keys(sess.settings) : null
     }, null, 2));
   } finally { await ctx.close(); }
 }
