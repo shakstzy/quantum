@@ -149,11 +149,16 @@ function profileToMarkdown(profile) {
   const lines = [];
   if (profile.age != null) lines.push(`- age: ${profile.age}`);
   if (profile.distance_mi != null) lines.push(`- distance_mi: ${profile.distance_mi}`);
+  if (profile.height_cm != null) lines.push(`- height_cm: ${profile.height_cm}`);
   if (profile.bio) lines.push(`- bio: ${JSON.stringify(profile.bio)}`);
   if (profile.looking_for) lines.push(`- looking_for: ${JSON.stringify(profile.looking_for)}`);
   if (profile.dream_job) lines.push(`- dream_job: ${JSON.stringify(profile.dream_job)}`);
   if (profile.schools?.length) lines.push(`- schools: ${profile.schools.join(", ")}`);
   if (profile.jobs?.length) lines.push(`- jobs: ${profile.jobs.join(", ")}`);
+  if (profile.lives_in) lines.push(`- lives_in: ${JSON.stringify(profile.lives_in)}`);
+  if (profile.pronouns) lines.push(`- pronouns: ${JSON.stringify(profile.pronouns)}`);
+  if (profile.sexuality) lines.push(`- sexuality: ${JSON.stringify(profile.sexuality)}`);
+  if (profile.photo_verified === true) lines.push(`- photo_verified: true`);
   if (profile.interests?.length) lines.push(`- interests: ${profile.interests.join(", ")}`);
   if (profile.basics && Object.keys(profile.basics).length) {
     for (const [k, v] of Object.entries(profile.basics)) lines.push(`- basics.${k.toLowerCase().replace(/\s+/g, "_")}: ${JSON.stringify(v)}`);
@@ -178,8 +183,9 @@ export function profileFromMarkdown(markdown) {
     if (v.startsWith('"') && v.endsWith('"')) {
       try { v = JSON.parse(v); } catch {}
     } else if (/^-?\d+$/.test(v)) v = parseInt(v, 10);
-    if (k === "age" || k === "distance_mi" || k === "photos_count") out[k] = typeof v === "number" ? v : parseInt(v, 10);
-    else if (k === "bio" || k === "looking_for" || k === "dream_job") out[k] = v;
+    if (k === "age" || k === "distance_mi" || k === "photos_count" || k === "height_cm") out[k] = typeof v === "number" ? v : parseInt(v, 10);
+    else if (k === "bio" || k === "looking_for" || k === "dream_job" || k === "lives_in" || k === "pronouns" || k === "sexuality") out[k] = v;
+    else if (k === "photo_verified") out[k] = vRaw === "true";
     else if (k === "schools" || k === "jobs") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
     else if (k === "interests") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
     else if (k.startsWith("basics.")) out.basics[k.slice(7)] = v;
@@ -209,7 +215,8 @@ export function computeProfileDiff(oldP, newP) {
   const a = normalizeProfile(oldP);
   const b = normalizeProfile(newP);
   const diff = { added: {}, removed: {}, changed: {} };
-  const scalarKeys = ["age", "distance_mi", "bio", "looking_for", "dream_job", "photos_count"];
+  const scalarKeys = ["age", "distance_mi", "height_cm", "bio", "looking_for", "dream_job",
+                      "lives_in", "pronouns", "sexuality", "photo_verified", "photos_count"];
   for (const k of scalarKeys) {
     const av = a[k] ?? null;
     const bv = b[k] ?? null;
@@ -217,6 +224,15 @@ export function computeProfileDiff(oldP, newP) {
     if (av == null && bv != null) diff.added[k] = bv;
     else if (av != null && bv == null) diff.removed[k] = av;
     else diff.changed[k] = { from: av, to: bv };
+  }
+  // Set-shape diffs for jobs + schools (multi-value lists)
+  for (const grp of ["jobs", "schools"]) {
+    const oldS = new Set(a[grp] || []);
+    const newS = new Set(b[grp] || []);
+    const addedItems = [...newS].filter(x => !oldS.has(x));
+    const removedItems = [...oldS].filter(x => !newS.has(x));
+    if (addedItems.length) diff.added[grp] = addedItems;
+    if (removedItems.length) diff.removed[grp] = removedItems;
   }
   for (const grp of ["basics", "lifestyle"]) {
     const oldG = a[grp] || {};

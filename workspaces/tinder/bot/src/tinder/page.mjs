@@ -166,14 +166,32 @@ export async function readThreadProfile(page) {
       }
     }
 
-    // About me (bio)
+    // Bio. Tinder uses two shapes:
+    //   (1) classic "About me" H2 + free-text body
+    //   (2) "Prompts" — the H2 IS the question (e.g. "Me: I'm a grown up. Also me:")
+    //       and the section body is the answer.
+    // Strategy: prefer "About me" if present; otherwise capture every non-structural
+    // H2 as a prompt + answer pair, joined with " / ".
+    const STRUCTURAL_H2 = new Set([
+      "looking for", "essentials", "basics", "lifestyle", "interests",
+      "my dream job is…", "my dream job is...", "about me",
+    ]);
     const aboutMe = findH2("About me");
     if (aboutMe) {
       const v = sectionContentText(aboutMe);
-      // CODEX-IMP-18: strip badge prefixes if Tinder includes them at the start.
-      // Use specific known badges only — never strip generic words.
       const cleaned = v ? v.replace(/^(Photo Verified|Verified|Selected|Boost)\s*/i, "").trim() : null;
       out.bio = cleaned || null;
+    } else {
+      const prompts = [];
+      for (const h2 of h2List) {
+        const label = (h2.textContent || "").trim();
+        if (!label) continue;
+        if (STRUCTURAL_H2.has(label.toLowerCase())) continue;
+        const body = sectionContentText(h2);
+        if (!body) continue;
+        prompts.push(`${label} ${body}`.trim());
+      }
+      if (prompts.length) out.bio = prompts.join(" / ");
     }
 
     // Dream job (Essentials sub-question)
