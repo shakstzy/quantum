@@ -1,0 +1,167 @@
+---
+name: grok-web
+description: Drive grok.com via patchright using Adithya's X Premium-linked account (no xAI API key, no separate billing). Off-screen Chrome runs the chat UI; SSE/NDJSON/WebSocket stream is captured for clean response text + citations + images. Verbs: login (one-time visible sign-in via "Sign in with X"), whoami, chat with --model and --mode (default | think | deepsearch), quota (read /api/rate-limits), status, reset-breaker, diag (selector + network discovery for self-heal). Triggers on "ask grok", "grok this", "use grok", "grok think", "grok deepsearch". For xAI API calls (paid), use a separate grok-cli skill -- not yet built.
+---
+
+# grok-web Skill
+
+UI-driven chat against grok.com. Mirrors gpt-images / discord / x-read pattern: persistent Chrome profile with one-time visible login, off-screen runtime Chrome for chat, atomic pidfile, single-strike breaker on cloudflare/captcha. No xAI API key, no separate billing -- uses Adithya's X Premium grok.com access.
+
+## When this fires
+
+Trigger phrases (non-exhaustive): "ask grok X", "grok this", "use grok for X", "grok think mode", "grok deepsearch X", "what does grok say about X", "run X through grok".
+
+Do NOT fire for:
+- xAI Cloud API (api.x.ai) -- separate billed surface, would be a different skill (grok-cli).
+- ChatGPT / GPT image gen -- use `gpt-images` skill.
+- Higgsfield models -- use `higgsfield` skill.
+- Reading X (Twitter) -- use `x-read` skill (different account surface).
+
+## QUANTUM integration
+
+This is a **generative skill**, not a data-source workspace. Outputs go OUTSIDE `raw/`.
+
+| Item | Path / Value |
+|------|--------------|
+| Skill home | `_core/skills/grok-web/` |
+| Profile dir | `~/.quantum/chrome-profiles/grok/` (persistent) |
+| Pidfile | `~/.quantum/chrome-profiles/grok/.skill.pid` |
+| Breaker | `~/.quantum/chrome-profiles/grok/.breaker.json` (single-strike, 24h) |
+| Output | `~/.quantum/skill-output/grok-web/<runId>/{response.md, prompt.txt, metadata.json}` |
+| Auth probe | A few candidate `/api/auth/session`-ish URLs; first 200 wins. Diag locks it down. |
+
+Never deposit grok-web outputs into `raw/`. Not durable knowledge about Adithya's life.
+
+## First-time setup
+
+```bash
+cd _core/skills/grok-web
+node scripts/run.mjs login
+```
+
+First invocation runs `npm install` (patchright + Chrome, ~300MB, 2-3 minutes). Then opens a visible Chrome window pointed at grok.com. Recommended path: click "Sign in with X" so X Premium is linked. The script polls a session endpoint until logged in, then closes.
+
+Future runs reuse cookies silently. Re-run `login` if a `chat` call exits 2 (session expired).
+
+## Commands
+
+```bash
+# One-time visible login.
+node scripts/run.mjs login
+
+# Confirm session.
+node scripts/run.mjs whoami
+
+# Default chat.
+node scripts/run.mjs chat "Explain transformer architecture briefly"
+
+# Pick a specific model.
+node scripts/run.mjs chat "Solve: ..." --model "Grok 4.1"
+
+# Toggle Think mode (chain-of-thought).
+node scripts/run.mjs chat "Prove ..." --mode think
+
+# Toggle DeepSearch mode (multi-source web research with citations).
+node scripts/run.mjs chat "What's new in ..." --mode deepsearch
+
+# Read current rate-limit window.
+node scripts/run.mjs quota
+node scripts/run.mjs quota --effort high
+
+# Self-heal: dump live UI + network shapes.
+node scripts/run.mjs diag --prompt "Hello"
+
+# State.
+node scripts/run.mjs status
+node scripts/run.mjs reset-breaker
+```
+
+## Procedure (chat verb)
+
+1. **Boot.** Off-screen patchright Chrome, persistent profile, atomic pidfile, breaker check.
+2. **Probe session.** Fast-fail with exit 2 if logged out.
+3. **Challenge probe.** Cloudflare / Turnstile / captcha / account-locked text in body. Trip breaker on hit.
+4. **Attach multi-transport capture** (P0 from Codex+Gemini): subscribes to `page.on('response')` for SSE / NDJSON / streamed JSON, and `page.on('websocket')` for token frames. Quota responses (path matches `/rate-limits` etc.) are extracted in parallel.
+5. **Pre-submit snapshot.** Count of user-turn nodes (whichever selector matches most: `[data-message-author-role="user"]`, `[data-testid^="conversation-turn"]`, `[role="article"]`). Used to verify submission landed.
+6. **Steer.** If `--model`: open the picker (any button matching grok / model), click the option matching the requested name. If `--mode think`/`deepsearch`: click the matching toggle. Loose selectors -- diag.mjs is the source of truth when they break.
+7. **Compose + send.** Type prompt into first visible composer (`textarea` / `[contenteditable]` / `[role="textbox"]`). Click the first visible+enabled send button (`button[type="submit"]` / `[data-testid*=send]` / `[aria-label*=send]`); fall back to `Cmd+Enter` (NEVER plain Enter -- contenteditable would insert newline).
+8. **Verify submit.** User-turn count must increment within 10s, else exit 6 (steering failure).
+9. **Collect stream.** StreamAggregator (network-first) ingests SSE / NDJSON / WS frames. Watchdogs:
+   - **Shadow-ban** (no chunks within 30s of submit): try DOM-text fallback first; if also empty, exit 4.
+   - **Idle** (no new chunks for 8s after first chunk): treat as terminal.
+   - **Hard timeout**: `--timeout` ms, default 240000.
+   - **Quota fast-fail**: if `/rate-limits` returns ok=false or 429 lands, exit 5 with `wait_seconds`.
+   - **Network terminal signals**: SSE `[DONE]`, JSON `{done|final|completed|finishReason|...}`, WS close, `loadingFinished`.
+10. **DOM supplement.** If aggregator text is suspiciously short (< 8 chars), scrape last assistant turn from DOM and use it as ground truth.
+11. **Persist.** `response.md` (the answer), `metadata.json` (run id, prompt, requested model/mode, transport stats, citation list, image refs with signed URLs redacted, quota snapshot). NO cookies, auth headers, account email, or conversation/message IDs in metadata (per Codex P1).
+
+## Failure modes (handled)
+
+| Symptom | Exit | Action |
+|---|---|---|
+| Session expired / never logged in | 2 | Run `login`. |
+| Cloudflare / Turnstile / captcha | 3 | Breaker tripped 24h. Run `login` headed once challenge clears. |
+| Submit accepted but no stream within 30s + DOM empty | 4 | Possible shadow-ban or undetected transport. Inspect `shadowban.png` + `shadowban-network.json` in run dir. |
+| Quota exhausted / 429 | 5 | Wait `wait_seconds` then retry. Caller decides. |
+| Composer / send button missing | 6 | UI changed. Run `diag` to discover new selectors. |
+| Stream did not terminate within timeoutMs | 7 | Inspect `failure.png` + `failure-network.json`. |
+
+## Self-heal protocol (per learnings/2026-04-30-live-test-and-fix-browser-skills.md)
+
+When a `chat` call breaks (composer missing, no stream, wrong model selected):
+
+1. Run `node scripts/run.mjs diag --prompt "Hello"`. Writes 14+ artifacts to `/tmp/grok-web-diag-<ts>/`.
+2. Read `03-composer-survey.json`, `04-send-button-survey.json`, `05-model-picker-survey.json`, `06-mode-toggle-survey.json`, `10-message-survey.json`, `11-network-capture.json`, `13-quota-probe.json`.
+3. Update `COMPOSER_SELECTORS` / `SEND_SELECTORS` / `MODE_LABELS` in `chat.mjs`. Pin the real auth + quota URLs in `browser.mjs` / `run.mjs` (the candidate-list pattern is intentional drift-tolerance).
+4. Re-test live. Codex round on the patch. Re-test once more on a different prompt + mode.
+5. Update this SKILL.md if the procedure section's selectors / endpoints changed.
+
+## Anti-detection (per Codex+Gemini P1)
+
+- Real persistent profile, off-screen visible Chrome (not headless). `--disable-blink-features=AutomationControlled` set; `channel: 'chrome'` (not Chromium).
+- **No fake jitter / mouse noise / typing-jitter.** Codex flagged this as brittle and crossing into adversarial-evasion. Patchright defaults are sufficient.
+- Single browser process per profile, atomic pidfile, one chat at a time. Cross-tab interleaving on the same profile is not safe.
+- Single-strike breaker on Cloudflare / Turnstile / "verify you are human". 24h cooldown.
+
+## ToS / safety
+
+- Driving grok.com programmatically is a grey area. xAI / X is more aggressive than OpenAI on bot mitigation (per Gemini). Read-pace use is low signal but nonzero risk.
+- Account-level enforcement; an X Premium ban here is more painful than a chatgpt.com ban -- Adithya should consider whether to run this on a burner if usage scales. v1 targets the main account.
+- Storage: `0700` profile dir. Cookies in the persistent Chrome profile only, never copied into `metadata.json`. Breaker file is plain JSON.
+
+## Files
+
+- `package.json` -- patchright dep + `postinstall: patchright install chrome`
+- `scripts/run.mjs` -- CLI dispatcher (login, whoami, chat, quota, diag, status, reset-breaker)
+- `scripts/browser.mjs` -- patchright launcher, atomic pidfile, breaker, multi-transport capture (`attachCapture`), session probe, challenge detect
+- `scripts/login.mjs` -- visible-Chrome login flow
+- `scripts/chat.mjs` -- chat verb with steering primitives + StreamAggregator wiring + DOM fallback
+- `scripts/stream.mjs` -- transport-agnostic StreamAggregator (SSE / NDJSON / generic JSON), terminal-marker classification
+- `scripts/quota.mjs` -- parser for `/api/rate-limits` JSON + 429 + `Retry-After`
+- `scripts/diag.mjs` -- live selector + network survey, dumps screenshots + JSON
+- `tests/stream.test.mjs` -- 16 unit tests for the parser
+- `tests/quota.test.mjs` -- 12 unit tests for the rate-limit parser
+- `tests/fixtures/` -- canned SSE / WS / quota payloads
+
+Run `npm test` from skill root to exercise the parsers without a browser.
+
+## Hardenings (codex+gemini reviewed)
+
+- **Drive UI, read network** (P0): hybrid pattern. Not pure DOM scraping.
+- **Multi-transport capture** (P0): SSE, NDJSON, WS frames -- transport is unknown until diag.
+- **Multi-signal terminal** (P0): SSE [DONE], JSON `done|final|completed|finishReason`, WS close, idle-after-data, transport `loadingFinished`.
+- **DOM fallback** when network-text is empty: covers transports the classifier hasn't learned yet, while still surfacing the answer to the user.
+- **Distinct exit codes** for shadow-ban (4), rate-limit (5), steering failure (6), timeout (7).
+- **Pre-submit user-turn count** verifies submission landed in 10s -- avoids wasting timeoutMs on a no-op click.
+- **Quota probe at chat time** captures `/rate-limits` JSON in parallel with chat capture; explicit fast-fail on `ok=false`.
+- **Storage redaction**: metadata.json strips signed query params from image URLs, omits account email, cookies, auth headers, conversation/message IDs.
+- **Single-strike breaker** on any challenge surface (Codex: "do not soften").
+- **No mouse/typing jitter** (Codex: brittle and adversarial-evasion territory).
+
+## Known limitations (v1)
+
+- Selectors are loose pending the first live `diag` run. Expect to tighten `COMPOSER_SELECTORS` / `SEND_SELECTORS` / model-picker logic after empirical evidence.
+- Streaming-text reconstruction relies on response-body-on-finish for HTTP transports (Playwright doesn't expose chunk-level reads from `response.body()` mid-stream). Real-time UX comes from DOM updates the user doesn't see; the network parser still gets the pristine final text. WS streaming gets per-frame capture and is preferred.
+- Voice mode, image generation via Grok Imagine, and file uploads are out of scope v1. Add when a workflow needs them.
+- Rate-limit endpoint is best-effort -- the candidate list will be pinned after the first diag.
+- No automatic retry on rate-limit / shadow-ban -- caller decides.
