@@ -28,11 +28,10 @@ Single point of entry for cloud LLM calls (Gemini + Sonnet) with account cycling
 cp ~/.gemini/accounts/<email>.json ~/.gemini/oauth_creds.json
 ```
 
-Cached accounts on Adithya's machine (verified 2026-05-01):
+Cached accounts on Adithya's machine (verified 2026-04-30):
+- `avery@seedboxlabs.co` (Workspace Ultra plan, highest quota)
 - `adithya@outerscope.xyz`
 - `adithya@eclipse.builders`
-
-Only Adithya-owned Gemini accounts are in rotation. Server-side, every call leaves a trail in that Google account's "My Activity" — so accounts belonging to anyone else (collaborators, employees, friends) MUST NOT be put in `~/.gemini/accounts/`. If a non-owned cred file shows up, quarantine it to `~/.gemini/.quarantined/` and tell the user.
 
 ## Consumer surface (Python)
 
