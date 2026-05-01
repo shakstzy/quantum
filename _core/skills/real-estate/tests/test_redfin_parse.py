@@ -98,6 +98,58 @@ class TestRedfinPropertyParse(unittest.TestCase):
         self.assertIn("raw", p2)
 
 
+class TestRedfinPropertyHtmlFixture(unittest.TestCase):
+    """Tests against the FULL HTML fixture (which contains every cache key,
+    unlike the trimmed initial-context.json). These pin the fields that were
+    silently empty before the 2026-04-30 fix."""
+
+    @classmethod
+    def setUpClass(cls):
+        html_path = FIXTURES / "redfin-property.html"
+        if not html_path.exists():
+            raise unittest.SkipTest("missing redfin-property.html fixture")
+        html = html_path.read_text()
+        cls.ctx = redfin_parse.initial_context(html)
+        cls.p = redfin_parse.parse_property(cls.ctx)
+
+    def test_schools_populated_on_active_listing(self):
+        self.assertGreater(len(self.p.get("schools") or []), 0,
+                           "active listings should have schools data")
+        # Each school should have at least name + greatSchoolsRating
+        first = self.p["schools"][0]
+        self.assertIn("name", first)
+
+    def test_price_history_shaped(self):
+        ph = self.p.get("price_history") or []
+        self.assertGreater(len(ph), 0)
+        ev = ph[0]
+        for k in ("date_epoch_ms", "event", "price", "history_event_type"):
+            self.assertIn(k, ev)
+
+    def test_tax_history_shaped_or_falls_back_to_publicrecords(self):
+        th = self.p.get("tax_history") or []
+        self.assertGreater(len(th), 0)
+        # Fallback row from publicRecordsInfo has 'year' + 'taxes_due'
+        self.assertTrue(any("year" in t or "date_epoch_ms" in t for t in th))
+
+    def test_listing_agent_name_unwrapped(self):
+        la = self.p.get("listing_agent")
+        self.assertIsInstance(la, dict)
+        # Name MUST be at top level, NOT nested under agentInfo (the bug fix).
+        self.assertIsNotNone(la.get("name"))
+        self.assertNotIn("agentInfo", la)
+
+    def test_nearby_homes_populated(self):
+        nh = self.p.get("nearby_homes") or []
+        self.assertGreater(len(nh), 0)
+        for k in ("address", "price", "sqft", "beds"):
+            self.assertIn(k, nh[0])
+
+    def test_walk_transit_bike_populated(self):
+        for k in ("walk_score", "transit_score", "bike_score"):
+            self.assertIsNotNone(self.p.get(k), f"{k} should be populated")
+
+
 class TestRedfinNetworkDisabled(unittest.TestCase):
     def test_scraper_funcs_blow_up_on_call(self):
         import redfin
