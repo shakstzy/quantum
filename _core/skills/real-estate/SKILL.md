@@ -327,15 +327,15 @@ re cad summary
 **Auto-merge with `re lookup`.** When the address resolves to a covered
 county, `re lookup <address>` adds these `cad_*` keys to the merged view:
 
-- `cad_owner_name` — current taxable owner (Redfin/Zillow don't expose this)
-- `cad_appraised_val`, `cad_assessed_val`, `cad_market_val` — county valuations
-- `cad_year_built`, `cad_living_sqft` — from the improvement-detail file
-- `cad_legal_acreage` — lot acres
-- `cad_homestead_exempt` — `false` = not owner-occupied (signal for investor-owned)
-- `cad_over65_exempt`, `cad_disabled_veteran_exempt` — other exemption flags
-- `cad_deed_dt` — last recorded deed date (TX is a non-disclosure state for sale price, so the price isn't here)
-- `cad_subdivision_cd`, `cad_legal_desc` — official legal references
-- `cad_prop_id`, `cad_county` — for cross-referencing other CAD pulls
+- `cad_owner_name`  -  current taxable owner (Redfin/Zillow don't expose this)
+- `cad_appraised_val`, `cad_assessed_val`, `cad_market_val`  -  county valuations
+- `cad_year_built`, `cad_living_sqft`  -  from the improvement-detail file
+- `cad_legal_acreage`  -  lot acres
+- `cad_homestead_exempt`  -  `false` = not owner-occupied (signal for investor-owned)
+- `cad_over65_exempt`, `cad_disabled_veteran_exempt`  -  other exemption flags
+- `cad_deed_dt`  -  last recorded deed date (TX is a non-disclosure state for sale price, so the price isn't here)
+- `cad_subdivision_cd`, `cad_legal_desc`  -  official legal references
+- `cad_prop_id`, `cad_county`  -  for cross-referencing other CAD pulls
 
 **Why bulk download instead of scraping the CAD search portal:**
 - Free + unlimited (no rate limits, no IP burn)
