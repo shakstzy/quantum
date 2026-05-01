@@ -246,14 +246,19 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
     chatRequestsLog = capture.chatRequests;
     capture.stop();
 
-    // ---- DOM-text supplement: if network text is suspiciously short, take DOM as ground truth ----
+    // ---- Pick final text source ----
+    // Trust the network text whenever the stream terminated via a confirmed
+    // signal from the chat path (json-terminal = isSoftStop / modelResponse;
+    // http-loadingFinished from the chat URL). Use DOM scrape only when the
+    // network parser yielded nothing (transport not classified, idle timeout,
+    // or shadow-ban-but-DOM-has-content fallback path).
     let finalText = aggregator.text;
     let textSource = 'network';
-    if (!finalText || finalText.length < 8) {
+    if (!finalText) {
       const domText = await scrapeAssistantText(ctx.page).catch(() => null);
-      if (domText && domText.length > finalText.length) {
+      if (domText) {
         finalText = domText;
-        textSource = 'dom-supplement';
+        textSource = 'dom-fallback';
       }
     }
 
