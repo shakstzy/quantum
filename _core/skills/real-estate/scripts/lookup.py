@@ -317,10 +317,15 @@ def _merge_views(rf: dict, zw: dict) -> dict:
     _take("home_status", "status")
     _take("days_on_market", "time_on_zillow")
 
-    # History + nested data (each side keeps its own; no merge of arrays)
-    out["price_history"] = (rf.get("history") or zw.get("price_history") or [])
-    out["tax_history"] = (zw.get("tax_history") or rf.get("tax_info") or [])
+    # History + nested data (each side keeps its own; no merge of arrays).
+    # Redfin returns shaped lists at price_history/tax_history; Zillow's
+    # equivalents lazy-load and are usually empty at initial render.
+    out["price_history"] = (rf.get("price_history") or zw.get("price_history")
+                            or rf.get("history") or [])
+    out["tax_history"] = (rf.get("tax_history") or zw.get("tax_history") or [])
     out["schools"] = (rf.get("schools") or zw.get("schools") or [])
+    # Nearby homes - Redfin's similars/listings is richer than Zillow's nearby
+    out["nearby_homes"] = (rf.get("nearby_homes") or zw.get("nearby_homes") or [])
 
     # Listing agent — prefer whichever has more populated fields
     rf_agent = rf.get("listing_agent") or {}
@@ -338,9 +343,19 @@ def _merge_views(rf: dict, zw: dict) -> dict:
     # Open houses: union (each source may know about different ones)
     out["open_houses"] = (rf.get("open_houses") or []) + (zw.get("open_houses") or [])
 
-    # Zillow-only enrichments worth surfacing at top level
-    for k in ("description", "virtual_tour_url", "walk_score", "transit_score",
-             "bike_score", "climate_risk", "nearby_homes", "nearby_cities",
+    # Walk / transit / bike scores: BOTH sources can provide; prefer the
+    # populated one. Redfin's are dicts {value, link, ...}; Zillow's are ints.
+    for k in ("walk_score", "transit_score", "bike_score"):
+        rf_v = rf.get(k)
+        zw_v = zw.get(k)
+        # Redfin dict {value: 42, ...} is richer; flatten to int when zillow needs to win
+        if rf_v not in (None, {}, ''):
+            out[k] = rf_v
+        elif zw_v not in (None, {}, ''):
+            out[k] = zw_v
+
+    # Zillow-only (or Zillow-strongly-prefer) enrichments worth surfacing
+    for k in ("description", "virtual_tour_url", "climate_risk", "nearby_cities",
              "nearby_neighborhoods", "interior_features", "exterior_features",
              "parking_features", "garage_spaces", "heating", "cooling",
              "appliances", "fireplace", "flooring", "stories", "view_description",
