@@ -220,6 +220,7 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
 
       // Quota endpoint (live-confirmed): POST /rest/rate-limits, JSON body
       // { remainingQueries, totalQueries, windowSizeSeconds, low/highEffortRateLimits }.
+      const reqMethod = req.method();
       const isQuotaPath = /\/rest\/rate-limits\b/.test(url);
       if (isQuotaPath) {
         try {
@@ -241,10 +242,13 @@ export async function attachCapture(page, { urlFilter = () => true, debug = fals
         onQuota(parse429Response({ status, headers, body }));
       }
 
-      // Chat surface (live-confirmed): POST /rest/app-chat/conversations/new
-      // and /rest/app-chat/conversations/<id>/responses. Body is NDJSON
-      // even though Content-Type says application/json.
-      const isChatPath = /\/rest\/app-chat\/conversations(\/new|\/[^?]+\/responses?)?(\?|$)/.test(url);
+      // Chat surface (live-confirmed):
+      //   POST /rest/app-chat/conversations/new                  (first turn from root)
+      //   POST /rest/app-chat/conversations/<id>/responses       (follow-up turn)
+      // Body is NDJSON even though Content-Type says application/json.
+      // GET /rest/app-chat/conversations* (listing) MUST be excluded -- that
+      // returns finite JSON and would falsely terminate the aggregator.
+      const isChatPath = reqMethod === 'POST' && /\/rest\/app-chat\/conversations\/(new|[^/?]+\/responses?)(\?|$)/.test(url);
       const isSSE = /text\/event-stream/i.test(ct);
       const isNDJSON = /(application\/x-ndjson|application\/jsonl|application\/stream\+json)/i.test(ct);
       if (!isChatPath && !isSSE && !isNDJSON) return;
