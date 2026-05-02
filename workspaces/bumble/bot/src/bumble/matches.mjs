@@ -9,6 +9,7 @@ import { humanScroll, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { logSession } from "../runtime/logger.mjs";
 import { upsertMatch, appendMessages } from "../runtime/entity-store.mjs";
 import { loadCaps } from "../runtime/caps.mjs";
+import { assertDateMode } from "../runtime/mode-guard.mjs";
 
 // Read all contact rows from the sidebar. Returns one entry per row with the
 // stable matchId, the clean name, and any visible expiry signal.
@@ -19,6 +20,9 @@ export async function scrapeMatches(page) {
   }
   await gotoMatches(page);
   await scanForHalts(page);
+  // CODEX-R6-P0-9: assert Date mode after navigation. /app surface is where
+  // mode_picker selectors resolve - asserting before navigation always nulls.
+  await assertDateMode(page);
 
   // Scroll through the conversations list to load all rows (lazy-rendered).
   // Cap at 12 scroll passes - typical user has < 50 active conversations.
