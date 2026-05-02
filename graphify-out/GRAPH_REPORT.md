@@ -1,7 +1,8 @@
-# Graph Report - .  (2026-05-02)
+# Graph Report - QUANTUM  (2026-05-02)
 
 ## Corpus Check
-- cluster-only mode — file stats not available
+- 3342 files · ~11,797,907 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
 - 13945 nodes · 12809 edges · 42 communities detected
