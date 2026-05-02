@@ -463,18 +463,24 @@ export function extractPhoneFromText(text) {
 export async function appendMessages(slug, messages) {
   return await withEntityLock(async () => {
     const ent = await loadEntity(slug);
-    const { idents: have, counts } = existingIdentities(ent.conversation);
+    // CODEX-R8 / GEMINI-P1 + repull-bug fix: dedup must walk LIVE messages in
+    // order, comparing each (direction, text, occurrence-in-live) tuple
+    // against the LOCAL occurrence-in-file. The previous attempt pre-populated
+    // a counter from the local file, so the very first live "hi" got ordinal
+    // = local_count, and never matched local's ordinal-0 entry — every re-pull
+    // double-appended.
+    const { idents: localIdents } = existingIdentities(ent.conversation);
+    const liveCounts = new Map();
     const newLines = [];
     let lastTs = ent.meta.last_activity;
     let extractedPhone = null;
     for (const m of messages) {
       const norm = String(m.text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
       const key = `${m.direction}::${norm}`;
-      const occ = counts.get(key) || 0;
-      const ident = messageIdentity(m.direction, m.text, occ);
-      if (have.has(ident)) continue;
-      have.add(ident);
-      counts.set(key, occ + 1);
+      const occ = liveCounts.get(key) || 0;
+      liveCounts.set(key, occ + 1);
+      const ident = `${key}::${occ}`;
+      if (localIdents.has(ident)) continue; // already in local (matched by ordinal position)
       newLines.push(fmtMessageLine(m));
       if (m.ts && (!lastTs || m.ts > lastTs)) lastTs = m.ts;
       if (!extractedPhone && !ent.meta.phone) {
