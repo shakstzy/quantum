@@ -1,11 +1,13 @@
 ---
 name: reddit
-description: Read Reddit (search, listings, posts + comments, users) via a tiny stdlib Python CLI that returns terse markdown. Built specifically to avoid context bloat from raw old.reddit.com HTML or full JSON dumps.
+description: Read Reddit (search, listings, posts + comments, users, subreddit metadata) via a tiny stdlib Python CLI that returns terse markdown. Built specifically to avoid context bloat from raw old.reddit.com HTML or full JSON dumps. Anonymous by default; optional OAuth env vars lift rate limit 6x.
 ---
 
 # reddit
 
-Single-file Python script. Stdlib only, no PRAW, no auth. Hits Reddit's public `*.json` endpoints (read-only). Default output is compact markdown; `--json` returns cleaned structured data.
+Single-file Python script. Stdlib only, no PRAW. Hits Reddit's `*.json` endpoints. Default output is compact markdown; `--json` returns cleaned structured data.
+
+**Why this skill exists:** native HTTP beats firecrawl/brave-search for site-specific reads. Zero context cost until trigger fires.
 
 ## When this fires
 
@@ -18,7 +20,9 @@ Do NOT fire for:
 
 ## Auth
 
-None. Public JSON endpoints. Reddit rate-limits unauth'd reads to ~10 req/min per IP  -  back off on 429 (script auto-retries twice with exponential backoff, then surfaces).
+**Default:** anonymous, no auth. Reddit rate-limits unauth'd reads to ~10 req/min per IP. Script auto-retries 429s twice (respects `Retry-After` header), then surfaces.
+
+**Optional OAuth (6x rate limit):** set `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` in env (e.g. `.claude/settings.local.json`). Script switches to `oauth.reddit.com` via `client_credentials` grant, lifting cap to ~60 req/min. Token cached at `~/.cache/reddit-cli/token.json` (mode 0600). To get creds: https://www.reddit.com/prefs/apps → "create app" → script type → grab client_id (top of card) and secret. Read-only, no user account access.
 
 ## Procedure
 
@@ -35,17 +39,24 @@ Subcommands:
 reddit.py search "<query>" [--sub SUB] [--limit N=10] \
   [--time hour|day|week|month|year|all] [--sort relevance|hot|top|new|comments]
 
-# Listings
+# Listings (sort orders)
 reddit.py hot <subreddit> [--limit N=10]
 reddit.py new <subreddit> [--limit N=10]
 reddit.py top <subreddit> [--time hour|day|week|month|year|all=day] [--limit N=10]
+reddit.py controversial <subreddit> [--time ...=day] [--limit N=10]
+reddit.py rising <subreddit> [--limit N=10]
 
 # Single post + comment thread
-reddit.py post <id|url> [--top N=10] [--depth D=2]
+reddit.py post <id|url> [--top N=10] [--depth D=2] [--links]
 #   id can be a bare ID (1sxmg6z), a full URL, or /r/.../comments/ID/...
+#   --links extracts external URLs cited in shown comments (deduped, reddit-internal filtered)
 
 # User activity
 reddit.py user <username> [--kind submitted|comments] [--limit N=10]
+
+# Subreddit metadata (about page)
+reddit.py info <subreddit>
+#   subscribers, online count, age, type (public/private/restricted), NSFW, description
 ```
 
 Global flags (work before OR after the subcommand):
