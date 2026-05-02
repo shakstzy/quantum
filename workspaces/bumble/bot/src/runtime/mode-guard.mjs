@@ -1,9 +1,11 @@
-// Mode guard. Bumble has Date / BFF / Bizz modes. The bot must always be in Date mode.
-// Halt loudly if it's not - reading BFF chats with dating-voice drafting is the failure
-// mode this guards against.
+// Mode guard. Bumble web ONLY renders Date mode (BFF/Bizz live on subdomain
+// surfaces or in mobile app). Discovery showed there is no Date/BFF/Bizz toggle
+// in the web SPA - the conversations-tab-section + encounters-user being present
+// IS the active-Date marker.
 //
-// Selector for the active mode indicator lives at `selectors.mode_picker`. Until
-// discovery is done, this is best-effort: it queries by aria-label / text.
+// Strategy: presence-based. If sels.mode_picker resolves on the page, we're in
+// Date mode. If it does not resolve when expected (post-discovery, on the app
+// surface), halt - we may have been forced to a different surface.
 
 import { selectors } from "./detection.mjs";
 import { setHalt } from "./halt.mjs";
@@ -17,69 +19,32 @@ const ACCEPTED_MODES = ["date", "Date"];
 // is explicitly marked active (aria-current, aria-selected, or active/selected
 // CSS class). If no active marker is found, return null and let the caller
 // decide (assertDateMode treats null as "could not detect, do not halt").
+// Presence-based detection: if any mode_picker selector resolves on the page,
+// we're in Date mode (Bumble web only renders Date). If NO picker resolves AND
+// the URL is on /app, that's a real signal something's wrong.
 export async function readActiveMode(page) {
   const sels = await selectors();
   const sel = sels.mode_picker;
-  // CODEX-R4-P0-4: when mode_picker is configured, do NOT trust raw textContent;
-  // verify the element has an active marker (aria-current/aria-selected/active class).
-  // The previous shape false-passed when the selector pointed at a visible-but-
-  // inactive Date label.
-  if (sel?.selector) {
+  if (!sel?.selector) return null;
+  const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
+  for (const q of candidates) {
     try {
-      const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
-      for (const q of candidates) {
-        const result = await page.$$eval(q, (els) => {
-          const isActive = (el) => {
-            if (!el) return false;
-            if (el.getAttribute("aria-current") === "page" || el.getAttribute("aria-current") === "true") return true;
-            if (el.getAttribute("aria-selected") === "true") return true;
-            if (el.dataset && (el.dataset.active === "true" || el.dataset.selected === "true")) return true;
-            const cls = el.getAttribute("class") || "";
-            if (/\b(active|selected|is-active|is-selected|current)\b/.test(cls)) return true;
-            return false;
-          };
-          for (const el of els) {
-            const txt = (el.textContent || "").trim() || el.getAttribute("aria-label");
-            if (!txt) continue;
-            // Walk up to 3 ancestors looking for the active marker.
-            let cur = el;
-            for (let d = 0; cur && d < 4; d++, cur = cur.parentElement) {
-              if (isActive(cur)) return txt;
-            }
-          }
-          return null;
-        });
-        if (result) return result;
-      }
-    } catch { /* fall through to text-walk fallback */ }
+      const found = await page.$(q);
+      if (found) return "Date";
+    } catch { /* invalid selector; try next */ }
   }
-  // Safe fallback: only consider a mode "active" if the element has an active
-  // marker. Reject any element that is merely visible.
-  return await page.evaluate(() => {
-    const labels = ["Date", "BFF", "Bizz"];
-    const isActive = (el) => {
-      if (!el) return false;
-      if (el.getAttribute("aria-current") === "page" || el.getAttribute("aria-current") === "true") return true;
-      if (el.getAttribute("aria-selected") === "true") return true;
-      if (el.dataset && (el.dataset.active === "true" || el.dataset.selected === "true")) return true;
-      const cls = el.getAttribute("class") || "";
-      if (/\b(active|selected|is-active|is-selected|current)\b/.test(cls)) return true;
-      return false;
-    };
-    for (const label of labels) {
-      // exact-text match across all elements; check ancestor chain for an active marker
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-      let node;
-      while ((node = walker.nextNode())) {
-        if ((node.textContent || "").trim() !== label) continue;
-        let cur = node;
-        for (let depth = 0; cur && depth < 4; depth++, cur = cur.parentElement) {
-          if (isActive(cur)) return label;
-        }
-      }
-    }
-    return null;
-  });
+  // Also reject if BFF or Bizz markers ARE present (signals active non-Date mode).
+  try {
+    const bizzy = await page.evaluate(() => {
+      const text = (document.body?.innerText || "").toLowerCase();
+      // BFF/Bizz mode is signalled by their distinctive surface labels.
+      const bffActive = /\bbff\s+mode\b|\bbumble\s+bff\b/.test(text) && !/switch to bff/.test(text);
+      const bizzActive = /\bbizz\s+mode\b|\bbumble\s+bizz\b/.test(text) && !/switch to bizz/.test(text);
+      return bffActive ? "BFF" : (bizzActive ? "Bizz" : null);
+    });
+    if (bizzy) return bizzy;
+  } catch { /* skip */ }
+  return null;
 }
 
 // CODEX-R2-P0-5: when mode_picker selector IS configured (post-discovery), null
