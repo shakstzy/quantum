@@ -1,0 +1,26 @@
+{
+  "name": "quantum-bumble-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Patchright-driven Bumble automation for QUANTUM. Human-paced, ban-aversion priority. No api.bumble.com.",
+  "scripts": {
+    "postinstall": "patchright install chromium",
+    "login": "node scripts/login.mjs",
+    "swipe": "node scripts/swipe.mjs",
+    "pull": "node scripts/pull.mjs",
+    "decide": "node scripts/decide.mjs",
+    "send": "node scripts/send.mjs",
+    "status": "node scripts/status.mjs",
+    "selector-check": "node scripts/selector-check.mjs",
+    "self-check": "node scripts/self-check.mjs",
+    "diag": "node scripts/diag.mjs",
+    "discover-dom": "node scripts/discover-dom.mjs",
+    "discover-network": "node scripts/discover-network.mjs"
+  },
+  "dependencies": {
+    "ghost-cursor-playwright": "^2.1.0",
+    "patchright": "^1.59.4",
+    "proper-lockfile": "^4.1.2"
+  }
+}

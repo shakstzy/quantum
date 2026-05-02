@@ -1,0 +1,11 @@
+{
+  "_comment": "Right-swipe rule. Mirrors config/voice/swipe-filter.md. Update there if the philosophy changes; this file is the machine-readable cap.",
+  "age_min": 19,
+  "age_max": 26,
+  "max_distance_mi": 70,
+  "right_swipe_if_in_filter": true,
+  "auto_pass_if_distance_above": 70,
+  "auto_pass_if_age_below": 19,
+  "auto_pass_if_age_above": 26,
+  "auto_pass_if_no_bio_and_no_prompts": true
+}

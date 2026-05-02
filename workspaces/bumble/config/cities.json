@@ -1,0 +1,12 @@
+{
+  "_comment": "City buckets. Resolution: phone area-code map first, then Bumble distance from Austin (<=100mi -> austin), else default home (austin).",
+  "buckets": ["austin", "sf", "la", "nyc"],
+  "default_home": "austin",
+  "area_code_map": {
+    "austin": ["512", "737"],
+    "sf":     ["415", "628", "510"],
+    "la":     ["213", "323", "310", "424", "747", "818", "626"],
+    "nyc":    ["212", "646", "332", "917", "718", "347", "929"]
+  },
+  "near_distance_mi": 100
+}

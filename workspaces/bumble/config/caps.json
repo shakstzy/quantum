@@ -1,0 +1,26 @@
+{
+  "_comment": "Tighter than Tinder. Bumble's anti-bot stack is at least as aggressive (Cloudflare + behavioural fingerprinting + 24h match window magnifies activity-pattern signals).",
+  "swipes": {
+    "per_day": 50,
+    "per_session_min": 12,
+    "per_session_max": 22,
+    "right_swipe_ratio_max": 0.5,
+    "between_swipes_ms": [1100, 3100],
+    "global_min_gap_ms": 1200
+  },
+  "messages": {
+    "per_hour": 10,
+    "between_messages_ms": [60000, 300000],
+    "typing_ms_per_char": [70, 150]
+  },
+  "scrape": {
+    "matches_per_day": 6,
+    "thread_opens_per_session_max": 18,
+    "between_thread_opens_ms": [800, 1900]
+  },
+  "global": {
+    "skip_day_probability": 0.20,
+    "halt_state_path": "~/.quantum/bumble/.halt",
+    "rate_state_path": "~/.quantum/bumble/.rate-state.json"
+  }
+}

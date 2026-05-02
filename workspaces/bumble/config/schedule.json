@@ -1,0 +1,17 @@
+{
+  "_comment": "Session windows in America/Chicago (Adithya is CST). launchd plists pick a randomized start within each window. Empty windows = no session.",
+  "swipe_windows": [
+    { "label": "lunch", "start_hour": 12, "end_hour": 13, "duration_min_min": 5, "duration_max_min": 12 },
+    { "label": "evening", "start_hour": 21, "end_hour": 22, "duration_min_min": 8, "duration_max_min": 15 }
+  ],
+  "pull_windows": [
+    { "label": "afternoon", "start_hour": 15, "end_hour": 16 },
+    { "label": "late", "start_hour": 23, "end_hour": 23 }
+  ],
+  "decide_windows": [
+    { "label": "after_pull_afternoon", "start_hour": 16, "end_hour": 17 },
+    { "label": "after_pull_late", "start_hour": 23, "end_hour": 23 }
+  ],
+  "send_cadence_min_minutes": 35,
+  "send_cadence_max_minutes": 60
+}
