@@ -31,13 +31,36 @@ const SEND_SELECTORS = [
 
 const MODEL_PICKER_SELECTOR = 'button[aria-label="Model select"]';
 
-// Mode is unified into the model picker per the live setting
-// `useModelModeSelector3: true`. Each picker option doubles as a mode toggle.
-const MODE_LABELS = {
-  think: ['think', 'thinking', 'expert'],
-  deepsearch: ['deepsearch', 'deep search', 'research'],
-  default: ['fast', 'auto']
+// Live picker contents (verified 2026-05-02 against grok.com):
+//   Auto     - "Chooses Fast or Expert"
+//   Fast     - "Quick responses"
+//   Expert   - "Thinks hard"            (= what used to be Think mode)
+//   Heavy    - "Team of Experts"        (= the new heavy-research tier)
+//   Grok 4.3 - "(beta) Early Access"
+//
+// xAI removed the standalone DeepSearch mode; --mode deepsearch fails loud
+// with a redirect-to-heavy message rather than picking the wrong model.
+//
+// Each menu item's innerText concatenates the title + tagline (e.g.
+// "Expert Thinks hard"), so we list both forms as candidates -- pickFromOpenMenu
+// matches via exact-then-contains, so the title alone resolves correctly.
+const MODEL_ALIASES = {
+  auto:        ['Auto', 'Auto Chooses Fast or Expert'],
+  default:     ['Auto', 'Auto Chooses Fast or Expert'],
+  fast:        ['Fast', 'Fast Quick responses'],
+  expert:      ['Expert', 'Expert Thinks hard'],
+  think:       ['Expert', 'Expert Thinks hard'],     // legacy alias
+  thinking:    ['Expert', 'Expert Thinks hard'],     // legacy alias
+  heavy:       ['Heavy', 'Heavy Team of Experts'],
+  research:    ['Heavy', 'Heavy Team of Experts'],   // closest match for old "research" intent
+  'grok-4.3':  ['Grok 4.3', 'Grok 4.3 (beta) Early Access'],
+  'grok-4-3':  ['Grok 4.3', 'Grok 4.3 (beta) Early Access'],
+  beta:        ['Grok 4.3', 'Grok 4.3 (beta) Early Access']
 };
+
+// Modes that map to a model alias above are valid; deepsearch is explicitly
+// dead (removed by xAI; we fail loud rather than silently picking Heavy or Expert).
+const REMOVED_MODES = new Set(['deepsearch', 'deep search', 'deep-search']);
 
 // Exit codes (used by run.mjs / cron pipelines)
 //   0   ok
@@ -136,18 +159,28 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
       if (bodyReadCompleteAt == null) bodyReadCompleteAt = Date.now();
     });
 
-    // ---- Steering: model + mode ----
-    if (model) {
-      const ok = await trySelectModel(ctx.page, model, debug);
-      if (!ok) {
-        if (debug) process.stderr.write(`[chat] could not pick model "${model}"; continuing with current default\n`);
-      }
-    }
+    // ---- Steering: unified model picker (mode is now an alias) ----
+    // grok.com unified mode + model into a single picker. Resolve any
+    // legacy --mode value to its model alias, then call pickModel once.
+    let effectiveModel = model;
     if (mode && mode !== 'default') {
-      const ok = await tryToggleMode(ctx.page, mode, debug);
-      if (!ok) {
-        if (debug) process.stderr.write(`[chat] could not toggle mode "${mode}"; continuing without\n`);
+      if (REMOVED_MODES.has(mode.toLowerCase())) {
+        throw exitErr(EXIT.USAGE,
+          'DeepSearch was removed from grok.com (verified 2026-05-02). Use --model heavy ' +
+          '(multi-expert "Team of Experts" tier) for deep research, or --model expert for grok-3 thinking.');
       }
+      // mode → model alias (think→Expert, heavy→Heavy, etc.) -- explicit --model wins.
+      if (!effectiveModel) effectiveModel = mode;
+    }
+    if (effectiveModel) {
+      const matched = await pickModel(ctx.page, effectiveModel, debug);
+      if (!matched) {
+        const available = Object.keys(MODEL_ALIASES).filter(k => !['default','think','thinking','beta','grok-4-3','research'].includes(k)).join(', ');
+        throw exitErr(EXIT.STEERING,
+          `Could not select model "${effectiveModel}". Picker may have changed. ` +
+          `Available aliases: ${available}. Run \`run.mjs diag\` to inspect.`);
+      }
+      if (debug) process.stderr.write(`[chat] selected model: ${matched}\n`);
     }
 
     // ---- Compose + send ----
@@ -376,19 +409,39 @@ async function pickFromOpenMenu(page, candidates, debug) {
   return result.matched || null;
 }
 
-async function trySelectModel(page, modelName, debug) {
-  if (!await openModelPicker(page, debug)) return false;
-  const matched = await pickFromOpenMenu(page, [modelName], debug);
-  await waitForPickerClosed(page, debug);
-  return !!matched;
+// Unified model selection. Accepts either a real picker label ("Heavy") or
+// an alias ("think", "research", "beta"). Returns the matched label string,
+// or null if the picker didn't have it.
+//
+// Recovery: if the menu opens but no label matches, we MUST close the picker
+// before returning -- otherwise the open menu portal overlays the composer
+// and the next composer.click() blocks on `<html> intercepts pointer events`
+// for the full 30s default timeout. (Hit live 2026-05-02 with --mode deepsearch.)
+async function pickModel(page, modelName, debug) {
+  const lower = (modelName || '').toLowerCase().trim();
+  const candidates = MODEL_ALIASES[lower] || [modelName];
+  if (!await openModelPicker(page, debug)) return null;
+  const matched = await pickFromOpenMenu(page, candidates, debug);
+  if (!matched) {
+    if (debug) process.stderr.write(`[chat] no menu match for "${modelName}"; force-closing picker\n`);
+    await ensurePickerClosed(page, debug);
+  } else {
+    await waitForPickerClosed(page, debug);
+  }
+  return matched;
 }
 
-async function tryToggleMode(page, mode, debug) {
-  const labels = MODE_LABELS[mode] || [mode];
-  if (!await openModelPicker(page, debug)) return false;
-  const matched = await pickFromOpenMenu(page, labels, debug);
+// Idempotently make sure the picker is closed. If aria-expanded is still true,
+// click the picker button again (which natively toggles closed). Never use
+// Escape (round 1 P2: clips composer typing) or synthetic body click.
+async function ensurePickerClosed(page, debug) {
+  const open = await page.evaluate(sel =>
+    document.querySelector(sel)?.getAttribute('aria-expanded') === 'true',
+    MODEL_PICKER_SELECTOR
+  ).catch(() => false);
+  if (!open) return;
+  await page.click(MODEL_PICKER_SELECTOR, { timeout: 2000 }).catch(() => {});
   await waitForPickerClosed(page, debug);
-  return !!matched;
 }
 
 // After picking from the menu, the picker animates closed (~200-500ms in

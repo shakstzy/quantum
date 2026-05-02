@@ -94,7 +94,7 @@ export async function readVisibleCard(page) {
     // Name + age from the first text chunk.
     const story = root.querySelector("[data-qa-role='encounters-story']") || root;
     const fullText = (story.textContent || "").replace(/\s+/g, " ").trim();
-    const nm = fullText.match(/^([\p{L}][\p{L}\s'\-]{0,40})[,\s]+(\d{2,3})\b/u);
+    const nm = fullText.match(/^([\p{L}][\p{L}\s'\-]{0,40}),\s*(\d{1,3})/u);
     if (nm) { out.name = nm[1].trim(); out.age = parseInt(nm[2], 10); }
 
     // Photo verified flag.
