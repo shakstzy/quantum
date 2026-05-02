@@ -32,6 +32,11 @@ function formatProfileDiff(diff) {
   return lines.length ? lines.join("\n") : null;
 }
 
+function formatPrompts(prompts) {
+  if (!Array.isArray(prompts) || prompts.length === 0) return "?";
+  return prompts.map(p => `    Q: ${p.q}\n    A: ${p.a}`).join("\n");
+}
+
 function buildPrompt({ context, intent, voice }) {
   const diffBlock = formatProfileDiff(context.profile_diff);
   const lines = [
@@ -43,14 +48,20 @@ function buildPrompt({ context, intent, voice }) {
     "match profile:",
     `  name: ${context.name || "?"}`,
     `  age: ${context.age ?? "?"}`,
+    `  height: ${context.height || "?"}`,
     `  bio: ${context.bio || "?"}`,
     `  looking_for: ${context.looking_for || "?"}`,
     `  opening_move: ${context.opening_move || "?"}`,
+    `  jobs: ${(context.jobs || []).join(", ") || "?"}`,
+    `  schools: ${(context.schools || []).join(", ") || "?"}`,
+    `  lives_in: ${context.lives_in || "?"}`,
+    `  hometown: ${context.hometown || "?"}`,
+    `  lifestyle_badges: ${(context.lifestyle_badges || []).join(", ") || "?"}`,
     `  interests: ${(context.interests || []).join(", ") || "?"}`,
     `  basics: ${formatBasicsLifestyle(context.basics)}`,
     `  lifestyle: ${formatBasicsLifestyle(context.lifestyle)}`,
-    `  schools: ${(context.schools || []).join(", ") || "?"}`,
-    `  jobs: ${(context.jobs || []).join(", ") || "?"}`,
+    `  prompts:`,
+    `${formatPrompts(context.prompts)}`,
     "",
   ];
   if (diffBlock) {
