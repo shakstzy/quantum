@@ -1,25 +1,139 @@
 {
-  "_comment": "DOM selectors for bumble.com web. EMPTY UNTIL DISCOVERY. Run scripts/discover-dom.mjs (with manual login completed) to populate. Each entry will get last_verified date stamped by selector-check.",
-  "rec_card": { "selector": null, "alt": [], "last_verified": null },
-  "rec_card_name": { "selector": null, "alt": [], "last_verified": null },
-  "rec_card_age": { "selector": null, "alt": [], "last_verified": null },
-  "rec_card_distance": { "selector": null, "alt": [], "last_verified": null },
-  "rec_card_bio": { "selector": null, "alt": [], "last_verified": null },
-  "like_button": { "selector": null, "alt": [], "last_verified": null },
-  "pass_button": { "_note": "Bumble's UI label is 'Pass' (not 'Nope'). Code uses pass_button consistently.", "selector": null, "alt": [], "last_verified": null },
-  "super_like_button": { "_note": "default off (paid + bot signal)", "selector": null, "alt": [], "last_verified": null },
-  "matches_tab": { "selector": null, "alt": [], "last_verified": null },
-  "matches_list_item": { "selector": null, "alt": [], "last_verified": null },
-  "thread_messages": { "selector": null, "alt": [], "last_verified": null },
-  "thread_input": { "selector": null, "alt": [], "last_verified": null },
-  "thread_send": { "selector": null, "alt": [], "last_verified": null },
-  "thread_profile_pane": { "selector": null, "alt": [], "last_verified": null },
-  "mode_picker": { "_note": "Date / BFF / Bizz toggle. Used by mode-guard to assert Date is active.", "selector": null, "alt": [], "last_verified": null },
-  "extend_match_button": { "_note": "24h extend match. Bumble pre-message expiry mitigation.", "selector": null, "alt": [], "last_verified": null },
-  "match_expiry_indicator": { "_note": "The clock/banner that shows 'X hours left' on a match.", "selector": null, "alt": [], "last_verified": null },
-  "turnstile_iframe": { "_note": "Cloudflare Turnstile. P0 halt.", "selector": "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']", "alt": [], "last_verified": null },
-  "photo_verify_modal": { "_note": "Bumble's photo verification modal.", "selector": null, "alt": [], "last_verified": null },
-  "rate_limit_banner": { "selector": null, "alt": [], "last_verified": null },
-  "login_wall": { "selector": null, "alt": [], "last_verified": null },
-  "account_restriction_banner": { "_note": "Bumble's 'We've noticed unusual activity' shape.", "selector": null, "alt": [], "last_verified": null }
+  "_comment": "DOM selectors for bumble.com/app web SPA. All conversations/swipes/profile live at the same /app URL; routing is internal SPA state, not URL paths. Discovered 2026-05-02 via scripts/discover-deep + scripts/discover-qa. Bumble exposes data-qa-role attrs which are the most stable selectors.",
+  "rec_card": {
+    "_note": "encounters-user is the rec card container. Text is 'Name, ageStuff...'. Use encounters-story for the article-shaped wrapper.",
+    "selector": "[data-qa-role='encounters-user']",
+    "alt": ["[data-qa-role='encounters-story']", ".encounters-story-profile"],
+    "last_verified": "2026-05-02"
+  },
+  "rec_card_name": {
+    "_note": "Read encounters-user textContent; first line matches /^([\\p{L}\\p{N}\\s'-]+),\\s*(\\d+)/ for name + age.",
+    "selector": "[data-qa-role='encounters-user']",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "rec_card_age": {
+    "_note": "Parsed from the same text as rec_card_name. No standalone selector.",
+    "selector": null,
+    "alt": [],
+    "last_verified": "2026-05-02-parsed-from-name"
+  },
+  "rec_card_distance": {
+    "_note": "Distance lives inside encounters-story-profile. Pattern '<n> miles away' or 'In <city>'.",
+    "selector": ".encounters-story-profile",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "rec_card_bio": {
+    "_note": "encounters-story-section--about contains the About section. encounters-story-section--question for prompts.",
+    "selector": ".encounters-story-section--about",
+    "alt": [".encounters-story-section--question"],
+    "last_verified": "2026-05-02"
+  },
+  "like_button": {
+    "selector": "[data-qa-role='encounters-action-like']",
+    "alt": ["[aria-label='Like']"],
+    "last_verified": "2026-05-02"
+  },
+  "pass_button": {
+    "selector": "[data-qa-role='encounters-action-dislike']",
+    "alt": ["[aria-label='Pass']"],
+    "last_verified": "2026-05-02"
+  },
+  "super_like_button": {
+    "_note": "DEFAULT OFF. SuperSwipes are paid + a clear bot signature. Only enable explicitly per-session.",
+    "selector": "[data-qa-role='encounters-action-superswipe']",
+    "alt": ["[aria-label='SuperSwipe']"],
+    "last_verified": "2026-05-02"
+  },
+  "matches_tab": {
+    "_note": "There is no separate matches URL. The conversations sidebar section IS the match list. Use the section as a presence check.",
+    "selector": "[data-qa-role='conversations-tab-section']",
+    "alt": ["[data-qa-role='conversations-tab-section-content']"],
+    "last_verified": "2026-05-02"
+  },
+  "matches_list_item": {
+    "_note": "Each conversation row in the sidebar. Click navigates SPA-side to the thread (URL becomes /app/connections, no per-thread route). Selected item gets is-selected class.",
+    "selector": "[data-qa-role='contact']",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "thread_messages": {
+    "_note": "Each message bubble. Direction class: message--in (her), message--out (you). message--last marks the most recent.",
+    "selector": ".message",
+    "alt": [".message__content"],
+    "last_verified": "2026-05-02"
+  },
+  "thread_input": {
+    "_note": "Textarea inside the message-field composer. Bumble uses a pure textarea, NOT contenteditable.",
+    "selector": "textarea.textarea__input",
+    "alt": [".message-field__input textarea", "[data-qa-role='chat-input'] textarea"],
+    "last_verified": "2026-05-02"
+  },
+  "thread_send": {
+    "_note": "Send button in the message-field. Click target.",
+    "selector": ".message-field__send",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "thread_profile_pane": {
+    "_note": "Right-side profile pane in connections view. .page__profile.is-expanded when open.",
+    "selector": ".page__profile",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "thread_header_name": {
+    "_note": "Match's display name in the thread header (left of the menu).",
+    "selector": ".messages-header__name",
+    "alt": [".messages-header__content"],
+    "last_verified": "2026-05-02"
+  },
+  "mode_picker": {
+    "_note": "Bumble web only renders the Date mode app. The presence of [data-qa-role='encounters-user'] OR [data-qa-role='conversations-tab-section'] confirms Date mode. The mode-guard's active-marker check looks for these to assert.",
+    "selector": "[data-qa-role='conversations-tab-section']",
+    "alt": ["[data-qa-role='encounters-user']"],
+    "last_verified": "2026-05-02"
+  },
+  "extend_match_button": {
+    "_note": "Not yet observed. When a conversation is <24h to expire, an Extend button appears in the thread header or in a banner. Add when first seen.",
+    "selector": null,
+    "alt": [],
+    "last_verified": null
+  },
+  "match_expiry_indicator": {
+    "_note": "Per-conversation expiry text in the sidebar contact row. Also '.contact-avatar--color-expiration-status-average' colors the avatar by urgency. In-thread: '.messages-notice.expiration-status-average' system notice.",
+    "selector": ".contact__expiration-status-text",
+    "alt": [".messages-notice.expiration-status-average", ".avatar__expiration-progress"],
+    "last_verified": "2026-05-02"
+  },
+  "turnstile_iframe": {
+    "_note": "Cloudflare Turnstile. P0 halt. Stable URL match.",
+    "selector": "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
+    "alt": [],
+    "last_verified": "2026-05-02"
+  },
+  "photo_verify_modal": {
+    "_note": "Bumble's photo verification modal. Not observed live; pre-emptive selector + text fallback. Update via diag.mjs when seen.",
+    "selector": "[data-qa-role='photo-verify-modal'], [class*='photo-verification-modal']",
+    "alt": ["text=Verify your photos", ".photo-verification"],
+    "last_verified": null
+  },
+  "rate_limit_banner": {
+    "_note": "Not observed live. Bumble may surface as toast or modal. Update via diag.mjs.",
+    "selector": "[class*='rate-limit'], [class*='cooldown']",
+    "alt": [],
+    "last_verified": null
+  },
+  "login_wall": {
+    "_note": "If session expires, bumble.com/get-started shows 'Quick sign in' / 'Continue with other methods'. The text is unique enough to use as a halt signal.",
+    "selector": "text=Quick sign in",
+    "alt": ["text=Continue with other methods"],
+    "last_verified": "2026-05-02"
+  },
+  "account_restriction_banner": {
+    "_note": "Not observed live. Update via diag.mjs if hit.",
+    "selector": "[class*='account-restriction'], [class*='unusual-activity']",
+    "alt": [],
+    "last_verified": null
+  }
 }
