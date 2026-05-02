@@ -50,6 +50,11 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
   if (!sels.like_button?.selector || !sels.pass_button?.selector) {
     throw new Error("pre-discovery: swipeSession needs like_button + pass_button selectors. Run scripts/discover-dom.mjs.");
   }
+  // CODEX-R3-P0-4: when swipe-target selectors ARE configured, mode_picker MUST
+  // also be configured. Bumble Date/BFF/Bizz makes mode-failure dangerous.
+  if (!sels.mode_picker?.selector) {
+    throw new Error("missing_selector: mode_picker is null but swipe-target selectors are wired. Refusing to swipe without provable Date mode. Populate config/selectors.json.mode_picker via scripts/discover-dom.mjs.");
+  }
 
   const avgGap = (caps.swipes.between_swipes_ms[0] + caps.swipes.between_swipes_ms[1]) / 2;
   const estMs = caps.swipes.per_session_max * avgGap * 1.5;
@@ -111,8 +116,29 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       break;
     }
 
-    // CODEX-R1-P1-3: only increment counter AFTER successful click. A selector
-    // miss should not consume daily quota.
+    // CODEX-R3-P0-5: verify the card changed after the click. If the next
+    // visible card has the same name, the click missed - do NOT count it,
+    // log a stuck-card event, and back off. Repeated stuck-card behavior is
+    // a clearer Bumble bot signature than the swipes themselves.
+    let cardChanged = false;
+    for (let probe = 0; probe < 6; probe++) {
+      await sleep(jitter(250, 500));
+      const next = await readVisibleCard(page);
+      if (!next.name || next.name !== profile.name) { cardChanged = true; break; }
+    }
+    if (!cardChanged) {
+      await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, day_count: null });
+      // Don't increment cap, don't increment swiped. Bail the loop - selector likely drifted.
+      stopReason = "stuck_card_after_click";
+      break;
+    }
+
+    // CODEX-R3-P0-6: scan halts AFTER the click too. Turnstile/photo-verify can
+    // appear post-click; without this scan, we'd exit the session "clean" and
+    // the next cron starts without .halt set.
+    try { await scanForHalts(page); } catch (e) { stopReason = e.message; break; }
+
+    // Only NOW commit the cap (post-verified card change + post-halt scan).
     let counters;
     try {
       counters = await checkAndIncrement("swipe");

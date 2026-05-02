@@ -104,16 +104,17 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   try { await page.fill(inputSel, ""); } catch { /* continue */ }
   await sleep(jitter(200, 500));
 
+  // CODEX-R3-P1: dryRun must not touch the real composer. Decide BEFORE typing.
+  if (dryRun) {
+    console.log(`DRY RUN: would have sent to ${matchId}: ${JSON.stringify(text)}`);
+    return { sent: false, dryRun: true };
+  }
+
   // Belt-and-suspenders cleanup: if anything below throws, a finally clears the input.
   let cleanupNeeded = true;
   try {
     await humanType(page, text, { profile: text.length > 60 ? "thinky" : "normal" });
     await sleep(jitter(600, 1800));
-
-    if (dryRun) {
-      console.log(`DRY RUN: would have sent to ${matchId}: ${JSON.stringify(text)}`);
-      return { sent: false, dryRun: true };
-    }
 
     let sent = false;
     if (sels.thread_send?.selector) {

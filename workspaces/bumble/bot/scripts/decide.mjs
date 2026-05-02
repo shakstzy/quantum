@@ -63,9 +63,9 @@ for (const ent of triaged) {
   if (!isReply && !isOpening) continue; // role-ineligible
   const intent = isReply ? "reply" : "opening_move_response";
 
-  // Skeleton: queue a placeholder pending item. Real drafting wired below but
-  // commented out until we've live-tested send.mjs at least once.
-  // const { draftId, text, lint } = await draftMessage({ context: { ...parsed, imessage_summary }, intent });
+  // CODEX-R3-P1: draft placeholder is dangerous if anything ever moves it to
+  // approved/. Mark it with `placeholder: true` so send.mjs (and any HITL UI)
+  // can refuse to send placeholder drafts.
   const draftId = randomUUID();
   const text = "(draft placeholder - decide.mjs full body wires after first live send)";
   const meta = {
@@ -73,6 +73,7 @@ for (const ent of triaged) {
     slug: ent.slug,
     match_id: ent.meta.match_id,
     intent,
+    placeholder: true,
     expires: new Date(Date.now() + 6 * 3600 * 1000).toISOString(),
     created: new Date().toISOString(),
     triage: triage.bucket,
