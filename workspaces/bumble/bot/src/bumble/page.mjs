@@ -79,52 +79,134 @@ export async function openThread(page, matchId) {
   await sleep(jitter(2400, 4000));
 }
 
-// Read the active rec card. Bumble exposes the entire profile in encounters-user
-// textContent: "Name, ageWorkSchoolAbout NameHeightActivityIn collegeRarely..."
-// We parse name + age, then split sections from encounters-story-section--*.
+// Read the active rec card with the full profile shape.
+// Bumble exposes dedicated selectors on encounters-user (verified live 2026-05-02):
+//   .encounters-story-profile__name      (first name)
+//   .encounters-story-profile__age       (age digits)
+//   .encounters-story-profile__occupation(job/company text)
+//   .encounters-story-profile__education (school + grad year)
+//   .encounters-story-about__badge       (ordered lifestyle pills)
+//   .encounters-story-section--about     (about heading + body text)
+//   .encounters-story-section--question  (prompt heading + answer text)
+//   .encounters-story-section--location  (~X miles away)
+//   .location-widget__pill               (Lives in / From)
+//   .media-box__picture-image            (photo carousel images)
+//   .encounters-story-profile__verification (photo-verified flag)
 export async function readVisibleCard(page) {
   const sels = await selectors();
   if (!discovered(sels.rec_card)) {
     return { name: null, age: null, distance_mi: null, bio: null };
   }
   return await page.evaluate((cardSel) => {
-    const empty = { name: null, age: null, distance_mi: null, bio: null,
-                    work: null, school: null, height: null, photo_verified: false,
-                    prompts: {}, interests: [] };
+    const empty = {
+      name: null, age: null, distance_mi: null, bio: null,
+      work: null, school: null, height: null, height_cm: null,
+      photo_verified: false, prompts: [], interests: [],
+      lifestyle_badges: [], lives_in: null, hometown: null,
+      photos: [], photos_count: 0,
+    };
     const root = document.querySelector(cardSel);
     if (!root) return empty;
     const out = { ...empty };
 
-    // Name + age from the first text chunk.
-    const story = root.querySelector("[data-qa-role='encounters-story']") || root;
-    const fullText = (story.textContent || "").replace(/\s+/g, " ").trim();
-    const nm = fullText.match(/^([\p{L}][\p{L}\s'\-]{0,40}),\s*(\d{1,3})/u);
-    if (nm) { out.name = nm[1].trim(); out.age = parseInt(nm[2], 10); }
+    const txt = (el) => (el?.textContent || "").trim() || null;
+
+    // Name + age from dedicated selectors (no more textContent regex parsing).
+    out.name = txt(root.querySelector(".encounters-story-profile__name"));
+    const ageStr = txt(root.querySelector(".encounters-story-profile__age"));
+    if (ageStr) {
+      const n = parseInt(ageStr, 10);
+      if (!Number.isNaN(n)) out.age = n;
+    }
 
     // Photo verified flag.
     out.photo_verified = !!root.querySelector(".encounters-story-profile__verification, .verification-badge");
 
-    // About section text.
-    const about = root.querySelector(".encounters-story-section--about");
-    if (about) out.bio = (about.textContent || "").replace(/\s+/g, " ").trim();
+    // Job + school.
+    out.work = txt(root.querySelector(".encounters-story-profile__occupation"));
+    out.school = txt(root.querySelector(".encounters-story-profile__education"));
 
-    // Question prompts (multiple).
-    const prompts = {};
-    for (const q of root.querySelectorAll(".encounters-story-section--question")) {
-      const qText = (q.textContent || "").replace(/\s+/g, " ").trim();
-      // Question prompts on Bumble look like: "<Question>?<Answer>" concatenated.
-      const m = qText.match(/^(.+?[?!.])\s*(.+)$/);
-      if (m) prompts[m[1].trim()] = m[2].trim();
+    // Lifestyle badges (ordered array). Each pill contains height, gender,
+    // drinking, smoking, religion, etc. The drafter uses these directly.
+    const badgeSeen = new Set();
+    const titleEls = root.querySelectorAll(".encounters-story-about__badge .pill__title");
+    if (titleEls.length) {
+      for (const el of titleEls) {
+        const t = txt(el);
+        if (t && !badgeSeen.has(t)) { out.lifestyle_badges.push(t); badgeSeen.add(t); }
+      }
+    } else {
+      for (const el of root.querySelectorAll(".encounters-story-about__badge")) {
+        const t = txt(el);
+        if (t && !badgeSeen.has(t)) { out.lifestyle_badges.push(t); badgeSeen.add(t); }
+      }
     }
-    out.prompts = prompts;
+    // Extract height (X'Y'' format) from badges.
+    for (const b of out.lifestyle_badges) {
+      const m = b.match(/^(\d+)'\s*(\d+)''/);
+      if (m) {
+        out.height = b;
+        const totalIn = parseInt(m[1], 10) * 12 + parseInt(m[2], 10);
+        out.height_cm = Math.round(totalIn * 2.54);
+        break;
+      }
+    }
 
-    // Distance / location: scan for "X miles away" anywhere in the card.
-    // Bumble emits the location text in a sibling section that's part of
-    // encounters-user (root) but not necessarily encounters-story (fullText).
-    // Fall back to root.textContent so we capture "~3 miles away" patterns too.
+    // About body text (strip the badges container so we get just the prose).
+    const aboutSec = root.querySelector(".encounters-story-section--about");
+    if (aboutSec) {
+      const content = aboutSec.querySelector(".encounters-story-section__content") || aboutSec;
+      const clone = content.cloneNode(true);
+      for (const b of clone.querySelectorAll(".encounters-story-about__badges, .encounters-story-about__badge")) b.remove();
+      const body = (clone.textContent || "").replace(/\s+/g, " ").trim();
+      if (body) out.bio = body;
+    }
+
+    // Question prompts: ordered array of {q, a}.
+    for (const q of root.querySelectorAll(".encounters-story-section--question")) {
+      const heading = txt(q.querySelector("h2")) || txt(q.querySelector(".encounters-story-section__heading-title"));
+      const ansEl = q.querySelector(".encounters-story-about__text");
+      let answer = txt(ansEl);
+      if (!answer) {
+        const content = q.querySelector(".encounters-story-section__content");
+        if (content && heading) {
+          const t = (content.textContent || "").replace(/\s+/g, " ").trim();
+          // Strip the heading off the front if it's concatenated.
+          answer = heading && t.startsWith(heading) ? t.slice(heading.length).trim() : t;
+        }
+      }
+      if (heading && answer) out.prompts.push({ q: heading, a: answer });
+    }
+
+    // Location: lives_in / hometown from .location-widget__pill (the leading
+    // emoji flag is unicode noise; strip non-letters from the front).
+    for (const pill of root.querySelectorAll(".location-widget__pill, .encounters-story-section--location .pill")) {
+      let t = txt(pill);
+      if (!t) continue;
+      const stripFlag = (s) => s.replace(/^[^A-Za-z]+/, "").trim();
+      if (/lives in/i.test(t)) out.lives_in = stripFlag(t.replace(/lives in\s*/i, ""));
+      else if (/from/i.test(t)) out.hometown = stripFlag(t.replace(/from\s*/i, ""));
+    }
+
+    // Distance.
     const rootText = (root.textContent || "").replace(/\s+/g, " ").trim();
     const distM = rootText.match(/(\d+)\s*miles?\s*away/i);
     if (distM) out.distance_mi = parseInt(distM[1], 10);
+
+    // Photos (only the real carousel; skip pill/badge icons).
+    const photoSeen = new Set();
+    for (const img of root.querySelectorAll("img.media-box__picture-image")) {
+      let src = img.getAttribute("src") || img.src || "";
+      if (!src) continue;
+      if (src.startsWith("//")) src = "https:" + src;
+      if (!src.includes("bumbcdn.com")) continue;
+      // Strip the size= and ck= params to get a normalized URL for dedup.
+      const norm = src.split("&size=")[0].split("&ck=")[0];
+      if (photoSeen.has(norm)) continue;
+      photoSeen.add(norm);
+      out.photos.push(src);
+    }
+    out.photos_count = out.photos.length;
 
     return out;
   }, sels.rec_card.selector);
