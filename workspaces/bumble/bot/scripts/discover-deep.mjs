@@ -77,16 +77,15 @@ try { await writeFile(resolve(OUT_DIR, "app.html"), await page.content()); } cat
 
 // === Surface 2: open one conversation (click first conversation in sidebar) ===
 const convClicked = await page.evaluate(() => {
-  // Find clickable conversation elements in the sidebar.
-  const candidates = [
-    ...document.querySelectorAll("[data-qa-role='conversation-item']"),
-    ...document.querySelectorAll(".contact"),
-    ...document.querySelectorAll("[class*='contact-item']"),
-    ...document.querySelectorAll("[class*='conversation-item']"),
-  ];
+  // Bumble uses [data-qa-role="contact"] for conversation rows in the sidebar.
+  const candidates = [...document.querySelectorAll("[data-qa-role='contact']")];
   for (const c of candidates) {
     const r = c.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) { c.click(); return { clicked: c.tagName, cls: c.getAttribute("class") }; }
+    if (r.width > 0 && r.height > 0) {
+      const text = (c.textContent || "").trim().slice(0, 60);
+      c.click();
+      return { clicked: c.tagName, cls: c.getAttribute("class"), text };
+    }
   }
   return null;
 });
