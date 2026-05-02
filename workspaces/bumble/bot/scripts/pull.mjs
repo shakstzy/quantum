@@ -26,7 +26,7 @@ try {
   const MAX_CONSEC_ERRORS = 2;
   for (const m of matches.slice(0, cap)) {
     try {
-      const r = await scrapeThread(page, m.matchId, { name: m.name });
+      const r = await scrapeThread(page, m.matchId, { name: m.name, sidebarHints: m });
       console.log(`thread ${m.name} (${m.matchId.slice(0, 12)}...): slug=${r.slug} msgs=${r.messages_total} new=${r.messages_new} expires=${r.expires_at}`);
       opened += 1;
       consecutiveErrors = 0;

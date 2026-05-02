@@ -24,13 +24,17 @@ const text = extractDraftedReply(item.body);
 
 const { ctx, page } = await launchPersistent({ headless: false });
 try {
+  // CODEX-R8-P1: lintScore is logged into the entity outbound; hardcoding 1
+  // makes the log say lint=true even when an approved draft has lint issues
+  // (e.g., human approved past lint). Read from the queue item's lint_pass.
+  const lintPassFromMeta = item.meta.lint_pass === true || item.meta.lint_pass === "true";
   const r = await sendMessage(page, {
     matchId: item.meta.match_id,
     text,
     mode: "hitl",
     intent: item.meta.intent || "reply",
     draftId: item.id,
-    lintScore: 1,
+    lintScore: lintPassFromMeta ? 1 : 0,
     dryRun: process.env.QUANTUM_BUMBLE_DRY_RUN === "1",
   });
   if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", "sent");
