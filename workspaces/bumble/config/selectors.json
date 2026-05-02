@@ -6,7 +6,7 @@
   "rec_card_distance": { "selector": null, "alt": [], "last_verified": null },
   "rec_card_bio": { "selector": null, "alt": [], "last_verified": null },
   "like_button": { "selector": null, "alt": [], "last_verified": null },
-  "nope_button": { "selector": null, "alt": [], "last_verified": null },
+  "pass_button": { "_note": "Bumble's UI label is 'Pass' (not 'Nope'). Code uses pass_button consistently.", "selector": null, "alt": [], "last_verified": null },
   "super_like_button": { "_note": "default off (paid + bot signal)", "selector": null, "alt": [], "last_verified": null },
   "matches_tab": { "selector": null, "alt": [], "last_verified": null },
   "matches_list_item": { "selector": null, "alt": [], "last_verified": null },
