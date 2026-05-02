@@ -126,10 +126,25 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       break;
     }
 
-    // CODEX-R3-P0-5 + R4-P0-6: verify the next card has a NAME and a DIFFERENT
-    // name. The previous "no name = success" treatment caused match modals,
-    // verification prompts, upsell overlays, and stuck interstitials to be
-    // counted as legitimate card changes. Now require: next.name exists AND differs.
+    // CODEX-R6-P0-2: scan halts FIRST after click, BEFORE the cardChanged
+    // check. Otherwise an overlay (Turnstile/verify/restriction) appearing
+    // after the click exits via "overlay_after_click" without setting .halt,
+    // and the next cron walks straight back into the mitigation surface.
+    try { await scanForHalts(page); } catch (e) {
+      // Halt fired - reservation is correct (we did click), so don't release.
+      stopReason = e.message;
+      break;
+    }
+
+    // CODEX-R3-P0-5 + R4-P0-6 + R6-P0-1: verify the next card. Previous shape
+    // released the reservation on stuck_card, but on Bumble a click can succeed
+    // AND produce a match modal / upsell / verification interstitial that
+    // freezes the visible card. To avoid undercounting actual swipes:
+    //   - if a different card appears -> success (keep reservation)
+    //   - if the card stays the same with no overlay markers -> stuck (release)
+    //   - if no card visible (overlay obscuring) -> KEEP reservation, halt loop
+    //     (we did click; we don't know whether it took, so refuse to release
+    //      and force the operator to verify).
     let cardChanged = false;
     let lastSeenName = null;
     for (let probe = 0; probe < 6; probe++) {
@@ -139,19 +154,18 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       if (next.name && next.name !== profile.name) { cardChanged = true; break; }
     }
     if (!cardChanged) {
-      // Release reservation - the click didn't actually advance the card.
-      await releaseCap(reservation);
-      await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
-      stopReason = lastSeenName ? "stuck_card_after_click" : "overlay_after_click";
-      break;
-    }
-
-    // CODEX-R3-P0-6: scan halts AFTER the click too. Turnstile/photo-verify can
-    // appear post-click; without this scan, we'd exit the session "clean" and
-    // the next cron starts without .halt set.
-    try { await scanForHalts(page); } catch (e) {
-      // Halt fired - reservation is correct (we did click), so don't release.
-      stopReason = e.message;
+      if (lastSeenName === profile.name) {
+        // Same card persists, no overlay - the click missed. Safe to release.
+        await releaseCap(reservation);
+        await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
+        stopReason = "stuck_card_after_click";
+      } else {
+        // No name visible - overlay/modal/interstitial obscuring the stack.
+        // We DO NOT release (the click may have produced this overlay).
+        // Halt the loop conservatively.
+        await logSwipe({ decision: "overlay_after_click", filter_pass: inFilter, profile, last_seen_name: null, day_count: reservation.dayUsed });
+        stopReason = "overlay_after_click_kept_reservation";
+      }
       break;
     }
 

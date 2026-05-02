@@ -48,8 +48,29 @@ async function saveState(state) {
   await rename(tmp, RATE_STATE_FILE);
 }
 
-function todayKey() { return new Date().toISOString().slice(0, 10); }
-function hourKey() { return new Date().toISOString().slice(0, 13); }
+// CODEX-R6-P0-3: doctrine and schedule are America/Chicago, but keys were UTC.
+// Use the local-day key so the daily cap resets at local midnight, not UTC midnight.
+const TZ = "America/Chicago";
+function localKey(slice) {
+  const f = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", hour12: false,
+  });
+  const parts = Object.fromEntries(f.formatToParts(new Date()).map(p => [p.type, p.value]));
+  // en-CA gives "YYYY-MM-DD" + hour as 2-digit
+  if (slice === "day") return `${parts.year}-${parts.month}-${parts.day}`;
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}`;
+}
+function todayKey() { return localKey("day"); }
+function hourKey() { return localKey("hour"); }
+
+// CODEX-R6-P0-4: rolling 60-min window for messages. Persist a list of message
+// timestamps; trim entries older than 60 min on every read.
+function pruneRolling(state, kind, windowMs) {
+  state.rolling = state.rolling || {};
+  state.rolling[kind] = (state.rolling[kind] || []).filter(ts => Date.now() - ts < windowMs);
+  return state.rolling[kind];
+}
 
 function pruneOld(s) {
   const today = todayKey();
@@ -114,13 +135,9 @@ export async function peekCap(kind) {
   return { dayUsed, dayLimit, hourUsed, hourLimit, exceeded };
 }
 
-// CODEX-R5-P0-4+5: real reserve-under-lock cap. Atomically increment the
-// counter inside withState(); if cap reached, throws. If the action then
-// FAILS, caller must call releaseCap(kind, reservationId) to roll back the
-// increment. If action SUCCEEDS, no commit needed (already incremented).
-//
-// This closes the peek-then-commit race window: two concurrent processes
-// can no longer both peek under cap and both perform the action.
+// CODEX-R5-P0-4+5 + R6-P0-4+5: reserve-under-lock cap with rolling-window
+// support for messages and between-action gap enforcement. Throws if cap
+// reached or if the minimum gap since last action hasn't elapsed.
 export async function reserveCap(kind) {
   const caps = await loadCaps();
   return withState((state) => {
@@ -131,17 +148,50 @@ export async function reserveCap(kind) {
     state.hour[thisHour] = state.hour[thisHour] || {};
     const dayUsed = state.day[today][kind] || 0;
     const hourUsed = state.hour[thisHour][kind] || 0;
+
+    // Rolling 60-min check for messages (the doctrine).
+    let rollingNow = null;
+    if (kind === "message") {
+      rollingNow = pruneRolling(state, kind, 3600 * 1000);
+      if (rollingNow.length >= caps.messages.per_hour) {
+        const oldestAge = Math.round((Date.now() - rollingNow[0]) / 1000);
+        throw new Error(`cap_reached: messages rolling-60min ${rollingNow.length}/${caps.messages.per_hour} (oldest ${oldestAge}s ago)`);
+      }
+    }
+
+    // Daily swipe cap (local day).
     if (kind === "swipe" && dayUsed >= caps.swipes.per_day) {
       throw new Error(`cap_reached: swipes daily ${dayUsed}/${caps.swipes.per_day}`);
     }
-    if (kind === "message" && hourUsed >= caps.messages.per_hour) {
-      throw new Error(`cap_reached: messages hourly ${hourUsed}/${caps.messages.per_hour}`);
+
+    // Between-action gap enforcement (CODEX-R6-P0-5).
+    state.last = state.last || {};
+    const lastTs = state.last[kind] || 0;
+    const gap = Date.now() - lastTs;
+    if (kind === "message") {
+      const min = caps.messages.between_messages_ms?.[0] ?? 0;
+      if (lastTs && gap < min) throw new Error(`min_gap: messages need ${min}ms between, only ${gap}ms since last`);
     }
+    if (kind === "swipe") {
+      const min = caps.swipes.global_min_gap_ms ?? 0;
+      if (lastTs && gap < min) throw new Error(`min_gap: swipes need ${min}ms between, only ${gap}ms since last`);
+    }
+
     state.day[today][kind] = dayUsed + 1;
     state.hour[thisHour][kind] = hourUsed + 1;
-    state.last = state.last || {};
     state.last[kind] = Date.now();
-    return { reservationId: `${kind}-${today}-${thisHour}-${dayUsed + 1}`, dayUsed: dayUsed + 1, hourUsed: hourUsed + 1, kind, today, thisHour };
+    if (kind === "message") {
+      rollingNow.push(Date.now());
+      state.rolling[kind] = rollingNow;
+    }
+    return {
+      reservationId: `${kind}-${today}-${thisHour}-${dayUsed + 1}`,
+      dayUsed: dayUsed + 1,
+      hourUsed: hourUsed + 1,
+      rollingCount: kind === "message" ? rollingNow.length : null,
+      kind, today, thisHour,
+      reservedAt: Date.now(),
+    };
   });
 }
 
@@ -154,6 +204,13 @@ export async function releaseCap(reservation) {
     const hourUsed = state.hour[reservation.thisHour][reservation.kind] || 0;
     state.day[reservation.today][reservation.kind] = Math.max(0, dayUsed - 1);
     state.hour[reservation.thisHour][reservation.kind] = Math.max(0, hourUsed - 1);
+    // Pop the rolling-window entry that this reservation added (best-effort: pop the
+    // closest-to-reservedAt timestamp). Avoids inflating the rolling count from
+    // a failed action.
+    if (reservation.kind === "message" && state.rolling?.message?.length) {
+      const idx = state.rolling.message.findIndex(ts => Math.abs(ts - reservation.reservedAt) < 1000);
+      if (idx >= 0) state.rolling.message.splice(idx, 1);
+    }
   });
 }
 
