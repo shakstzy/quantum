@@ -94,6 +94,26 @@ export async function readCounters() {
   return { day: state.day[todayKey()] || {}, hour: state.hour[hourKey()] || {}, last: state.last || {} };
 }
 
+// CODEX-R2-P0-3: peek-then-commit pattern. Use this BEFORE the irreversible
+// UI action; if `exceeded` is true, abort. Then call checkAndIncrement() AFTER
+// the action succeeds. This guarantees we never perform action #51 only to
+// discover the cap was 50.
+export async function peekCap(kind) {
+  const caps = await loadCaps();
+  const state = await loadState();
+  pruneOld(state);
+  const today = todayKey();
+  const thisHour = hourKey();
+  const dayUsed = (state.day[today] || {})[kind] || 0;
+  const hourUsed = (state.hour[thisHour] || {})[kind] || 0;
+  const dayLimit = kind === "swipe" ? caps.swipes.per_day : null;
+  const hourLimit = kind === "message" ? caps.messages.per_hour : null;
+  const exceeded =
+    (dayLimit != null && dayUsed >= dayLimit) ||
+    (hourLimit != null && hourUsed >= hourLimit);
+  return { dayUsed, dayLimit, hourUsed, hourLimit, exceeded };
+}
+
 // CODEX-R1-P1-1: must run inside withState() lock, otherwise concurrent cron
 // fires (swipe + pull at the same minute) can both decide skipPlan independently.
 export async function shouldSkipDay() {

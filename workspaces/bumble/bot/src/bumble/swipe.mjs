@@ -8,7 +8,7 @@ import { selectors, scanForHalts } from "../runtime/detection.mjs";
 import { humanClick, makeCursor, idlePause, microFidget, sleep, jitter } from "../runtime/humanize.mjs";
 import { gotoEncounters, readVisibleCard } from "./page.mjs";
 import { logSwipe } from "../runtime/logger.mjs";
-import { checkAndIncrement, loadCaps } from "../runtime/caps.mjs";
+import { checkAndIncrement, loadCaps, peekCap } from "../runtime/caps.mjs";
 import { assertDateMode } from "../runtime/mode-guard.mjs";
 
 let _filter = null;
@@ -18,11 +18,26 @@ async function loadFilter() {
   return _filter;
 }
 
+// CODEX-R2-P0-4: fail-closed when gating fields are unknown. Pre-discovery,
+// readVisibleCard only returns name; age/distance/bio are null. The previous
+// passesFilter treated null as "in-filter," which made every card a like. Now:
+//   - if age is unknown AND age_min/max are set, REJECT (cannot prove safety)
+//   - if distance is unknown AND max_distance_mi is set, REJECT
+//   - if `auto_pass_if_no_bio_and_no_prompts` and we have neither, REJECT
 function passesFilter(profile, f) {
-  if (profile.age != null) {
+  if (f.age_min != null || f.age_max != null) {
+    if (profile.age == null) return false;
     if (profile.age < f.age_min || profile.age > f.age_max) return false;
   }
-  if (profile.distance_mi != null && profile.distance_mi > f.max_distance_mi) return false;
+  if (f.max_distance_mi != null) {
+    if (profile.distance_mi == null) return false;
+    if (profile.distance_mi > f.max_distance_mi) return false;
+  }
+  if (f.auto_pass_if_no_bio_and_no_prompts) {
+    const hasBio = !!(profile.bio && String(profile.bio).trim());
+    const hasPrompts = !!(profile.prompts && Object.keys(profile.prompts).length > 0);
+    if (!hasBio && !hasPrompts) return false;
+  }
   return true;
 }
 
@@ -58,6 +73,13 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
   while (swiped < sessionMaxSwipes && Date.now() < sessionEnd) {
     await scanForHalts(page);
     await microFidget(page);
+
+    // CODEX-R2-P0-3: reserve quota BEFORE the irreversible click. peek-only here.
+    const peek = await peekCap("swipe");
+    if (peek.exceeded) {
+      stopReason = `cap_reached: swipes daily ${peek.dayUsed}/${peek.dayLimit}`;
+      break;
+    }
 
     const profile = await readVisibleCard(page);
     if (!profile.name && !profile.age) {

@@ -58,11 +58,23 @@ export async function readActiveMode(page) {
   });
 }
 
+// CODEX-R2-P0-5: when mode_picker selector IS configured (post-discovery), null
+// mode means the selector resolved but no active mode was found - that's a hard
+// fail-closed signal on Bumble. Pre-discovery (selector not configured), warn-only
+// is fine because the picker may legitimately not be on this page.
 export async function assertDateMode(page) {
+  const sels = await selectors();
+  const selectorConfigured = !!(sels.mode_picker && sels.mode_picker.selector);
   const mode = await readActiveMode(page);
   if (mode == null) {
-    // Could not detect mode at all. Don't halt on this - mode picker may not be on this page.
-    return { mode: null, asserted: false };
+    if (selectorConfigured) {
+      const reason = "mode_not_date:undetectable";
+      await setHalt(reason);
+      await logSession({ event: "halt", kind: "mode_undetectable", url: page.url() });
+      throw new Error(`HALTED: ${reason}`);
+    }
+    // Pre-discovery: warn only.
+    return { mode: null, asserted: false, configured: false };
   }
   if (!ACCEPTED_MODES.includes(mode)) {
     const reason = `mode_not_date:${mode}`;
@@ -70,5 +82,5 @@ export async function assertDateMode(page) {
     await logSession({ event: "halt", kind: "mode_not_date", mode, url: page.url() });
     throw new Error(`HALTED: ${reason}`);
   }
-  return { mode, asserted: true };
+  return { mode, asserted: true, configured: selectorConfigured };
 }

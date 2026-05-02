@@ -16,11 +16,12 @@ async function pickFirst(page, sel) {
   return null;
 }
 
-// CODEX-R1-P0-5: Bumble role guard. On hetero matches, men cannot send a cold
-// opener. Refuse to send unless one of these is true:
+// CODEX-R2-P0-1+2: Bumble role guard. On hetero matches, men cannot send a cold
+// opener. Refuse to send unless one of these is true (NO reengage bypass; ALL
+// sends through this path go through Bumble UI, so off-platform reengage cannot
+// be a justification):
 //   - the entity has at least one inbound message (`**her**` line in conversation)
 //   - the entity has an Opening Move text recorded (her preset prompt for him)
-//   - intent is explicitly "reengage" (off-platform fallback, not a Bumble cold open)
 function hasInboundMessage(conversationMd) {
   return /\n\*\*her\*\*\s+/.test(conversationMd || "") || /^\*\*her\*\*\s+/.test(conversationMd || "");
 }
@@ -35,21 +36,37 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   }
   const cursor = await makeCursor(page);
 
+  // Role guard (P0-1+2). Hard refusal when neither condition holds.
   const entityForGuard = await findEntityByMatchId(matchId);
   if (entityForGuard) {
     const { loadEntity } = await import("../runtime/entity-store.mjs");
     const ent = await loadEntity(entityForGuard.slug);
     const inbound = hasInboundMessage(ent.conversation);
     const opening = hasOpeningMove(ent.profile);
-    const okByRole = inbound || opening || intent === "reengage";
-    if (!okByRole) {
-      throw new Error(`role_guard: refused to send to ${matchId} (slug=${ent.slug}). No inbound message, no opening_move, intent=${intent}. Bumble women-message-first rule.`);
+    if (!(inbound || opening)) {
+      throw new Error(`role_guard: refused to send to ${matchId} (slug=${ent.slug}). No inbound message and no opening_move. Bumble women-message-first rule. intent=${intent}`);
     }
+    // CODEX-R2-P1-12: also refuse if the entity is expired/unmatched OR expires_at is past.
+    const expired_status = ["expired", "unmatched"].includes(ent.meta.status);
+    const expired_clock = ent.meta.expires_at && new Date(ent.meta.expires_at).getTime() < Date.now();
+    if (expired_status || expired_clock) {
+      throw new Error(`stale_match: refused to send to ${matchId} (slug=${ent.slug}). status=${ent.meta.status}, expires_at=${ent.meta.expires_at}`);
+    }
+  } else {
+    // No entity record means we never scraped this match. Refuse — we have no proof
+    // of inbound message or opening_move.
+    throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
   }
 
-  // CODEX-R1-P0-3: cap check BEFORE typing. If the cap is reached we never
-  // touch the input box, so there's no stale draft to leak.
-  if (!dryRun) await checkAndIncrement("message");
+  // CODEX-R2-P1-2: peek cap BEFORE openThread + halt scan. If cap is reached
+  // we don't burn an openThread navigation either. checkAndIncrement runs only
+  // AFTER successful delivery verification.
+  if (!dryRun) {
+    const peek = await peekCap("message");
+    if (peek.exceeded) {
+      throw new Error(`cap_reached: messages hourly ${peek.hourUsed}/${peek.hourLimit}`);
+    }
+  }
 
   const { openThread } = await import("./page.mjs");
   await openThread(page, matchId);
