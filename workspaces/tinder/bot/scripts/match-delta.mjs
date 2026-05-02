@@ -16,7 +16,7 @@
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { listAllEntities } from "../src/runtime/entity-store.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
-import { sleep, jitter, humanScroll } from "../src/runtime/humanize.mjs";
+import { sleep, jitter, humanScroll, makeCursor } from "../src/runtime/humanize.mjs";
 import { scanForHalts } from "../src/runtime/detection.mjs";
 
 const WAIT_MIN_MS = 5000;
@@ -58,6 +58,93 @@ async function focusMatchesPane(page) {
     const y = Math.floor(h * 0.5);
     await page.mouse.move(x, y, { steps: jitter(4, 9) });
   } catch { /* ignore */ }
+}
+
+async function findTabBox(page, label) {
+  return await page.evaluate((wantLabel) => {
+    for (const btn of document.querySelectorAll("button[role='tab']")) {
+      const t = (btn.textContent || "").trim();
+      if (t === wantLabel) {
+        const r = btn.getBoundingClientRect();
+        return {
+          x: r.x, y: r.y, w: r.width, h: r.height,
+          ariaSelected: btn.getAttribute("aria-selected"),
+        };
+      }
+    }
+    return null;
+  }, label);
+}
+
+async function clickTab(page, cursor, label) {
+  const box = await findTabBox(page, label);
+  if (!box) throw new Error(`clickTab: tab "${label}" not found`);
+  if (box.ariaSelected === "true") {
+    console.log(`  tab "${label}" already selected — skipping click`);
+    return false;
+  }
+  const tx = box.x + box.w * (0.3 + Math.random() * 0.4);
+  const ty = box.y + box.h * (0.3 + Math.random() * 0.4);
+  await cursor.actions.move({ x: tx, y: ty });
+  await sleep(jitter(120, 320));
+  await cursor.actions.click();
+  console.log(`  clicked "${label}" tab via ghost-cursor`);
+  return true;
+}
+
+async function scrapeCurrentTab(page, label) {
+  console.log(`\n--- scraping "${label}" tab ---`);
+  await scanForHalts(page);
+  await focusMatchesPane(page);
+  const ids = new Set();
+  {
+    const initial = await captureSidebarMatchIds(page);
+    for (const id of initial) ids.add(id);
+    console.log(`initial snapshot (${label}): ${ids.size} match_ids visible`);
+  }
+  let stable = 0;
+  let scrolls = 0;
+  while (stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
+    await scanForHalts(page);
+    await humanScroll(page, {
+      distance: jitter(SCROLL_DISTANCE_MIN, SCROLL_DISTANCE_MAX),
+      steps: jitter(SCROLL_STEPS_MIN, SCROLL_STEPS_MAX),
+    });
+    scrolls++;
+    await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
+    const before = ids.size;
+    const captured = await captureSidebarMatchIds(page);
+    for (const id of captured) ids.add(id);
+    const added = ids.size - before;
+    if (added === 0) {
+      stable++;
+      console.log(`[${label}] scroll ${scrolls}: 0 new (stable ${stable}/${STABLE_NEEDED}, total ${ids.size})`);
+    } else {
+      stable = 0;
+      console.log(`[${label}] scroll ${scrolls}: +${added} new (total ${ids.size})`);
+    }
+    if (scrolls > 0 && scrolls % REVIEW_EVERY === 0 && stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
+      const pauseMs = jitter(REVIEW_PAUSE_MIN_MS, REVIEW_PAUSE_MAX_MS);
+      console.log(`[${label}] scroll ${scrolls}: review pause ${pauseMs}ms + small upward scroll`);
+      await sleep(pauseMs);
+      await focusMatchesPane(page);
+      await page.mouse.wheel(0, -jitter(REVIEW_UP_MIN, REVIEW_UP_MAX));
+      await sleep(jitter(2500, 4500));
+      const beforeReview = ids.size;
+      const reviewCaptured = await captureSidebarMatchIds(page);
+      for (const id of reviewCaptured) ids.add(id);
+      const reviewAdded = ids.size - beforeReview;
+      if (reviewAdded > 0) {
+        stable = 0;
+        console.log(`  review: +${reviewAdded} new (total ${ids.size})`);
+      }
+      await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
+    }
+  }
+  if (scrolls >= MAX_SCROLLS) {
+    console.warn(`⚠ [${label}] hit MAX_SCROLLS=${MAX_SCROLLS} before stability`);
+  }
+  return { ids, scrolls };
 }
 
 async function main() {
