@@ -222,12 +222,14 @@ def cmd_user(args):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="reddit", description="Reddit CLI (stdlib, no auth)")
-    p.add_argument("--ua", default=DEFAULT_UA, help="User-Agent header")
-    p.add_argument("--json", action="store_true", help="raw JSON output")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--ua", default=DEFAULT_UA, help="User-Agent header")
+    common.add_argument("--json", action="store_true", help="raw JSON output")
+
+    p = argparse.ArgumentParser(prog="reddit", description="Reddit CLI (stdlib, no auth)", parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("search", help="search posts")
+    s = sub.add_parser("search", help="search posts", parents=[common])
     s.add_argument("query")
     s.add_argument("--sub", help="restrict to subreddit")
     s.add_argument("--limit", type=int, default=10)
@@ -236,20 +238,20 @@ def main():
     s.set_defaults(fn=cmd_search)
 
     for ep in ("hot", "new", "top"):
-        sp = sub.add_parser(ep, help=f"{ep} posts in subreddit")
+        sp = sub.add_parser(ep, help=f"{ep} posts in subreddit", parents=[common])
         sp.add_argument("subreddit")
         sp.add_argument("--limit", type=int, default=10)
         if ep == "top":
             sp.add_argument("--time", choices=["hour", "day", "week", "month", "year", "all"], default="day")
         sp.set_defaults(fn=cmd_listing)
 
-    pp = sub.add_parser("post", help="get a post + comments")
+    pp = sub.add_parser("post", help="get a post + comments", parents=[common])
     pp.add_argument("id", help="post ID, full URL, or /r/.../comments/ID/...")
     pp.add_argument("--top", type=int, default=10, help="top N comments")
     pp.add_argument("--depth", type=int, default=2, help="max reply depth")
     pp.set_defaults(fn=cmd_post)
 
-    up = sub.add_parser("user", help="user's recent posts or comments")
+    up = sub.add_parser("user", help="user's recent posts or comments", parents=[common])
     up.add_argument("username")
     up.add_argument("--limit", type=int, default=10)
     up.add_argument("--kind", choices=["submitted", "comments"], default="submitted")
