@@ -116,20 +116,21 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       break;
     }
 
-    // CODEX-R3-P0-5: verify the card changed after the click. If the next
-    // visible card has the same name, the click missed - do NOT count it,
-    // log a stuck-card event, and back off. Repeated stuck-card behavior is
-    // a clearer Bumble bot signature than the swipes themselves.
+    // CODEX-R3-P0-5 + R4-P0-6: verify the next card has a NAME and a DIFFERENT
+    // name. The previous "no name = success" treatment caused match modals,
+    // verification prompts, upsell overlays, and stuck interstitials to be
+    // counted as legitimate card changes. Now require: next.name exists AND differs.
     let cardChanged = false;
+    let lastSeenName = null;
     for (let probe = 0; probe < 6; probe++) {
       await sleep(jitter(250, 500));
       const next = await readVisibleCard(page);
-      if (!next.name || next.name !== profile.name) { cardChanged = true; break; }
+      lastSeenName = next.name;
+      if (next.name && next.name !== profile.name) { cardChanged = true; break; }
     }
     if (!cardChanged) {
-      await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, day_count: null });
-      // Don't increment cap, don't increment swiped. Bail the loop - selector likely drifted.
-      stopReason = "stuck_card_after_click";
+      await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
+      stopReason = lastSeenName ? "stuck_card_after_click" : "overlay_after_click";
       break;
     }
 

@@ -12,6 +12,11 @@ if (approved.length === 0) {
   process.exit(0);
 }
 const item = approved[0];
+// CODEX-R3-P1 + R4-P0-1: refuse to send a draft that decide.mjs marked placeholder.
+if (item.meta.placeholder === true || item.meta.placeholder === "true") {
+  console.error(`refusing to send placeholder draft id=${item.id} slug=${item.meta.slug}. Wire decide.mjs full body before approving.`);
+  process.exit(2);
+}
 const text = extractDraftedReply(item.body);
 
 const { ctx, page } = await launchPersistent({ headless: false });

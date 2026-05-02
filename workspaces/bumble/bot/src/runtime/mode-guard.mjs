@@ -20,14 +20,38 @@ const ACCEPTED_MODES = ["date", "Date"];
 export async function readActiveMode(page) {
   const sels = await selectors();
   const sel = sels.mode_picker;
+  // CODEX-R4-P0-4: when mode_picker is configured, do NOT trust raw textContent;
+  // verify the element has an active marker (aria-current/aria-selected/active class).
+  // The previous shape false-passed when the selector pointed at a visible-but-
+  // inactive Date label.
   if (sel?.selector) {
     try {
-      const el = await page.$(sel.selector);
-      if (el) {
-        const txt = (await el.textContent())?.trim() || (await el.getAttribute("aria-label"));
-        if (txt) return txt;
+      const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
+      for (const q of candidates) {
+        const result = await page.$$eval(q, (els) => {
+          const isActive = (el) => {
+            if (!el) return false;
+            if (el.getAttribute("aria-current") === "page" || el.getAttribute("aria-current") === "true") return true;
+            if (el.getAttribute("aria-selected") === "true") return true;
+            if (el.dataset && (el.dataset.active === "true" || el.dataset.selected === "true")) return true;
+            const cls = el.getAttribute("class") || "";
+            if (/\b(active|selected|is-active|is-selected|current)\b/.test(cls)) return true;
+            return false;
+          };
+          for (const el of els) {
+            const txt = (el.textContent || "").trim() || el.getAttribute("aria-label");
+            if (!txt) continue;
+            // Walk up to 3 ancestors looking for the active marker.
+            let cur = el;
+            for (let d = 0; cur && d < 4; d++, cur = cur.parentElement) {
+              if (isActive(cur)) return txt;
+            }
+          }
+          return null;
+        });
+        if (result) return result;
       }
-    } catch { /* fall through */ }
+    } catch { /* fall through to text-walk fallback */ }
   }
   // Safe fallback: only consider a mode "active" if the element has an active
   // marker. Reject any element that is merely visible.
