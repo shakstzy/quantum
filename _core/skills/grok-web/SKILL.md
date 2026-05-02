@@ -1,6 +1,6 @@
 ---
 name: grok-web
-description: Drive grok.com via patchright using Adithya's X Premium-linked account (no xAI API key, no separate billing). Off-screen Chrome runs the chat UI; SSE/NDJSON/WebSocket stream is captured for clean response text + citations + images. Verbs: login (one-time visible sign-in via "Sign in with X"), whoami, chat with --model and --mode (default | think | deepsearch), quota (read /api/rate-limits), status, reset-breaker, diag (selector + network discovery for self-heal). Triggers on "ask grok", "grok this", "use grok", "grok think", "grok deepsearch". For xAI API calls (paid), use a separate grok-cli skill -- not yet built.
+description: Drive grok.com via patchright using Adithya's X Premium-linked account (no xAI API key, no separate billing). Off-screen Chrome runs the chat UI; NDJSON stream is captured for clean response text + citations + images. Verbs: login (one-time visible sign-in via "Sign in with X"), whoami, chat with unified --model (auto|fast|expert|heavy|grok-4.3) plus legacy --mode aliases (think→Expert, deepsearch→fail-loud), quota (probes both grok-3 and grok-4 buckets), status, reset-breaker, diag (selector + network discovery for self-heal). DeepSearch mode was removed by xAI in May 2026; use --model heavy ("Team of Experts") for deep research, but Heavy + Grok 4.3 require SuperGrok Heavy subscription (skill detects the upgrade dialog and fails loud). Triggers on "ask grok", "grok this", "use grok", "grok think", "grok heavy". For xAI API calls (paid), use a separate grok-cli skill -- not yet built.
 ---
 
 # grok-web Skill
@@ -52,20 +52,22 @@ node scripts/run.mjs login
 # Confirm session.
 node scripts/run.mjs whoami
 
-# Default chat.
+# Default chat (Auto model -- grok picks Fast or Expert).
 node scripts/run.mjs chat "Explain transformer architecture briefly"
 
-# Pick a specific model.
-node scripts/run.mjs chat "Solve: ..." --model "Grok 4.1"
+# Pick a specific model. Aliases: auto, fast, expert, think (=expert),
+# heavy, grok-4.3, beta. Direct picker labels also accepted ("Heavy", etc.).
+node scripts/run.mjs chat "Solve: ..." --model expert
+node scripts/run.mjs chat "Quick reply: ..." --model fast
+node scripts/run.mjs chat "Deep research: ..." --model heavy   # requires SuperGrok Heavy
 
-# Toggle Think mode (chain-of-thought).
-node scripts/run.mjs chat "Prove ..." --mode think
+# Legacy --mode aliases (deepsearch fails loud; xAI removed it 2026-05).
+node scripts/run.mjs chat "Prove ..." --mode think              # => Expert
 
-# Toggle DeepSearch mode (multi-source web research with citations).
-node scripts/run.mjs chat "What's new in ..." --mode deepsearch
-
-# Read current rate-limit window.
+# Read current rate-limit window. Probes BOTH grok-3 (Auto/Fast/Expert,
+# 140/2h) and grok-4 (Heavy + Grok 4.3 beta, 50/2h).
 node scripts/run.mjs quota
+node scripts/run.mjs quota --model grok-4    # pin one bucket
 node scripts/run.mjs quota --effort high
 
 # Self-heal: dump live UI + network shapes.
@@ -76,6 +78,31 @@ node scripts/run.mjs status
 node scripts/run.mjs reset-breaker
 ```
 
+## Model surface (live-verified 2026-05-02)
+
+The grok.com `button[aria-label="Model select"]` is a **unified picker**
+combining model + reasoning tier. Options Adithya sees on his SuperGrok plan:
+
+| Picker label                  | --model alias        | Tier            | Quota bucket | Notes                                   |
+|-------------------------------|----------------------|-----------------|--------------|-----------------------------------------|
+| Auto                          | `auto` / `default`   | grok-3 dynamic  | grok-3 (140) | Picks Fast or Expert per prompt         |
+| Fast                          | `fast`               | grok-3 cheap    | grok-3 (140) | Quickest replies                        |
+| Expert                        | `expert` / `think`   | grok-3 reasoning| grok-4 (50)  | Replaces old "Think mode"               |
+| Heavy                         | `heavy` / `research` | SuperGrok Heavy | grok-4 (50)  | "Team of Experts" -- **paywalled**      |
+| Grok 4.3 (beta) Early Access  | `grok-4.3` / `beta`  | beta            | grok-4 (50)  | **paywalled** (Early Access entitlement)|
+
+**Removed (do not use):**
+- `--mode deepsearch` -- xAI removed standalone DeepSearch in 2026-05.
+  Skill fails loud with exit 2 and redirects to `--model heavy` (or
+  `--model expert` for the cheaper reasoning tier on the current plan).
+
+**Paywall behavior:** Heavy and Grok 4.3 are gated by SuperGrok Heavy
+entitlement. On accounts without it, grok.com opens a Radix `[role=dialog]`
+upgrade modal after the picker click. The skill detects this dialog,
+dismisses it (Escape closes Radix dialogs), and exits 2 with a paywall
+message rather than letting the next composer click hang for 30s on
+intercepted pointer events.
+
 ## Procedure (chat verb)
 
 Live-verified 2026-04-30 against grok.com.
@@ -85,7 +112,7 @@ Live-verified 2026-04-30 against grok.com.
 3. **Challenge probe.** Cloudflare / Turnstile / captcha / account-locked text in body. Trip breaker on hit (single-strike, 24h).
 4. **Attach multi-transport capture** (P0 from Codex+Gemini): subscribes to `page.on('response')` for SSE / NDJSON / streamed JSON, plus `page.on('websocket')` for token frames. Quota responses (`POST /rest/rate-limits`) parsed in parallel. URL filter is POST-only and restricted to `/rest/app-chat/conversations/(new|<id>/responses)` so listing GETs do not falsely terminate the aggregator.
 5. **Submit-timing listener.** `page.on('request')` filtered to chat-POST URLs records `submittedRequestAt` -- the true "submit landed" signal. (Round-1 P0 fix: `onChatChunk` only fires after the entire response body downloads, which can be >12s for Think/DeepSearch and would falsely time out submit verification.)
-6. **Steer.** If `--model`: click `button[aria-label="Model select"]` to open the unified picker (the live setting `useModelModeSelector3: true` means model + mode share one menu), then click the `[role="menuitem"]` matching the requested name. If `--mode think|deepsearch`: same picker, match against `MODE_LABELS`. NEVER press Escape after picking -- live-observed 2026-04-30 it raced with composer focus and clipped subsequent typing. The follow-on composer click safely closes any leftover picker state.
+6. **Steer.** Resolve any `--mode` legacy alias to a model alias (`think`→Expert, `heavy`/`research`→Heavy, etc.); explicit `--model` wins. `--mode deepsearch` exits 2 immediately with a redirect message. Click `button[aria-label="Model select"]` (the unified picker, `useModelModeSelector3: true`), then click the `[role="menuitem"]` whose normalized text matches the alias's candidate list (exact-then-contains). If the menu has no match, click the picker button again to toggle aria-expanded back to false (round-2 footgun: a stuck-open menu portal blocks the next composer click for 30s). After a successful pick, check for a Radix `[role=dialog][data-state=open]` upgrade modal -- present iff the picked tier requires SuperGrok Heavy entitlement; dismiss with Escape and exit 2. NEVER press Escape mid-flow during a successful path -- live-observed 2026-04-30 it raced with composer focus and clipped subsequent typing.
 7. **Compose + send.** Type prompt into the live-discovered Tiptap/ProseMirror composer (`div.tiptap.ProseMirror[contenteditable="true"]`). Click `[data-testid="chat-submit"]` once it flips from disabled+invisible to enabled+visible; fall back to `Cmd+Enter` (NEVER plain Enter -- inserts newline in Tiptap). `submittedAt` = click time.
 8. **Verify submit.** Wait up to 12s for `submittedRequestAt` to be set by the request listener. Exit 6 if not.
 9. **Collect stream.** `StreamAggregator` ingests NDJSON lines from `POST /rest/app-chat/conversations/new`. Each event is `{result: {response: {...}}}` (or `{result: {conversation: {...}}}`); `unwrapGrok` peels both. Tokens with `isThinking: true` route to `thinkingText`; `isThinking: false` tokens route to the main answer. Citations + images extracted from `modelResponse.webSearchResults`, `modelResponse.steps[].webSearchResults`, `modelResponse.generatedImageUrls`, `modelResponse.imageAttachments` (deduped by URL). Watchdogs:
@@ -158,6 +185,10 @@ Run `npm test` from skill root to exercise the parsers without a browser.
 - **Distinct exit codes** for shadow-ban (4), rate-limit (5), steering failure (6), timeout (7).
 - **Quota probe at chat time** captures `/rest/rate-limits` JSON in parallel; explicit fast-fail on `ok=false`.
 - **No Escape after picker pick** (round 1 P2): live-observed it raced with composer focus and clipped typing. Trusted composer.click() dismisses leftover picker state safely.
+- **Picker auto-recovery on no-match** (round 2 / 2026-05-02): if the menu opens but no candidate label matches, the open menu portal overlays the composer and the next click times out at 30s on `<html> intercepts pointer events`. Fix: idempotent `ensurePickerClosed()` toggles aria-expanded back to false by clicking the picker button again.
+- **SuperGrok Heavy upgrade dialog detection** (round 2 / 2026-05-02): Heavy + Grok 4.3 are paywalled. After picking, grok.com opens a Radix `[role=dialog][data-state=open]` modal covering the viewport. `detectUpgradeModal()` matches paywall copy ("Upgrade to SuperGrok", "Near-unlimited usage"), Escape dismisses, exit 2 with paywall message. Without this, the next composer click hangs for 30s.
+- **DeepSearch removal handled** (round 2 / 2026-05-02): xAI deleted the standalone DeepSearch mode. `--mode deepsearch` now exits 2 immediately with a redirect to `--model heavy` (paywalled) or `--model expert` (free reasoning tier), instead of silently failing or picking the wrong menu item.
+- **Quota probes both buckets** (round 2 / 2026-05-02): grok-3 (Auto/Fast/Expert, 140/2h) and grok-4 (Heavy/Grok 4.3 + Expert reasoning calls, 50/2h) are separate quota buckets. The `quota` verb returns both unless pinned with `--model`.
 - **No mouse/typing jitter** (round 0 P1): brittle and adversarial-evasion territory; patchright fingerprint hardening is sufficient.
 - **Storage redaction**: `metadata.json` strips signed query params from image URLs, omits account email, cookies, auth headers, conversation/message IDs. Failure paths (`shadowban-network.json`, `failure-network.json`) ALSO redact UUIDs and `rid=` query params (round 1 P1).
 - **Race-free chatRequests record** (round 1 P1): each request's record is captured in a local `const` before push; later `endedAt` mutation targets that record, not `array[length-1]`.

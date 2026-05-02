@@ -92,7 +92,9 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   // CODEX-R6-P0-6: wrap reservation + all subsequent risky operations in a
   // single try/catch so any failure releases the cap. Previously a throw in
   // openThread/scanForHalts/thread_input lookup could leak the reservation.
-  const reservation = await reserveCap("message");
+  // CODEX-R8-P0-3 / GEMINI-P0: use `let` so the catch path's `reservation = null`
+  // doesn't TypeError. The previous `const` would mask the original error.
+  let reservation = await reserveCap("message");
 
   let inputSel;
   try {
@@ -131,6 +133,11 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     }
 
     await idlePause({ min: 2200, max: 6500 });
+
+    // GEMINI-P0: scan halts IMMEDIATELY before humanClick. The idlePause
+    // opens a window where Turnstile/photo-verify/restriction can appear,
+    // and we must not click into a mitigation surface.
+    await scanForHalts(page);
 
     inputSel = await pickFirst(page, sels.thread_input);
     if (!inputSel) throw new Error(`thread_input not found for match ${matchId}`);
