@@ -10,6 +10,7 @@ import { logSession } from "../runtime/logger.mjs";
 import { upsertMatch, appendMessages } from "../runtime/entity-store.mjs";
 import { loadCaps } from "../runtime/caps.mjs";
 import { assertDateMode } from "../runtime/mode-guard.mjs";
+import { parseExpiryIndicatorText } from "../runtime/expiry.mjs";
 
 // Read all contact rows from the sidebar. Returns one entry per row with the
 // stable matchId, the clean name, and any visible expiry signal.
@@ -56,7 +57,9 @@ export async function scrapeMatches(page) {
 
 // Open the thread for a given matchId, scrape its message log + profile pane.
 // Returns { matchId, slug, messages_total, messages_new, profile_diff, expires_at }.
-export async function scrapeThread(page, matchId, { name = null } = {}) {
+// `sidebarHints` (optional) is the row from scrapeMatches with expiryText/expiryProgress;
+// pass it through so we don't re-scrape what we already saw.
+export async function scrapeThread(page, matchId, { name = null, sidebarHints = null } = {}) {
   const sels = await selectors();
   const caps = await loadCaps();
   // CODEX-R7-P0-3: thread_messages selector must be wired before scraping a
@@ -84,14 +87,26 @@ export async function scrapeThread(page, matchId, { name = null } = {}) {
   try { profile = await readThreadProfile(page); }
   catch (e) { console.error(`readThreadProfile failed: ${e.message}`); profile = null; }
 
-  // Derive expires_at from the in-thread expiry notice or sidebar progress.
-  // Bumble expiry UI shows things like "Conversation expires in 21 hours";
-  // we approximate the timestamp by adding hoursLeft to now.
+  // CODEX-R8-P1 / GEMINI-P1: expiry parsing now uses parseExpiryIndicatorText,
+  // which handles "X hours", "X hrs", "X minutes", "X min", "<1h", "expired".
+  // Falls back to sidebar hints from scrapeMatches when the in-thread notice
+  // is missing. Previously the regex only matched integer "hour" text and
+  // silently null-ed everything else (corrupting expiry triage).
   const expiryHint = await page.$eval(".messages-notice.expiration-status-average, .contact__expiration-status-text", el => (el.textContent || "").trim()).catch(() => null);
   let expires_at = null;
-  if (expiryHint) {
-    const m = expiryHint.match(/(\d+)\s*hour/i);
-    if (m) expires_at = new Date(Date.now() + parseInt(m[1], 10) * 3600 * 1000).toISOString();
+  const candidateTexts = [expiryHint, sidebarHints?.expiryText].filter(Boolean);
+  for (const t of candidateTexts) {
+    const parsed = parseExpiryIndicatorText(t);
+    if (parsed && parsed.hoursLeft != null) {
+      expires_at = new Date(Date.now() + parsed.hoursLeft * 3600 * 1000).toISOString();
+      break;
+    }
+  }
+  // Fall back to sidebar progress (0-100, 0=expired) if available.
+  if (!expires_at && sidebarHints?.expiryProgress != null) {
+    // Conservative estimate: progress 100 ~ 24h left, progress 0 ~ expired now.
+    const hoursLeft = (sidebarHints.expiryProgress / 100) * 24;
+    expires_at = new Date(Date.now() + hoursLeft * 3600 * 1000).toISOString();
   }
 
   // Use the name we already know (from the sidebar row) if profile pane didn't give one.

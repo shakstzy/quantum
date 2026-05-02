@@ -25,12 +25,35 @@ await expireOldPending();
 const entities = await listAllEntities();
 const triaged = sortByExpiry(entities);
 
+// GEMINI-P0: include "ambiguous" stage in the in-flight set. Otherwise a
+// quarantined post-click failure (clicked send but verification failed) would
+// be re-drafted on the next decide cron AND get re-sent on the next send cron,
+// causing a double-text. Ambiguous items must be operator-resolved before
+// re-drafting; treat them as in-flight so decide skips them.
+// Also walk OUTBOUND_DIR for the legacy ambiguous/ directory directly,
+// since it may not be a registered queue stage yet.
+import { readdir } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
+import { OUTBOUND_DIR } from "../src/runtime/paths.mjs";
+
 const inFlight = new Set();
 for (const stage of ["drafts", "pending", "approved"]) {
   for (const item of await listQueue(stage)) {
     if (item.meta.slug) inFlight.add(item.meta.slug);
   }
 }
+// Walk 04-outbound/ambiguous/ directly (not yet a first-class stage in queue.mjs).
+try {
+  const ambDir = resolvePath(OUTBOUND_DIR, "ambiguous");
+  const ambFiles = await readdir(ambDir).catch(() => []);
+  for (const f of ambFiles) {
+    if (!f.endsWith(".md")) continue;
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(resolvePath(ambDir, f), "utf8").catch(() => "");
+    const slugM = text.match(/^slug:\s*(\S+)/m);
+    if (slugM) inFlight.add(slugM[1]);
+  }
+} catch { /* skip */ }
 
 console.log(`decide: ${entities.length} entities; expiry buckets:`);
 const counts = {};

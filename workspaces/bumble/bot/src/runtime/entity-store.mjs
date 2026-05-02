@@ -372,19 +372,31 @@ function fmtMessageLine({ direction, text, ts }) {
   return `**${who}** ${t} ${text.replace(/\n/g, " ")}`;
 }
 
-function messageIdentity(direction, text) {
+// CODEX-R8-P1 / GEMINI-P1: position-aware dedup. The previous identity was
+// `${direction}::${normText}` only, which collapsed legitimate repeats like
+// "haha" / "lol" / "same". Including the running ordinal (occurrence index of
+// this direction+text in the existing thread) lets repeated identical text
+// stay distinct as long as the new scrape has at least one MORE occurrence
+// than the local file.
+function messageIdentity(direction, text, occurrence = 0) {
   const norm = String(text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
-  return `${direction}::${norm}`;
+  return `${direction}::${norm}::${occurrence}`;
 }
 
 function existingIdentities(conversationMd) {
   const out = new Set();
+  const counts = new Map();
   for (const line of (conversationMd || "").split("\n")) {
     const m = line.match(/^\*\*(her|you)\*\*\s+\S+\s+\S+\s+(.*)$/);
     if (!m) continue;
-    out.add(messageIdentity(m[1] === "you" ? "out" : "in", m[2]));
+    const direction = m[1] === "you" ? "out" : "in";
+    const norm = String(m[2] || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+    const key = `${direction}::${norm}`;
+    const occ = counts.get(key) || 0;
+    out.add(`${direction}::${norm}::${occ}`);
+    counts.set(key, occ + 1);
   }
-  return out;
+  return { idents: out, counts };
 }
 
 const PHONE_RE = /(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/g;
@@ -403,14 +415,18 @@ export function extractPhoneFromText(text) {
 export async function appendMessages(slug, messages) {
   return await withEntityLock(async () => {
     const ent = await loadEntity(slug);
-    const have = existingIdentities(ent.conversation);
+    const { idents: have, counts } = existingIdentities(ent.conversation);
     const newLines = [];
     let lastTs = ent.meta.last_activity;
     let extractedPhone = null;
     for (const m of messages) {
-      const ident = messageIdentity(m.direction, m.text);
+      const norm = String(m.text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+      const key = `${m.direction}::${norm}`;
+      const occ = counts.get(key) || 0;
+      const ident = messageIdentity(m.direction, m.text, occ);
       if (have.has(ident)) continue;
       have.add(ident);
+      counts.set(key, occ + 1);
       newLines.push(fmtMessageLine(m));
       if (m.ts && (!lastTs || m.ts > lastTs)) lastTs = m.ts;
       if (!extractedPhone && !ent.meta.phone) {
@@ -421,9 +437,16 @@ export async function appendMessages(slug, messages) {
     if (newLines.length === 0) return { added: 0 };
     const baseConvo = cleanStub(ent.conversation, "(no messages yet)");
     const conversation = [baseConvo, ...newLines].filter(Boolean).join("\n");
+    // GEMINI-P1: appendMessages used to leave last_activity stuck at first_seen
+    // when scrape sets ts=null on every message. New messages mean activity
+    // happened NOW; bump last_activity to current time when at least one new
+    // line was appended. This fixes expiry triage.
+    const finalLastActivity = lastTs && lastTs > (ent.meta.last_activity || "")
+      ? lastTs
+      : new Date().toISOString();
     const meta = {
       ...ent.meta,
-      last_activity: lastTs || new Date().toISOString(),
+      last_activity: finalLastActivity,
       phone: ent.meta.phone || extractedPhone || null,
     };
     await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });

@@ -129,10 +129,12 @@ Live-verified 2026-04-30 against grok.com.
 | Symptom | Exit | Action |
 |---|---|---|
 | Session expired / never logged in | 2 | Run `login`. |
+| `--mode deepsearch` (xAI removed it 2026-05) | 2 | Use `--model heavy` (paywalled) or `--model expert`. |
+| Model requires SuperGrok Heavy upgrade | 2 | Pick `auto`, `fast`, or `expert` instead. |
 | Cloudflare / Turnstile / captcha | 3 | Breaker tripped 24h. Run `login` headed once challenge clears. |
-| Submit accepted but no stream within 30s + DOM empty | 4 | Possible shadow-ban or undetected transport. Inspect `shadowban.png` + `shadowban-network.json` in run dir. |
+| Submit accepted but no stream within 90s + DOM empty | 4 | Possible shadow-ban or undetected transport. Inspect `shadowban.png` + `shadowban-network.json` in run dir. |
 | Quota exhausted / 429 | 5 | Wait `wait_seconds` then retry. Caller decides. |
-| Composer / send button missing | 6 | UI changed. Run `diag` to discover new selectors. |
+| Composer / send button missing OR picker label drift | 6 | UI changed. Run `diag` to discover new selectors. |
 | Stream did not terminate within timeoutMs | 7 | Inspect `failure.png` + `failure-network.json`. |
 
 ## Self-heal protocol (per learnings/2026-04-30-live-test-and-fix-browser-skills.md)
