@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Reddit CLI for terse, context-friendly Reddit reads.
 
-Stdlib only. Hits Reddit's public JSON API (read-only, no auth).
+Stdlib only. Hits Reddit's JSON API. Anonymous by default (~10 req/min);
+optional OAuth via env vars REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET lifts
+to ~60 req/min using the application-only client_credentials flow.
+
 Default output is compact markdown; --json dumps cleaned structured data.
 
-Subcommands: search, hot, new, top, post, user
+Subcommands: search, hot, new, top, controversial, rising, post, user, info
 """
 
 import argparse
+import base64
 import json
+import os
+import pathlib
 import re
 import sys
 import time
@@ -16,23 +22,67 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-DEFAULT_UA = "reddit-cli/1.0 (read-only; ULTRON local)"
-BASE = "https://www.reddit.com"
+DEFAULT_UA = "reddit-cli/1.1 (read-only; ULTRON local)"
+ANON_BASE = "https://www.reddit.com"
+OAUTH_BASE = "https://oauth.reddit.com"
+TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+TOKEN_CACHE = pathlib.Path.home() / ".cache" / "reddit-cli" / "token.json"
+
+
+def _get_oauth_token(ua):
+    """Return a bearer token via client_credentials, cached on disk.
+
+    Returns None when no creds in env (caller falls back to anonymous)."""
+    cid = os.environ.get("REDDIT_CLIENT_ID")
+    sec = os.environ.get("REDDIT_CLIENT_SECRET")
+    if not (cid and sec):
+        return None
+    # cached token (10s safety buffer before expiry)
+    if TOKEN_CACHE.exists():
+        try:
+            cached = json.loads(TOKEN_CACHE.read_text())
+            if cached.get("expires_at", 0) - 10 > time.time():
+                return cached["access_token"]
+        except Exception:
+            pass
+    auth = base64.b64encode(f"{cid}:{sec}".encode()).decode()
+    body = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
+    req = urllib.request.Request(
+        TOKEN_URL, data=body,
+        headers={"Authorization": f"Basic {auth}", "User-Agent": ua,
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        tok = json.loads(r.read())
+    tok["expires_at"] = time.time() + tok.get("expires_in", 3600)
+    TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    TOKEN_CACHE.write_text(json.dumps(tok))
+    TOKEN_CACHE.chmod(0o600)
+    return tok["access_token"]
 
 
 def fetch(path, params, ua):
     p = dict(params or {})
     p["raw_json"] = 1
     qs = "?" + urllib.parse.urlencode({k: v for k, v in p.items() if v is not None})
-    url = f"{BASE}{path}.json{qs}"
-    req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept": "application/json"})
+    token = _get_oauth_token(ua)
+    base = OAUTH_BASE if token else ANON_BASE
+    suffix = "" if token else ".json"  # oauth.reddit.com returns JSON without suffix
+    url = f"{base}{path}{suffix}{qs}"
+    headers = {"User-Agent": ua, "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < 2:
-                time.sleep(2 ** attempt)
+                # respect Retry-After if Reddit sent one
+                retry = e.headers.get("Retry-After")
+                delay = int(retry) if retry and retry.isdigit() else 2 ** attempt
+                time.sleep(min(delay, 30))
                 continue
             raise
 
