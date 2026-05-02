@@ -114,21 +114,48 @@ function renderEntity({ meta, profile, conversation, outbound, profile_changes =
   ].join("\n");
 }
 
+// Normalize a profile object for storage. The browser-side extractors return
+// `work`/`school` as single strings; the entity schema uses `jobs`/`schools`
+// arrays. This shim collapses both shapes and persists the rich Bumble fields
+// (lifestyle_badges, prompts, hometown) the extractors now produce.
 function profileToMarkdown(profile) {
   const lines = [];
+  const jobs = Array.isArray(profile.jobs) && profile.jobs.length
+    ? profile.jobs
+    : (profile.work ? [profile.work] : []);
+  const schools = Array.isArray(profile.schools) && profile.schools.length
+    ? profile.schools
+    : (profile.school ? [profile.school] : []);
+
   if (profile.age != null) lines.push(`- age: ${profile.age}`);
   if (profile.distance_mi != null) lines.push(`- distance_mi: ${profile.distance_mi}`);
+  if (profile.height) lines.push(`- height: ${JSON.stringify(profile.height)}`);
   if (profile.height_cm != null) lines.push(`- height_cm: ${profile.height_cm}`);
   if (profile.bio) lines.push(`- bio: ${JSON.stringify(profile.bio)}`);
   if (profile.looking_for) lines.push(`- looking_for: ${JSON.stringify(profile.looking_for)}`);
   if (profile.opening_move) lines.push(`- opening_move: ${JSON.stringify(profile.opening_move)}`);
-  if (profile.schools?.length) lines.push(`- schools: ${profile.schools.join(", ")}`);
-  if (profile.jobs?.length) lines.push(`- jobs: ${profile.jobs.join(", ")}`);
+  if (schools.length) lines.push(`- schools: ${schools.join(", ")}`);
+  if (jobs.length) lines.push(`- jobs: ${jobs.join(", ")}`);
   if (profile.lives_in) lines.push(`- lives_in: ${JSON.stringify(profile.lives_in)}`);
+  if (profile.hometown) lines.push(`- hometown: ${JSON.stringify(profile.hometown)}`);
   if (profile.pronouns) lines.push(`- pronouns: ${JSON.stringify(profile.pronouns)}`);
   if (profile.sexuality) lines.push(`- sexuality: ${JSON.stringify(profile.sexuality)}`);
   if (profile.photo_verified === true) lines.push(`- photo_verified: true`);
   if (profile.interests?.length) lines.push(`- interests: ${profile.interests.join(", ")}`);
+  if (Array.isArray(profile.lifestyle_badges) && profile.lifestyle_badges.length) {
+    lines.push(`- lifestyle_badges: ${JSON.stringify(profile.lifestyle_badges)}`);
+  }
+  if (Array.isArray(profile.prompts) && profile.prompts.length) {
+    for (let i = 0; i < profile.prompts.length; i++) {
+      const p = profile.prompts[i];
+      lines.push(`- prompts.${i}.q: ${JSON.stringify(p.q)}`);
+      lines.push(`- prompts.${i}.a: ${JSON.stringify(p.a)}`);
+    }
+  } else if (profile.prompts && typeof profile.prompts === "object" && Object.keys(profile.prompts).length) {
+    for (const [k, v] of Object.entries(profile.prompts)) {
+      lines.push(`- prompt: ${JSON.stringify(`${k} :: ${v}`)}`);
+    }
+  }
   if (profile.basics && Object.keys(profile.basics).length) {
     for (const [k, v] of Object.entries(profile.basics)) lines.push(`- basics.${k.toLowerCase().replace(/\s+/g, "_")}: ${JSON.stringify(v)}`);
   }
@@ -140,8 +167,10 @@ function profileToMarkdown(profile) {
 }
 
 export function profileFromMarkdown(markdown) {
-  const out = { basics: {}, lifestyle: {}, interests: [] };
+  const out = { basics: {}, lifestyle: {}, interests: [], lifestyle_badges: [], prompts: [] };
   if (!markdown) return out;
+  // First pass: collect prompts.<idx>.q / prompts.<idx>.a so we can assemble them.
+  const promptParts = {};
   for (const line of markdown.split("\n")) {
     const m = line.match(/^- ([\w.]+):\s*(.*)$/);
     if (!m) continue;
@@ -151,12 +180,31 @@ export function profileFromMarkdown(markdown) {
       try { v = JSON.parse(v); } catch {}
     } else if (/^-?\d+$/.test(v)) v = parseInt(v, 10);
     if (k === "age" || k === "distance_mi" || k === "photos_count" || k === "height_cm") out[k] = typeof v === "number" ? v : parseInt(v, 10);
-    else if (k === "bio" || k === "looking_for" || k === "opening_move" || k === "lives_in" || k === "pronouns" || k === "sexuality") out[k] = v;
+    else if (k === "bio" || k === "looking_for" || k === "opening_move" || k === "lives_in" || k === "hometown" || k === "pronouns" || k === "sexuality" || k === "height") out[k] = v;
     else if (k === "photo_verified") out[k] = vRaw === "true";
     else if (k === "schools" || k === "jobs") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
     else if (k === "interests") out[k] = String(v).split(",").map(s => s.trim()).filter(Boolean);
+    else if (k === "lifestyle_badges") {
+      try { out.lifestyle_badges = typeof v === "string" ? JSON.parse(v) : v; }
+      catch { out.lifestyle_badges = String(v).split(",").map(s => s.trim()).filter(Boolean); }
+    }
+    else if (k.startsWith("prompts.")) {
+      const parts = k.split(".");
+      const idx = parseInt(parts[1], 10);
+      const field = parts[2];
+      if (Number.isFinite(idx) && (field === "q" || field === "a")) {
+        promptParts[idx] = promptParts[idx] || {};
+        promptParts[idx][field] = v;
+      }
+    }
     else if (k.startsWith("basics.")) out.basics[k.slice(7)] = v;
     else if (k.startsWith("lifestyle.")) out.lifestyle[k.slice(10)] = v;
+  }
+  // Assemble prompts in order.
+  const promptIndices = Object.keys(promptParts).map(Number).sort((a, b) => a - b);
+  for (const i of promptIndices) {
+    const p = promptParts[i];
+    if (p?.q && p?.a) out.prompts.push({ q: p.q, a: p.a });
   }
   return out;
 }

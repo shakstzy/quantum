@@ -213,20 +213,95 @@ export async function readVisibleCard(page) {
 }
 
 // Read the right-side profile pane on the connections (thread) view.
+// The thread pane uses the `.profile__*` class convention (different from the
+// `.encounters-story-*` one used on the swipe surface), but the profile shape
+// is identical: name, age, job, school, badges, prompts, location, photos.
+// Live-verified 2026-05-02 against Neha's pane.
 export async function readThreadProfile(page) {
   const sels = await selectors();
   return await page.evaluate((paneSel) => {
-    const empty = { name: null, age: null, work: null, school: null, height: null,
-                    photo_verified: false, bio: null, distance_mi: null };
+    const empty = {
+      name: null, age: null, distance_mi: null, bio: null,
+      work: null, school: null, height: null, height_cm: null,
+      photo_verified: false, prompts: [], interests: [],
+      lifestyle_badges: [], lives_in: null, hometown: null,
+      photos: [], photos_count: 0,
+    };
     const root = document.querySelector(paneSel);
     if (!root) return empty;
     const out = { ...empty };
-    const text = (root.textContent || "").replace(/\s+/g, " ").trim();
-    const nm = text.match(/^([\p{L}][\p{L}\s'\-]{0,40}),\s*(\d{1,3})/u);
-    if (nm) { out.name = nm[1].trim(); out.age = parseInt(nm[2], 10); }
-    const distM = text.match(/(\d+)\s*miles?\s*away/i);
+
+    const txt = (el) => (el?.textContent || "").trim() || null;
+
+    // Name + age via dedicated selectors. profile__age is rendered as ", 22"
+    // (with leading comma+space) — strip non-digits.
+    out.name = txt(root.querySelector(".profile__name"));
+    const ageStr = txt(root.querySelector(".profile__age")) || "";
+    const ageMatch = ageStr.match(/(\d+)/);
+    if (ageMatch) out.age = parseInt(ageMatch[1], 10);
+
+    out.work = txt(root.querySelector(".profile__business--job"));
+    out.school = txt(root.querySelector(".profile__business--education"));
+    out.photo_verified = !!root.querySelector(".profile__verify *, .verification-badge")
+                       || /\bPhotoverified\b|\bPhoto verified\b/i.test(txt(root) || "");
+
+    // Lifestyle badges (ordered).
+    const badgeSeen = new Set();
+    for (const el of root.querySelectorAll(".profile__badge")) {
+      const t = txt(el);
+      if (t && !badgeSeen.has(t)) { out.lifestyle_badges.push(t); badgeSeen.add(t); }
+    }
+    for (const b of out.lifestyle_badges) {
+      const m = b.match(/^(\d+)'\s*(\d+)''/);
+      if (m) {
+        out.height = b;
+        const totalIn = parseInt(m[1], 10) * 12 + parseInt(m[2], 10);
+        out.height_cm = Math.round(totalIn * 2.54);
+        break;
+      }
+    }
+
+    // About body: the .profile__section--answer subsections include the about
+    // text + per-prompt answers. The about section's title is "About <Name>".
+    // We extract the prose-only About body, then capture question prompts.
+    for (const ans of root.querySelectorAll(".profile-answer")) {
+      const heading = txt(ans.querySelector(".profile-answer__title"));
+      const answer = txt(ans.querySelector(".profile-answer__text"));
+      if (!heading || !answer) continue;
+      if (/^about\b/i.test(heading)) {
+        if (!out.bio) out.bio = answer;
+      } else {
+        out.prompts.push({ q: heading, a: answer });
+      }
+    }
+
+    // Location pills.
+    for (const pill of root.querySelectorAll(".location-widget__pill")) {
+      const t = txt(pill);
+      if (!t) continue;
+      const stripFlag = (s) => s.replace(/^[^A-Za-z]+/, "").trim();
+      if (/lives in/i.test(t)) out.lives_in = stripFlag(t.replace(/lives in\s*/i, ""));
+      else if (/from/i.test(t)) out.hometown = stripFlag(t.replace(/from\s*/i, ""));
+    }
+
+    const rootText = (root.textContent || "").replace(/\s+/g, " ").trim();
+    const distM = rootText.match(/(\d+)\s*miles?\s*away/i);
     if (distM) out.distance_mi = parseInt(distM[1], 10);
-    out.photo_verified = /\bPhotoverified\b|\bPhoto verified\b/i.test(text);
+
+    // Photos in the thread pane carousel.
+    const photoSeen = new Set();
+    for (const img of root.querySelectorAll("img.media-box__picture-image, img[class*='profile__photo']")) {
+      let src = img.getAttribute("src") || img.src || "";
+      if (!src) continue;
+      if (src.startsWith("//")) src = "https:" + src;
+      if (!src.includes("bumbcdn.com")) continue;
+      const norm = src.split("&size=")[0].split("&ck=")[0];
+      if (photoSeen.has(norm)) continue;
+      photoSeen.add(norm);
+      out.photos.push(src);
+    }
+    out.photos_count = out.photos.length;
+
     return out;
   }, sels.thread_profile_pane?.selector || ".page__profile");
 }
