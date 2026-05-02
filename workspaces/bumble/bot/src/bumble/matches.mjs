@@ -59,6 +59,12 @@ export async function scrapeMatches(page) {
 export async function scrapeThread(page, matchId, { name = null } = {}) {
   const sels = await selectors();
   const caps = await loadCaps();
+  // CODEX-R7-P0-3: thread_messages selector must be wired before scraping a
+  // thread. Without it, page.$$eval(undefined) throws AFTER we've already
+  // opened the thread (visible Bumble navigation with no useful scrape).
+  if (!sels.thread_messages?.selector) {
+    throw new Error("missing_selector: thread_messages. Run scripts/discover-dom.mjs.");
+  }
   await openThread(page, matchId);
   await scanForHalts(page);
 
