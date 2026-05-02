@@ -114,6 +114,49 @@ export async function peekCap(kind) {
   return { dayUsed, dayLimit, hourUsed, hourLimit, exceeded };
 }
 
+// CODEX-R5-P0-4+5: real reserve-under-lock cap. Atomically increment the
+// counter inside withState(); if cap reached, throws. If the action then
+// FAILS, caller must call releaseCap(kind, reservationId) to roll back the
+// increment. If action SUCCEEDS, no commit needed (already incremented).
+//
+// This closes the peek-then-commit race window: two concurrent processes
+// can no longer both peek under cap and both perform the action.
+export async function reserveCap(kind) {
+  const caps = await loadCaps();
+  return withState((state) => {
+    pruneOld(state);
+    const today = todayKey();
+    const thisHour = hourKey();
+    state.day[today] = state.day[today] || {};
+    state.hour[thisHour] = state.hour[thisHour] || {};
+    const dayUsed = state.day[today][kind] || 0;
+    const hourUsed = state.hour[thisHour][kind] || 0;
+    if (kind === "swipe" && dayUsed >= caps.swipes.per_day) {
+      throw new Error(`cap_reached: swipes daily ${dayUsed}/${caps.swipes.per_day}`);
+    }
+    if (kind === "message" && hourUsed >= caps.messages.per_hour) {
+      throw new Error(`cap_reached: messages hourly ${hourUsed}/${caps.messages.per_hour}`);
+    }
+    state.day[today][kind] = dayUsed + 1;
+    state.hour[thisHour][kind] = hourUsed + 1;
+    state.last = state.last || {};
+    state.last[kind] = Date.now();
+    return { reservationId: `${kind}-${today}-${thisHour}-${dayUsed + 1}`, dayUsed: dayUsed + 1, hourUsed: hourUsed + 1, kind, today, thisHour };
+  });
+}
+
+export async function releaseCap(reservation) {
+  if (!reservation) return;
+  return withState((state) => {
+    state.day[reservation.today] = state.day[reservation.today] || {};
+    state.hour[reservation.thisHour] = state.hour[reservation.thisHour] || {};
+    const dayUsed = state.day[reservation.today][reservation.kind] || 0;
+    const hourUsed = state.hour[reservation.thisHour][reservation.kind] || 0;
+    state.day[reservation.today][reservation.kind] = Math.max(0, dayUsed - 1);
+    state.hour[reservation.thisHour][reservation.kind] = Math.max(0, hourUsed - 1);
+  });
+}
+
 // CODEX-R1-P1-1: must run inside withState() lock, otherwise concurrent cron
 // fires (swipe + pull at the same minute) can both decide skipPlan independently.
 export async function shouldSkipDay() {

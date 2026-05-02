@@ -44,7 +44,11 @@ export function setRoutes({ encounters, matches }) {
 export async function gotoEncounters(page) {
   const sels = await selectors();
   if (!discovered(sels.rec_card) || !discovered(sels.like_button)) throw new PreDiscoveryError("gotoEncounters");
-  if (!page.url().includes("encounters") && !page.url().includes("/app")) {
+  // CODEX-R5-P0-1: ALWAYS navigate. The previous heuristic skipped if URL
+  // contained "/app", but /app/matches, /app/profile, /app/chat, /app/bizz
+  // all contain "/app" and are NOT the encounters surface. Skipping nav from
+  // there made swipeSession poll like/pass selectors on the wrong UI.
+  if (!page.url().includes("encounters")) {
     await page.goto(ENCOUNTERS_URL, { waitUntil: "domcontentloaded" });
   }
   await sleep(jitter(2400, 4200));

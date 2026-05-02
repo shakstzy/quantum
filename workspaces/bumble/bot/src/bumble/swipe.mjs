@@ -8,7 +8,7 @@ import { selectors, scanForHalts } from "../runtime/detection.mjs";
 import { humanClick, makeCursor, idlePause, microFidget, sleep, jitter } from "../runtime/humanize.mjs";
 import { gotoEncounters, readVisibleCard } from "./page.mjs";
 import { logSwipe } from "../runtime/logger.mjs";
-import { checkAndIncrement, loadCaps, peekCap } from "../runtime/caps.mjs";
+import { loadCaps, reserveCap, releaseCap } from "../runtime/caps.mjs";
 import { assertDateMode } from "../runtime/mode-guard.mjs";
 
 let _filter = null;
@@ -79,13 +79,6 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     await scanForHalts(page);
     await microFidget(page);
 
-    // CODEX-R2-P0-3: reserve quota BEFORE the irreversible click. peek-only here.
-    const peek = await peekCap("swipe");
-    if (peek.exceeded) {
-      stopReason = `cap_reached: swipes daily ${peek.dayUsed}/${peek.dayLimit}`;
-      break;
-    }
-
     const profile = await readVisibleCard(page);
     if (!profile.name && !profile.age) {
       await sleep(jitter(800, 1600));
@@ -102,6 +95,21 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     if (Math.random() < 0.18) await idlePause({ min: 1800, max: 5500 });
     else await idlePause({ min: 1100, max: 3100 });
 
+    // CODEX-R5-P0-2: re-scan halts IMMEDIATELY before the click. Idle pauses
+    // open a window where Turnstile / photo-verify / login-wall can appear
+    // and we must not click into mitigation surfaces.
+    await scanForHalts(page);
+
+    // CODEX-R5-P0-5: reserve cap atomically (under lock). If next steps fail,
+    // we release. Replaces the previous peek-then-commit race window.
+    let reservation;
+    try {
+      reservation = await reserveCap("swipe");
+    } catch (e) {
+      stopReason = e.message;
+      break;
+    }
+
     const buttonSel = wantLike ? sels.like_button : sels.pass_button;
     const candidates = [buttonSel.selector, ...(buttonSel.alt || [])].filter(Boolean);
     let clicked = false;
@@ -112,6 +120,8 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       } catch { /* continue */ }
     }
     if (!clicked) {
+      // Release the reservation - no action happened.
+      await releaseCap(reservation);
       stopReason = "button_not_found";
       break;
     }
@@ -129,6 +139,8 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       if (next.name && next.name !== profile.name) { cardChanged = true; break; }
     }
     if (!cardChanged) {
+      // Release reservation - the click didn't actually advance the card.
+      await releaseCap(reservation);
       await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
       stopReason = lastSeenName ? "stuck_card_after_click" : "overlay_after_click";
       break;
@@ -137,13 +149,8 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     // CODEX-R3-P0-6: scan halts AFTER the click too. Turnstile/photo-verify can
     // appear post-click; without this scan, we'd exit the session "clean" and
     // the next cron starts without .halt set.
-    try { await scanForHalts(page); } catch (e) { stopReason = e.message; break; }
-
-    // Only NOW commit the cap (post-verified card change + post-halt scan).
-    let counters;
-    try {
-      counters = await checkAndIncrement("swipe");
-    } catch (e) {
+    try { await scanForHalts(page); } catch (e) {
+      // Halt fired - reservation is correct (we did click), so don't release.
       stopReason = e.message;
       break;
     }
@@ -153,7 +160,7 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       filter_pass: inFilter,
       ratio_after: wouldBeRatio,
       profile,
-      day_count: counters.dayUsed,
+      day_count: reservation.dayUsed,
     });
     swiped += 1;
     if (wantLike) liked += 1;

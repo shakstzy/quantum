@@ -48,9 +48,17 @@ async function presentForHalt(page, sel, kind) {
 }
 
 // Action selectors that, if configured, mean the bot can perform irreversible
-// actions. If ANY of these is wired, ALL halt-kind selectors must also be wired
-// or scanForHalts will fail closed at the start of the call.
-const ACTION_SELECTORS_THAT_REQUIRE_FULL_HALT_LADDER = ["like_button", "pass_button", "thread_input"];
+// or invasive Bumble-visible activity. If ANY of these is wired, ALL halt-kind
+// selectors must also be wired or scanForHalts will fail closed at the start
+// of the call.
+//
+// CODEX-R5-P0-3: include match-list selectors. pull.mjs scrolls and opens
+// threads, which is account-behavior signal too. If the halt ladder is null
+// while scrapeMatches navigates, we'd burn through verification walls silently.
+const ACTION_SELECTORS_THAT_REQUIRE_FULL_HALT_LADDER = [
+  "like_button", "pass_button", "thread_input",
+  "matches_tab", "matches_list_item", "thread_messages",
+];
 
 export async function scanForHalts(page) {
   const sels = await selectors();
