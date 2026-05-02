@@ -46,6 +46,8 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     : jitter(caps.swipes.per_session_min, caps.swipes.per_session_max + 1);
   if (testLimit > 0) console.log(`TEST MODE: hard-capped at ${testLimit} swipes`);
 
+  const ratioCap = caps.swipes.right_swipe_ratio_max ?? 0.5;
+
   await gotoEncounters(page);
   await assertDateMode(page);
 
@@ -64,15 +66,11 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     }
 
     const inFilter = passesFilter(profile, filter);
-    const wantLike = inFilter;
-
-    let counters;
-    try {
-      counters = await checkAndIncrement("swipe");
-    } catch (e) {
-      stopReason = e.message;
-      break;
-    }
+    // CODEX-R1-P0-2: enforce right_swipe_ratio_max. If liking this profile would
+    // push the session ratio above the cap, force pass even if she's in filter.
+    // Prevents the "20 in-filter cards in a row -> 20 likes" Bumble-bot signature.
+    const wouldBeRatio = swiped > 0 ? (liked + (inFilter ? 1 : 0)) / (swiped + 1) : (inFilter ? 1 : 0);
+    const wantLike = inFilter && wouldBeRatio <= ratioCap;
 
     if (Math.random() < 0.18) await idlePause({ min: 1800, max: 5500 });
     else await idlePause({ min: 1100, max: 3100 });
@@ -91,9 +89,20 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
       break;
     }
 
+    // CODEX-R1-P1-3: only increment counter AFTER successful click. A selector
+    // miss should not consume daily quota.
+    let counters;
+    try {
+      counters = await checkAndIncrement("swipe");
+    } catch (e) {
+      stopReason = e.message;
+      break;
+    }
+
     await logSwipe({
       decision: wantLike ? "like" : "pass",
       filter_pass: inFilter,
+      ratio_after: wouldBeRatio,
       profile,
       day_count: counters.dayUsed,
     });
@@ -103,5 +112,5 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     await sleep(jitter(...caps.swipes.between_swipes_ms));
   }
 
-  return { swiped, liked, stopReason };
+  return { swiped, liked, stopReason, ratio: swiped > 0 ? liked / swiped : 0 };
 }
