@@ -5,7 +5,7 @@ import { selectors, scanForHalts } from "../runtime/detection.mjs";
 import { humanClick, humanType, makeCursor, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { logSession } from "../runtime/logger.mjs";
 import { findEntityByMatchId, appendOutboundEvent, appendMessages } from "../runtime/entity-store.mjs";
-import { checkAndIncrement, loadCaps } from "../runtime/caps.mjs";
+import { checkAndIncrement, loadCaps, peekCap } from "../runtime/caps.mjs";
 
 async function pickFirst(page, sel) {
   const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
@@ -16,17 +16,27 @@ async function pickFirst(page, sel) {
   return null;
 }
 
-// CODEX-R2-P0-1+2: Bumble role guard. On hetero matches, men cannot send a cold
-// opener. Refuse to send unless one of these is true (NO reengage bypass; ALL
-// sends through this path go through Bumble UI, so off-platform reengage cannot
-// be a justification):
-//   - the entity has at least one inbound message (`**her**` line in conversation)
-//   - the entity has an Opening Move text recorded (her preset prompt for him)
-function hasInboundMessage(conversationMd) {
-  return /\n\*\*her\*\*\s+/.test(conversationMd || "") || /^\*\*her\*\*\s+/.test(conversationMd || "");
+// CODEX-R3-P0-2: role guard must check the LATEST message direction, not any
+// historical inbound. After Adithya replies, the doctrine is: wait for her next
+// message before sending again. The previous shape `.includes("**her**")` was
+// true forever after the first inbound and permitted double-texting.
+function lastMessageDirection(conversationMd) {
+  if (!conversationMd) return null;
+  const lines = conversationMd.split("\n").filter(l => l.startsWith("**her**") || l.startsWith("**you**"));
+  if (lines.length === 0) return null;
+  return lines[lines.length - 1].startsWith("**her**") ? "in" : "out";
+}
+// Only true when she sent the most recent message. Lets us reply, blocks double-texting.
+function lastMessageIsHers(conversationMd) {
+  return lastMessageDirection(conversationMd) === "in";
 }
 function hasOpeningMove(profileMd) {
   return /^- opening_move:\s*/m.test(profileMd || "");
+}
+// Pre-Bumble shape: empty thread, opening_move recorded, no outbound from us yet.
+function isOpeningMoveResponse(conversationMd, profileMd) {
+  if (!hasOpeningMove(profileMd)) return false;
+  return lastMessageDirection(conversationMd) == null; // no messages either side
 }
 
 export async function sendMessage(page, { matchId, text, mode, draftId, lintScore, intent = "reply", dryRun = false }) {
@@ -36,25 +46,37 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
   }
   const cursor = await makeCursor(page);
 
-  // Role guard (P0-1+2). Hard refusal when neither condition holds.
+  // CODEX-R3-P0-2+3: tightened role guard. Two valid send shapes:
+  //   (a) "reply" - she sent the MOST RECENT message in the thread
+  //   (b) "opening_move_response" - empty thread but profile records an Opening Move
+  // Anything else (you sent last, or no inbound + no opening_move) is refused.
   const entityForGuard = await findEntityByMatchId(matchId);
   if (entityForGuard) {
     const { loadEntity } = await import("../runtime/entity-store.mjs");
     const ent = await loadEntity(entityForGuard.slug);
-    const inbound = hasInboundMessage(ent.conversation);
-    const opening = hasOpeningMove(ent.profile);
-    if (!(inbound || opening)) {
-      throw new Error(`role_guard: refused to send to ${matchId} (slug=${ent.slug}). No inbound message and no opening_move. Bumble women-message-first rule. intent=${intent}`);
+
+    const isReply = lastMessageIsHers(ent.conversation);
+    const isOpening = isOpeningMoveResponse(ent.conversation, ent.profile);
+
+    if (!(isReply || isOpening)) {
+      const dir = lastMessageDirection(ent.conversation);
+      throw new Error(`role_guard: refused to send to ${matchId} (slug=${ent.slug}). last_msg_dir=${dir}, opening_move=${hasOpeningMove(ent.profile)}, intent=${intent}. Bumble women-message-first; no double-texting.`);
     }
-    // CODEX-R2-P1-12: also refuse if the entity is expired/unmatched OR expires_at is past.
+    // Mismatched intent vs actual eligibility class is suspicious; reject.
+    if (intent === "reply" && !isReply) {
+      throw new Error(`role_guard: intent=reply but last message was not from her (slug=${ent.slug})`);
+    }
+    if (intent === "opening_move_response" && !isOpening) {
+      throw new Error(`role_guard: intent=opening_move_response but thread is not empty or no opening_move (slug=${ent.slug})`);
+    }
+
+    // Refuse stale or unmatched.
     const expired_status = ["expired", "unmatched"].includes(ent.meta.status);
     const expired_clock = ent.meta.expires_at && new Date(ent.meta.expires_at).getTime() < Date.now();
     if (expired_status || expired_clock) {
       throw new Error(`stale_match: refused to send to ${matchId} (slug=${ent.slug}). status=${ent.meta.status}, expires_at=${ent.meta.expires_at}`);
     }
   } else {
-    // No entity record means we never scraped this match. Refuse — we have no proof
-    // of inbound message or opening_move.
     throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
   }
 

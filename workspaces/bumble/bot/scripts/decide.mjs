@@ -51,14 +51,17 @@ for (const ent of triaged) {
     } catch { /* skip */ }
   }
 
-  // CODEX-R1-P1-12 + R2-P0-1: only queue when role-eligible. If she hasn't
-  // messaged AND there's no opening_move, we cannot send through Bumble UI.
-  // Skip the entity entirely. (Future: off-platform reengage via iMessage
-  // workspace, NOT through bumble's send.mjs.)
-  const sheJustSpoke = (ent.conversation || "").includes("**her**");
-  const hasOpeningMove = /^- opening_move:\s*/m.test(ent.profile || "");
-  if (!sheJustSpoke && !hasOpeningMove) continue; // role-ineligible
-  const intent = sheJustSpoke ? "reply" : "opening_move_response";
+  // CODEX-R3-P0-3: role-eligibility = LAST message is from her, or thread is
+  // empty AND opening_move recorded. The previous "any historical **her**" check
+  // was true forever after first inbound and permitted re-drafting after each
+  // queued item left the in-flight set.
+  const lines = (ent.conversation || "").split("\n").filter(l => l.startsWith("**her**") || l.startsWith("**you**"));
+  const lastDir = lines.length ? (lines[lines.length - 1].startsWith("**her**") ? "in" : "out") : null;
+  const hasOpening = /^- opening_move:\s*/m.test(ent.profile || "");
+  const isReply = lastDir === "in";
+  const isOpening = lastDir == null && hasOpening;
+  if (!isReply && !isOpening) continue; // role-ineligible
+  const intent = isReply ? "reply" : "opening_move_response";
 
   // Skeleton: queue a placeholder pending item. Real drafting wired below but
   // commented out until we've live-tested send.mjs at least once.
