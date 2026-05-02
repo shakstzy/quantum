@@ -12,13 +12,13 @@ Single-file Python script. Stdlib only, no PRAW, no auth. Hits Reddit's public `
 Trigger phrases (semantic, non-exhaustive): "what's on r/X", "search reddit for X", "top posts in r/X this week", "what does r/X say about Y", "summarize this reddit thread", "find reddit threads about X", "what's u/X been posting", any `reddit.com/r/.../comments/...` URL.
 
 Do NOT fire for:
-- Posting/voting/replying — read-only, no write support.
-- Private/quarantined subs — public API returns 403 without OAuth.
-- Bulk media downloads — use `bdfr` if that ever gets installed.
+- Posting/voting/replying  -  read-only, no write support.
+- Private/quarantined subs  -  public API returns 403 without OAuth.
+- Bulk media downloads  -  use `bdfr` if that ever gets installed.
 
 ## Auth
 
-None. Public JSON endpoints. Reddit rate-limits unauth'd reads to ~10 req/min per IP — back off on 429 (script auto-retries twice with exponential backoff, then surfaces).
+None. Public JSON endpoints. Reddit rate-limits unauth'd reads to ~10 req/min per IP  -  back off on 429 (script auto-retries twice with exponential backoff, then surfaces).
 
 ## Procedure
 
@@ -49,8 +49,8 @@ reddit.py user <username> [--kind submitted|comments] [--limit N=10]
 ```
 
 Global flags (work before OR after the subcommand):
-- `--json` — raw cleaned JSON instead of markdown
-- `--ua "<string>"` — override User-Agent (default fine for read-only)
+- `--json`  -  raw cleaned JSON instead of markdown
+- `--ua "<string>"`  -  override User-Agent (default fine for read-only)
 
 ## Output shape
 
@@ -77,13 +77,13 @@ JSON: array of post dicts (or `{post, comments}` for the post subcommand). All r
 ## Budget
 
 - Default cap: 5 calls per task. Each call = one Reddit listing or thread. Confirm before going higher.
-- Reddit unauth limit is roughly 10 req/min — at 5 calls/task there's headroom, but loops over many subs hit the cap fast. Don't fan out without asking.
-- For deep comment trees, prefer increasing `--depth` over re-calling — one fetch with `--depth 4` is cheaper than 4 nested fetches.
+- Reddit unauth limit is roughly 10 req/min  -  at 5 calls/task there's headroom, but loops over many subs hit the cap fast. Don't fan out without asking.
+- For deep comment trees, prefer increasing `--depth` over re-calling  -  one fetch with `--depth 4` is cheaper than 4 nested fetches.
 
 ## Notes
 
 - API base: `https://www.reddit.com<path>.json`. Reddit's old API is the JSON one; new Reddit redirects work too.
 - "[deleted]" / "[removed]" comments are filtered out of markdown output.
-- "more comments" placeholders are skipped — to expand them you'd need OAuth + the morechildren endpoint, out of scope.
+- "more comments" placeholders are skipped  -  to expand them you'd need OAuth + the morechildren endpoint, out of scope.
 - Quarantined subs return 403; locked threads still readable. NSFW subs work but content not filtered.
 - Pairs naturally with `firecrawl` for external links cited in threads.
