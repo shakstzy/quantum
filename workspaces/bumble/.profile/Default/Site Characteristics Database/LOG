@@ -1,2 +1,3 @@
-2026/05/02-15:16:19.485 26b67 Creating DB /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/Site Characteristics Database since it was missing.
-2026/05/02-15:16:19.489 26b67 Reusing MANIFEST /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/Site Characteristics Database/MANIFEST-000001
+2026/05/02-17:43:34.069 11eccd Reusing MANIFEST /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/Site Characteristics Database/MANIFEST-000001
+2026/05/02-17:43:34.069 11eccd Recovering log #3
+2026/05/02-17:43:34.069 11eccd Reusing old log /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/Site Characteristics Database/000003.log 
