@@ -180,6 +180,19 @@ export async function runChat({ prompt, model = null, mode = 'default', force = 
           `Could not select model "${effectiveModel}". Picker may have changed. ` +
           `Available aliases: ${available}. Run \`run.mjs diag\` to inspect.`);
       }
+      // Heavy / Grok 4.3 / etc. may be gated by SuperGrok Heavy subscription.
+      // When gated, picking the menu item opens a Radix [role=dialog] upgrade
+      // modal that covers the entire viewport. Detect it and fail loud --
+      // otherwise the next composer.click() blocks for 30s on intercepted
+      // pointer events. (Live-observed 2026-05-02 with --model heavy.)
+      const upgradeText = await detectUpgradeModal(ctx.page);
+      if (upgradeText) {
+        await dismissDialog(ctx.page);
+        throw exitErr(EXIT.USAGE,
+          `Model "${effectiveModel}" requires a higher-tier xAI subscription on this account. ` +
+          `grok.com opened an upgrade dialog. Use --model expert (top tier on current plan) ` +
+          `or fast/auto. Dialog excerpt: "${upgradeText.slice(0, 140)}..."`);
+      }
       if (debug) process.stderr.write(`[chat] selected model: ${matched}\n`);
     }
 
@@ -429,6 +442,31 @@ async function pickModel(page, modelName, debug) {
     await waitForPickerClosed(page, debug);
   }
   return matched;
+}
+
+// Detect the SuperGrok upgrade modal that grok.com opens after selecting a
+// gated tier (Heavy, Grok 4.3 beta on plans without entitlement). The dialog
+// is a Radix [role=dialog][data-state=open] with paywall copy. Returns a
+// short excerpt of the dialog text if open, else null.
+async function detectUpgradeModal(page) {
+  return await page.evaluate(() => {
+    const d = document.querySelector('[role="dialog"][data-state="open"]');
+    if (!d) return null;
+    const text = (d.innerText || '').replace(/\s+/g, ' ').trim();
+    // Match SuperGrok / SuperGrok Heavy / Grok plan upgrade copy.
+    if (/upgrade to supergrok|world's most powerful|near-unlimited usage|current plan/i.test(text)) {
+      return text;
+    }
+    return null;
+  }).catch(() => null);
+}
+
+// Dismiss a Radix dialog with Escape. Safe here (unlike round-1 P2): we
+// call this only after deciding to abort the run, so there's no composer
+// typing in flight to clip. Closes any modal blocking the viewport.
+async function dismissDialog(page) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(300);
 }
 
 // Idempotently make sure the picker is closed. If aria-expanded is still true,

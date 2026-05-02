@@ -164,64 +164,28 @@ async function main() {
     await page.goto("https://tinder.com/app/matches", { waitUntil: "domcontentloaded" });
     await sleep(jitter(INITIAL_DWELL_MIN_MS, INITIAL_DWELL_MAX_MS));
     await scanForHalts(page);
-    await focusMatchesPane(page);
 
+    const cursor = await makeCursor(page);
     const all = new Set();
-    {
-      const initial = await captureSidebarMatchIds(page);
-      for (const id of initial) all.add(id);
-      console.log(`initial snapshot: ${all.size} match_ids visible`);
-    }
+    let totalScrolls = 0;
 
-    let stable = 0;
-    let scrolls = 0;
-    while (stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
-      await scanForHalts(page);
-      await humanScroll(page, {
-        distance: jitter(SCROLL_DISTANCE_MIN, SCROLL_DISTANCE_MAX),
-        steps: jitter(SCROLL_STEPS_MIN, SCROLL_STEPS_MAX),
-      });
-      scrolls++;
-      await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
-      const before = all.size;
-      const captured = await captureSidebarMatchIds(page);
-      for (const id of captured) all.add(id);
-      const added = all.size - before;
-      if (added === 0) {
-        stable++;
-        console.log(`scroll ${scrolls}: 0 new (stable ${stable}/${STABLE_NEEDED}, total ${all.size})`);
-      } else {
-        stable = 0;
-        console.log(`scroll ${scrolls}: +${added} new (total ${all.size})`);
-      }
+    // Tab 1: "Matches" (default selected) — unmessaged matches
+    const matchesResult = await scrapeCurrentTab(page, "Matches");
+    for (const id of matchesResult.ids) all.add(id);
+    totalScrolls += matchesResult.scrolls;
 
-      // Periodic "review" pause + tiny upward scroll. Mimics real review
-      // behavior; also nudges the scroll container in case lazy-load is
-      // direction-sensitive.
-      if (scrolls > 0 && scrolls % REVIEW_EVERY === 0 && stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
-        const pauseMs = jitter(REVIEW_PAUSE_MIN_MS, REVIEW_PAUSE_MAX_MS);
-        console.log(`scroll ${scrolls}: review pause ${pauseMs}ms + small upward scroll`);
-        await sleep(pauseMs);
-        await focusMatchesPane(page);
-        await page.mouse.wheel(0, -jitter(REVIEW_UP_MIN, REVIEW_UP_MAX));
-        await sleep(jitter(2500, 4500));
-        // Re-capture after the upward nudge — sometimes virtualization
-        // re-renders new IDs above the viewport.
-        const beforeReview = all.size;
-        const reviewCaptured = await captureSidebarMatchIds(page);
-        for (const id of reviewCaptured) all.add(id);
-        const reviewAdded = all.size - beforeReview;
-        if (reviewAdded > 0) {
-          stable = 0;
-          console.log(`  review: +${reviewAdded} new (total ${all.size})`);
-        }
-        await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
-      }
-    }
+    // Tab 2: "Messages" — active threads (everyone you've already messaged)
+    console.log(`\n--- switching to "Messages" tab ---`);
+    await scanForHalts(page);
+    await clickTab(page, cursor, "Messages");
+    await sleep(jitter(2500, 4500));  // let the tab content settle
+    await scanForHalts(page);
+    const messagesResult = await scrapeCurrentTab(page, "Messages");
+    for (const id of messagesResult.ids) all.add(id);
+    totalScrolls += messagesResult.scrolls;
 
-    if (scrolls >= MAX_SCROLLS) {
-      console.warn(`\n⚠ hit MAX_SCROLLS=${MAX_SCROLLS} before stability — list may be longer than expected`);
-    }
+    console.log(`\nunion of both tabs: ${all.size} unique match_ids`);
+    const scrolls = totalScrolls;
 
     // Read disk side
     const entities = await listAllEntities();
