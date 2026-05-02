@@ -5,7 +5,7 @@ import { selectors, scanForHalts } from "../runtime/detection.mjs";
 import { humanClick, humanType, makeCursor, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { logSession } from "../runtime/logger.mjs";
 import { findEntityByMatchId, appendOutboundEvent, appendMessages } from "../runtime/entity-store.mjs";
-import { checkAndIncrement, loadCaps, peekCap } from "../runtime/caps.mjs";
+import { loadCaps, reserveCap, releaseCap } from "../runtime/caps.mjs";
 
 async function pickFirst(page, sel) {
   const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
@@ -80,14 +80,13 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
   }
 
-  // CODEX-R2-P1-2: peek cap BEFORE openThread + halt scan. If cap is reached
-  // we don't burn an openThread navigation either. checkAndIncrement runs only
-  // AFTER successful delivery verification.
+  // CODEX-R5-P0-4: reserve cap atomically (under lock) BEFORE typing. If we
+  // fail to verify delivery, releaseCap rolls back. This closes the
+  // peek-then-commit race that allowed two concurrent senders to both go
+  // through under the cap.
+  let reservation = null;
   if (!dryRun) {
-    const peek = await peekCap("message");
-    if (peek.exceeded) {
-      throw new Error(`cap_reached: messages hourly ${peek.hourUsed}/${peek.hourLimit}`);
-    }
+    reservation = await reserveCap("message");
   }
 
   const { openThread } = await import("./page.mjs");
@@ -110,23 +109,35 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     return { sent: false, dryRun: true };
   }
 
+  // CODEX-R5-P0-2: re-scan halts IMMEDIATELY before any click/type sequence.
+  // The post-openThread halt scan + idlePause leaves a window where Turnstile
+  // or photo-verify can appear. Don't type into mitigation surfaces.
+  await scanForHalts(page);
+
+  // CODEX-R5-P0-6: refuse to fall back to Enter. Bumble chat composers may be
+  // contenteditable; Enter behavior is unsafe. Require thread_send to be wired
+  // before any real send.
+  if (!sels.thread_send?.selector) {
+    if (reservation) await releaseCap(reservation);
+    throw new Error("missing_selector: thread_send is not configured. Refusing to send via Enter fallback. Run scripts/discover-dom.mjs.");
+  }
+  // CODEX-R5-P0-7: strong delivery verification requires thread_messages too.
+  if (!sels.thread_messages?.selector) {
+    if (reservation) await releaseCap(reservation);
+    throw new Error("missing_selector: thread_messages is not configured. Refusing to send without strong delivery verification. Run scripts/discover-dom.mjs.");
+  }
+
   // Belt-and-suspenders cleanup: if anything below throws, a finally clears the input.
   let cleanupNeeded = true;
   try {
     await humanType(page, text, { profile: text.length > 60 ? "thinky" : "normal" });
     await sleep(jitter(600, 1800));
 
-    let sent = false;
-    if (sels.thread_send?.selector) {
-      const sendSel = await pickFirst(page, sels.thread_send);
-      if (sendSel) {
-        try { await humanClick(cursor, page, sendSel); sent = true; } catch { /* fall through */ }
-      }
-    }
-    if (!sent) {
-      await page.keyboard.press("Enter");
-      sent = true;
-    }
+    // CODEX-R5-P0-6: thread_send selector existence is verified above; no
+    // Enter fallback. If the click fails, throw - delivery did not happen.
+    const sendSel = await pickFirst(page, sels.thread_send);
+    if (!sendSel) throw new Error(`thread_send selector did not resolve at click time for ${matchId}`);
+    await humanClick(cursor, page, sendSel);
 
     await sleep(jitter(800, 1800));
 
@@ -145,30 +156,31 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
       throw new Error(`send_unverified: input box for ${matchId} still contains text after send action. Refusing to log success.`);
     }
 
-    // Strong-form check when thread_messages is configured.
-    if (sels.thread_messages?.selector) {
-      const expected = String(text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
-      let lastInThread = null;
+    // CODEX-R5-P0-7: strong-form check is now MANDATORY (thread_messages
+    // existence asserted above). Read errors no longer silently fall through.
+    const expected = String(text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+    let lastInThread = null;
+    const tmCandidates = [sels.thread_messages.selector, ...(sels.thread_messages.alt || [])].filter(Boolean);
+    let readOk = false;
+    for (const q of tmCandidates) {
       try {
-        const candidates = [sels.thread_messages.selector, ...(sels.thread_messages.alt || [])].filter(Boolean);
-        for (const q of candidates) {
-          const all = await page.$$eval(q, els => els.map(e => (e.textContent || "").trim()).filter(Boolean));
-          if (all.length > 0) { lastInThread = all[all.length - 1]; break; }
-        }
-      } catch { /* skip strong check on read error */ }
-      if (lastInThread != null) {
-        const norm = String(lastInThread).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
-        if (!norm.includes(expected)) {
-          throw new Error(`send_unverified_strong: last thread message does not contain sent text. expected="${expected.slice(0,80)}" last="${norm.slice(0,80)}"`);
-        }
-      }
+        const all = await page.$$eval(q, els => els.map(e => (e.textContent || "").trim()).filter(Boolean));
+        readOk = true;
+        if (all.length > 0) { lastInThread = all[all.length - 1]; break; }
+      } catch { /* try next */ }
+    }
+    if (!readOk) {
+      throw new Error(`send_unverified: thread_messages read failed for all candidates; cannot prove delivery for ${matchId}.`);
+    }
+    if (lastInThread == null) {
+      throw new Error(`send_unverified: no messages visible in thread after send for ${matchId}.`);
+    }
+    const norm = String(lastInThread).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!norm.includes(expected)) {
+      throw new Error(`send_unverified_strong: last thread message does not contain sent text. expected="${expected.slice(0,80)}" last="${norm.slice(0,80)}"`);
     }
 
-    // Only NOW commit the cap (post-verified-delivery).
-    if (!dryRun) {
-      try { await checkAndIncrement("message"); } catch (e) { /* race; we already verified, log and move on */ console.error(`message cap commit race: ${e.message}`); }
-    }
-
+    // Cap was already reserved at the top under lock; nothing to commit here.
     cleanupNeeded = false;
 
     const entity = await findEntityByMatchId(matchId);
@@ -180,6 +192,13 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     }
     await logSession({ event: "send", match_id: matchId, mode, intent, draft_id: draftId, slug: entity?.slug || null });
     return { sent: true };
+  } catch (e) {
+    // Send failed somewhere between reserve and verify - release reservation.
+    if (reservation) {
+      try { await releaseCap(reservation); } catch (rerr) { console.error(`releaseCap failed: ${rerr.message}`); }
+      reservation = null;
+    }
+    throw e;
   } finally {
     if (cleanupNeeded) {
       try { await page.fill(inputSel, ""); } catch {}
