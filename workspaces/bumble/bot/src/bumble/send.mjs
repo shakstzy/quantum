@@ -80,17 +80,55 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
   }
 
+  // CODEX-R7-P0-1: dryRun must abort BEFORE we open the thread. Previously
+  // dry-run still drove openThread + humanClick + page.fill(""), which is
+  // visible Bumble behavior AND can erase a manually drafted message in the
+  // composer. Decide before any browser action.
+  if (dryRun) {
+    console.log(`DRY RUN: would have sent to ${matchId}: ${JSON.stringify(text)}`);
+    return { sent: false, dryRun: true };
+  }
+
   // CODEX-R6-P0-6: wrap reservation + all subsequent risky operations in a
   // single try/catch so any failure releases the cap. Previously a throw in
   // openThread/scanForHalts/thread_input lookup could leak the reservation.
-  let reservation = null;
-  if (!dryRun) reservation = await reserveCap("message");
+  const reservation = await reserveCap("message");
 
   let inputSel;
   try {
     const { openThread } = await import("./page.mjs");
     await openThread(page, matchId);
     await scanForHalts(page);
+
+    // CODEX-R7-P0-2: LIVE pre-send direction check. The role guard above used
+    // local entity markdown (last pull state); if Adithya manually replied via
+    // the Bumble app since the last pull, our local snapshot says "her sent
+    // last" while live truth is "you sent last". Reading the live thread now
+    // forces refusal in that race.
+    if (sels.thread_messages?.selector) {
+      const tmCandidates = [sels.thread_messages.selector, ...(sels.thread_messages.alt || [])].filter(Boolean);
+      let liveLastDir = null;
+      for (const q of tmCandidates) {
+        try {
+          const dir = await page.$$eval(q, els => {
+            for (let i = els.length - 1; i >= 0; i--) {
+              const cls = els[i].getAttribute("class") || "";
+              if (/\bmessage--out\b|\bmessage--from-me\b/.test(cls)) return "out";
+              if (/\bmessage--in\b/.test(cls)) return "in";
+            }
+            return null;
+          });
+          if (dir != null) { liveLastDir = dir; break; }
+        } catch { /* try next */ }
+      }
+      // Live empty-thread is acceptable only when intent is opening_move_response.
+      if (liveLastDir == null && intent !== "opening_move_response") {
+        throw new Error(`live_role_guard: thread appears empty live but intent=${intent}. Refusing send.`);
+      }
+      if (liveLastDir === "out") {
+        throw new Error(`live_role_guard: live thread shows YOU sent the most recent message (matchId=${matchId}). Refusing to double-text. Re-pull and re-evaluate.`);
+      }
+    }
 
     await idlePause({ min: 2200, max: 6500 });
 
@@ -106,12 +144,6 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
       try { await releaseCap(reservation); } catch (rerr) { console.error(`releaseCap failed: ${rerr.message}`); }
     }
     throw e;
-  }
-
-  // CODEX-R3-P1: dryRun must not touch the real composer. Decide BEFORE typing.
-  if (dryRun) {
-    console.log(`DRY RUN: would have sent to ${matchId}: ${JSON.stringify(text)}`);
-    return { sent: false, dryRun: true };
   }
 
   // CODEX-R5-P0-2: re-scan halts IMMEDIATELY before any click/type sequence.

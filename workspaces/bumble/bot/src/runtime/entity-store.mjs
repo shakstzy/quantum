@@ -358,6 +358,14 @@ export async function upsertMatch({ matchId, personId, name, source = "bumble", 
   });
 }
 
+// CODEX-R7-fix: stub-leak. renderEntity writes "(no messages yet)" / "(none)"
+// for empty sections, which then leaked into the conversation/outbound buffers
+// on the next append. Treat the stub literals as empty.
+function cleanStub(s, stubLiteral) {
+  const trimmed = (s || "").trim();
+  return trimmed === stubLiteral ? "" : trimmed;
+}
+
 function fmtMessageLine({ direction, text, ts }) {
   const who = direction === "out" ? "you" : "her";
   const t = ts ? new Date(ts).toISOString().slice(0, 16).replace("T", " ") : new Date().toISOString().slice(0, 16).replace("T", " ");
@@ -411,7 +419,8 @@ export async function appendMessages(slug, messages) {
       }
     }
     if (newLines.length === 0) return { added: 0 };
-    const conversation = [ent.conversation, ...newLines].filter(Boolean).join("\n");
+    const baseConvo = cleanStub(ent.conversation, "(no messages yet)");
+    const conversation = [baseConvo, ...newLines].filter(Boolean).join("\n");
     const meta = {
       ...ent.meta,
       last_activity: lastTs || new Date().toISOString(),
@@ -427,7 +436,8 @@ export async function appendOutboundEvent(slug, { event, mode, intent, draftId, 
     const ent = await loadEntity(slug);
     const t = new Date().toISOString().slice(0, 16).replace("T", " ");
     const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
-    const outbound = [ent.outbound, line].filter(Boolean).join("\n");
+    const baseOutbound = cleanStub(ent.outbound, "(none)");
+    const outbound = [baseOutbound, line].filter(Boolean).join("\n");
     await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
   });
 }

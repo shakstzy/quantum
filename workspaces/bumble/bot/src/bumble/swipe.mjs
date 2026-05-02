@@ -10,6 +10,8 @@ import { gotoEncounters, readVisibleCard } from "./page.mjs";
 import { logSwipe } from "../runtime/logger.mjs";
 import { loadCaps, reserveCap, releaseCap } from "../runtime/caps.mjs";
 import { assertDateMode } from "../runtime/mode-guard.mjs";
+import { setHalt } from "../runtime/halt.mjs";
+import { logSession } from "../runtime/logger.mjs";
 
 let _filter = null;
 async function loadFilter() {
@@ -160,11 +162,17 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
         await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
         stopReason = "stuck_card_after_click";
       } else {
-        // No name visible - overlay/modal/interstitial obscuring the stack.
-        // We DO NOT release (the click may have produced this overlay).
-        // Halt the loop conservatively.
-        await logSwipe({ decision: "overlay_after_click", filter_pass: inFilter, profile, last_seen_name: null, day_count: reservation.dayUsed });
-        stopReason = "overlay_after_click_kept_reservation";
+        // CODEX-R7-P0-6+7: overlay/modal/interstitial after click. We can't
+        // distinguish a benign Bumble match modal from a Cloudflare/photo-verify
+        // surface from a same-card stuck retry. Doctrine is fail-closed: KEEP
+        // reservation AND set .halt so the next cron does not walk back into
+        // the same surface (or open another card on top of an unhandled modal).
+        // Operator must dismiss the modal manually and clear the halt.
+        const haltReason = `overlay_after_click_kept_reservation:${profile.name || "unknown"}`;
+        await setHalt(haltReason);
+        await logSwipe({ decision: "overlay_after_click", filter_pass: inFilter, profile, last_seen_name: null, day_count: reservation.dayUsed, halt: haltReason });
+        await logSession({ event: "halt", kind: "overlay_after_click", reservation_kept: true });
+        stopReason = haltReason;
       }
       break;
     }
