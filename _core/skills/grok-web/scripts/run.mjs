@@ -74,7 +74,7 @@ async function whoami() {
 async function chat(argv) {
   ensureDeps();
   const prompt = argv.positional.join(' ').trim();
-  if (!prompt) die('Usage: chat "<prompt>" [--model <name>] [--mode default|think|deepsearch] [--debug] [--out <dir>] [--timeout <ms>] [--force]');
+  if (!prompt) die('Usage: chat "<prompt>" [--model auto|fast|expert|heavy|grok-4.3] [--mode <legacy>] [--debug] [--out <dir>] [--timeout <ms>] [--force]');
   const { runChat } = await import('./chat.mjs');
   const timeoutMs = argv.flags.timeout ? parseInt(argv.flags.timeout, 10) : 240000;
   await runChat({
@@ -99,30 +99,44 @@ async function quota(argv) {
     // Live-confirmed: POST /rest/rate-limits with JSON body. The site's own
     // client sends `{requestKind: "DEFAULT", modelName: "grok-3"}` — we mirror
     // that minimal shape so the response actually applies to chat use.
+    // Live-confirmed (2026-05-02): grok-3 and grok-4 use separate quota
+    // buckets. grok-3 covers Auto/Fast/Expert (140/2h shared); grok-4 covers
+    // Heavy and Grok 4.3 beta (50/2h). Probe both unless caller pins one.
     const url = 'https://grok.com/rest/rate-limits';
-    const res = await ctx.page.evaluate(async (u) => {
-      try {
-        const r = await fetch(u, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestKind: 'DEFAULT', modelName: 'grok-3' })
-        });
-        const text = await r.text();
-        let body = null;
-        try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-        return { status: r.status, ok: r.ok, body };
-      } catch (e) { return { error: e.message }; }
-    }, url);
-    if (!res?.ok || !res.body || typeof res.body !== 'object') {
-      die(`[grok-web] /rest/rate-limits returned ${res?.status || 'error'}: ${JSON.stringify(res?.body || res?.error).slice(0,200)}`, 4);
-    }
-    const raw = res.body;
-    const pickedUrl = url;
+    const probeBuckets = argv.flags.model
+      ? [{ requestKind: 'DEFAULT', modelName: argv.flags.model }]
+      : [
+          { requestKind: 'DEFAULT', modelName: 'grok-3' },
+          { requestKind: 'DEFAULT', modelName: 'grok-4' }
+        ];
     const { parseRateLimitJSON } = await import('./quota.mjs');
     const effort = argv.flags.effort || null;
-    const parsed = parseRateLimitJSON(raw, { effort });
-    console.log(JSON.stringify({ ...parsed, _source_url: pickedUrl }, null, 2));
+    const results = {};
+    for (const body of probeBuckets) {
+      const res = await ctx.page.evaluate(async ({ u, b }) => {
+        try {
+          const r = await fetch(u, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify(b)
+          });
+          const text = await r.text();
+          let parsed = null;
+          try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+          return { status: r.status, ok: r.ok, body: parsed };
+        } catch (e) { return { error: e.message }; }
+      }, { u: url, b: body });
+      if (!res?.ok || !res.body || typeof res.body !== 'object') {
+        results[body.modelName] = { ok: false, error: `status=${res?.status || 'err'} body=${JSON.stringify(res?.body || res?.error).slice(0,120)}` };
+        continue;
+      }
+      results[body.modelName] = parseRateLimitJSON(res.body, { effort });
+    }
+    if (probeBuckets.length === 1) {
+      console.log(JSON.stringify({ ...results[probeBuckets[0].modelName], _source_url: url, _model: probeBuckets[0].modelName }, null, 2));
+    } else {
+      console.log(JSON.stringify({ _source_url: url, buckets: results }, null, 2));
+    }
   } finally { await ctx.close(); }
 }
 
@@ -165,9 +179,14 @@ Verbs:
   login                            One-time visible browser login. Sign in to grok.com (Sign in with X recommended).
   whoami                           Confirm session (probes a few likely auth endpoints).
   chat "<prompt>"                  Drive grok.com to answer. Saves response.md + metadata.json.
-                                    Flags: --model <name>, --mode default|think|deepsearch,
+                                    Flags: --model auto|fast|expert|heavy|grok-4.3 (or any picker label),
+                                           --mode <legacy alias: think→Expert, deepsearch→fails loud>,
                                            --debug, --out <dir>, --timeout <ms>, --force
-  quota                            Query the current rate-limit window. Flags: --effort high|low
+                                    Note (2026-05): xAI removed the standalone DeepSearch mode.
+                                    Use --model heavy ("Team of Experts") for deep research.
+  quota                            Query rate-limit windows. Probes both grok-3 (Auto/Fast/Expert,
+                                    140/2h) and grok-4 (Heavy + Grok 4.3 beta, 50/2h) by default.
+                                    Flags: --effort high|low, --model <id> to pin one bucket
   diag                             Survey live UI + network. Use to discover selectors after a UI change.
                                     Flags: --prompt "<smoke prompt>", --out <dir>
   status                           Profile + cookies + breaker + pidfile state.

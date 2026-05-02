@@ -1,30 +1,39 @@
 #!/usr/bin/env node
 // One-shot delta check: tinder.com matches sidebar vs raw/tinder/*.md
 //
-// PARANOID MODE — account is already at risk. Hard rules:
+// PARANOID MODE v2 — account is at risk. Hard rules:
 // - NEVER call api.gotinder.com (web UI only, patchright)
 // - NEVER click into a thread, NEVER type, NEVER take any action
-// - Half-viewport scrolls with 5-8s jitter between (slower than human)
-// - Wait for DOM stability (4 consecutive zero-new scrolls) before stopping
-// - Max 80 scroll attempts as a hard cap
-// - Honor halt.mjs at startup
+// - Drive lazy-load via page.mouse.wheel (matches the proven cron scraper),
+//   not inner-element scrollBy
+// - 5-8s dwell between scrolls (way slower than cron's 0.7-1.5s)
+// - Periodic small upward "review" scroll every 15 passes
+// - Stop after 5 consecutive zero-new passes
+// - Hard cap 150 scrolls (covers ~2k+ matches at ~15/scroll)
+// - Halt-safe at startup; scanForHalts before each scroll
 // - Read-only enumeration of <a href='/app/messages/<id>'> in the sidebar
-//
-// Outputs a delta summary: how many matches exist tinder-side that we don't
-// have on disk, plus a sample of those match_ids.
 
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { listAllEntities } from "../src/runtime/entity-store.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
-import { sleep, jitter } from "../src/runtime/humanize.mjs";
+import { sleep, jitter, humanScroll } from "../src/runtime/humanize.mjs";
+import { scanForHalts } from "../src/runtime/detection.mjs";
 
-const SCROLL_RATIO = 0.5;          // half-viewport per scroll (extra slow)
 const WAIT_MIN_MS = 5000;
 const WAIT_MAX_MS = 8000;
-const STABLE_NEEDED = 4;            // 4 consecutive zero-new before stop
-const MAX_SCROLLS = 80;             // safety cap (~2400 matches at 30/scroll)
+const STABLE_NEEDED = 5;
+const MAX_SCROLLS = 150;
 const INITIAL_DWELL_MIN_MS = 3500;
 const INITIAL_DWELL_MAX_MS = 6500;
+const SCROLL_DISTANCE_MIN = 280;
+const SCROLL_DISTANCE_MAX = 540;
+const SCROLL_STEPS_MIN = 5;
+const SCROLL_STEPS_MAX = 9;
+const REVIEW_EVERY = 15;
+const REVIEW_UP_MIN = 120;
+const REVIEW_UP_MAX = 280;
+const REVIEW_PAUSE_MIN_MS = 8000;
+const REVIEW_PAUSE_MAX_MS = 14000;
 
 async function captureSidebarMatchIds(page) {
   return await page.evaluate(() => {
@@ -37,39 +46,38 @@ async function captureSidebarMatchIds(page) {
   });
 }
 
-async function scrollSidebar(page, ratio) {
-  return await page.evaluate((r) => {
-    const links = document.querySelectorAll("a[href*='/app/messages/']");
-    if (!links.length) return false;
-    let el = links[0];
-    while (el && el !== document.body) {
-      const style = getComputedStyle(el);
-      if ((style.overflowY === "auto" || style.overflowY === "scroll")
-          && el.scrollHeight > el.clientHeight + 10) {
-        const before = el.scrollTop;
-        el.scrollBy(0, Math.floor(el.clientHeight * r));
-        return el.scrollTop !== before;
-      }
-      el = el.parentElement;
-    }
-    return false;
-  }, ratio);
+async function focusMatchesPane(page) {
+  // Park the mouse over the left-rail matches sidebar so wheel events scroll
+  // the right pane. Tinder's matches list sits in the left ~30% of the
+  // viewport; aim mid-rail at vertical center.
+  try {
+    const vp = page.viewportSize();
+    const w = vp?.width || 1280;
+    const h = vp?.height || 800;
+    const x = Math.floor(w * 0.18);
+    const y = Math.floor(h * 0.5);
+    await page.mouse.move(x, y, { steps: jitter(4, 9) });
+  } catch { /* ignore */ }
 }
 
 async function main() {
   await abortIfHalted();
 
-  console.log("PARANOID MODE: one-shot match-list delta check");
+  console.log("PARANOID MODE v2: page.mouse.wheel-driven match-list delta check");
   console.log("- web UI only, no api.gotinder.com");
   console.log("- read-only sidebar scrape, no clicks, no thread opens");
-  console.log(`- scroll: ${SCROLL_RATIO} viewport, wait ${WAIT_MIN_MS}-${WAIT_MAX_MS}ms`);
-  console.log(`- stop after ${STABLE_NEEDED} consecutive empty scrolls (max ${MAX_SCROLLS})\n`);
+  console.log(`- wheel scrolls: ${SCROLL_DISTANCE_MIN}-${SCROLL_DISTANCE_MAX}px in ${SCROLL_STEPS_MIN}-${SCROLL_STEPS_MAX} micro-steps`);
+  console.log(`- between-scroll dwell: ${WAIT_MIN_MS}-${WAIT_MAX_MS}ms`);
+  console.log(`- review pause + tiny upward scroll every ${REVIEW_EVERY} passes`);
+  console.log(`- stop after ${STABLE_NEEDED} consecutive zero-new (max ${MAX_SCROLLS})\n`);
 
   const { ctx, page } = await launchPersistent({ headless: false });
 
   try {
     await page.goto("https://tinder.com/app/matches", { waitUntil: "domcontentloaded" });
     await sleep(jitter(INITIAL_DWELL_MIN_MS, INITIAL_DWELL_MAX_MS));
+    await scanForHalts(page);
+    await focusMatchesPane(page);
 
     const all = new Set();
     {
@@ -81,15 +89,12 @@ async function main() {
     let stable = 0;
     let scrolls = 0;
     while (stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
-      const moved = await scrollSidebar(page, SCROLL_RATIO);
+      await scanForHalts(page);
+      await humanScroll(page, {
+        distance: jitter(SCROLL_DISTANCE_MIN, SCROLL_DISTANCE_MAX),
+        steps: jitter(SCROLL_STEPS_MIN, SCROLL_STEPS_MAX),
+      });
       scrolls++;
-      if (!moved) {
-        // Hit bottom of scroll container
-        stable++;
-        console.log(`scroll ${scrolls}: scroll did not move (bottom?) — stable ${stable}/${STABLE_NEEDED}`);
-        await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
-        continue;
-      }
       await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
       const before = all.size;
       const captured = await captureSidebarMatchIds(page);
@@ -101,6 +106,29 @@ async function main() {
       } else {
         stable = 0;
         console.log(`scroll ${scrolls}: +${added} new (total ${all.size})`);
+      }
+
+      // Periodic "review" pause + tiny upward scroll. Mimics real review
+      // behavior; also nudges the scroll container in case lazy-load is
+      // direction-sensitive.
+      if (scrolls > 0 && scrolls % REVIEW_EVERY === 0 && stable < STABLE_NEEDED && scrolls < MAX_SCROLLS) {
+        const pauseMs = jitter(REVIEW_PAUSE_MIN_MS, REVIEW_PAUSE_MAX_MS);
+        console.log(`scroll ${scrolls}: review pause ${pauseMs}ms + small upward scroll`);
+        await sleep(pauseMs);
+        await focusMatchesPane(page);
+        await page.mouse.wheel(0, -jitter(REVIEW_UP_MIN, REVIEW_UP_MAX));
+        await sleep(jitter(2500, 4500));
+        // Re-capture after the upward nudge — sometimes virtualization
+        // re-renders new IDs above the viewport.
+        const beforeReview = all.size;
+        const reviewCaptured = await captureSidebarMatchIds(page);
+        for (const id of reviewCaptured) all.add(id);
+        const reviewAdded = all.size - beforeReview;
+        if (reviewAdded > 0) {
+          stable = 0;
+          console.log(`  review: +${reviewAdded} new (total ${all.size})`);
+        }
+        await sleep(jitter(WAIT_MIN_MS, WAIT_MAX_MS));
       }
     }
 
@@ -128,8 +156,8 @@ async function main() {
     console.log(`disk_only (unmatched/old): ${diskOnly.length}`);
 
     if (tinderOnly.length > 0) {
-      console.log(`\nfirst 20 tinder_only match_ids:`);
-      for (const id of tinderOnly.slice(0, 20)) console.log(`  ${id}`);
+      console.log(`\nfirst 30 tinder_only match_ids:`);
+      for (const id of tinderOnly.slice(0, 30)) console.log(`  ${id}`);
     }
     if (diskOnly.length > 0 && diskOnly.length <= 30) {
       console.log(`\ndisk_only (likely unmatched/closed since pull):`);

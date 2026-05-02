@@ -114,8 +114,12 @@ export async function readVisibleCard(page) {
     }
     out.prompts = prompts;
 
-    // Distance / location: scan for "X miles away" or "Lives in X" inside the profile.
-    const distM = fullText.match(/(\d+)\s*miles?\s*away/i);
+    // Distance / location: scan for "X miles away" anywhere in the card.
+    // Bumble emits the location text in a sibling section that's part of
+    // encounters-user (root) but not necessarily encounters-story (fullText).
+    // Fall back to root.textContent so we capture "~3 miles away" patterns too.
+    const rootText = (root.textContent || "").replace(/\s+/g, " ").trim();
+    const distM = rootText.match(/(\d+)\s*miles?\s*away/i);
     if (distM) out.distance_mi = parseInt(distM[1], 10);
 
     return out;
@@ -132,7 +136,7 @@ export async function readThreadProfile(page) {
     if (!root) return empty;
     const out = { ...empty };
     const text = (root.textContent || "").replace(/\s+/g, " ").trim();
-    const nm = text.match(/^([\p{L}][\p{L}\s'\-]{0,40})[,\s]+(\d{2,3})\b/u);
+    const nm = text.match(/^([\p{L}][\p{L}\s'\-]{0,40}),\s*(\d{1,3})/u);
     if (nm) { out.name = nm[1].trim(); out.age = parseInt(nm[2], 10); }
     const distM = text.match(/(\d+)\s*miles?\s*away/i);
     if (distM) out.distance_mi = parseInt(distM[1], 10);
