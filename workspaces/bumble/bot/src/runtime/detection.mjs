@@ -87,4 +87,38 @@ export async function scanForHalts(page) {
       throw new Error(`HALTED: ${reason}`);
     }
   }
+
+  // Parallel text-scan for halt phrases that don't have stable CSS selectors.
+  // Cheap (one evaluate) and only fires when we genuinely see the language.
+  await scanHaltText(page);
+}
+
+const HALT_TEXT_CHECKS = [
+  { kind: "login_wall_text", patterns: [/quick\s+sign\s+in/i, /continue with other methods/i, /sign in to bumble/i], urlContains: "/get-started" },
+  { kind: "photo_verify_text", patterns: [/verify your photos/i, /photo verification required/i] },
+  { kind: "rate_limit_text", patterns: [/you've been swiping too much/i, /please slow down/i, /try again in a (few|moment)/i] },
+  { kind: "account_restriction_text", patterns: [/we've noticed unusual activity/i, /your account has been (suspended|restricted|blocked)/i, /this account has been disabled/i] },
+];
+
+export async function scanHaltText(page) {
+  const url = page.url();
+  let bodyText;
+  try {
+    bodyText = await page.evaluate(() => (document.body?.innerText || "").slice(0, 30000));
+  } catch { return; }
+  for (const check of HALT_TEXT_CHECKS) {
+    if (check.urlContains && !url.includes(check.urlContains)) {
+      // URL-gated check (login wall is gated to /get-started so we don't false-fire on
+      // marketing copy that happens to mention 'sign in').
+      continue;
+    }
+    for (const re of check.patterns) {
+      if (re.test(bodyText)) {
+        const reason = `detection:${check.kind}`;
+        await setHalt(reason);
+        await logSession({ event: "halt", kind: check.kind, url, matched: re.source });
+        throw new Error(`HALTED: ${reason} matched=${re.source}`);
+      }
+    }
+  }
 }
