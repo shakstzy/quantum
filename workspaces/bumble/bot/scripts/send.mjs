@@ -4,6 +4,9 @@ import { launchPersistent } from "../src/runtime/profile.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { listQueue, moveQueueItem, extractDraftedReply } from "../src/runtime/queue.mjs";
 import { sendMessage } from "../src/bumble/send.mjs";
+import { mkdir, rename } from "node:fs/promises";
+import { resolve } from "node:path";
+import { OUTBOUND_DIR } from "../src/runtime/paths.mjs";
 
 await abortIfHalted();
 const approved = await listQueue("approved");
@@ -32,6 +35,18 @@ try {
   });
   if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", "sent");
   console.log("send_result:", JSON.stringify(r));
+} catch (e) {
+  // CODEX-R6-P0-8: ambiguous send (post-click failure could be partial delivery).
+  // Quarantine to 04-outbound/ambiguous/ so cron does NOT retry and double-text.
+  if (e.ambiguous) {
+    const ambDir = resolve(OUTBOUND_DIR, "ambiguous");
+    await mkdir(ambDir, { recursive: true });
+    const fromPath = resolve(OUTBOUND_DIR, "approved", `${item.id}.md`);
+    const toPath = resolve(ambDir, `${item.id}.md`);
+    try { await rename(fromPath, toPath); } catch (renameErr) { console.error(`quarantine rename failed: ${renameErr.message}`); }
+    console.error(`AMBIGUOUS send for ${item.id}; quarantined to 04-outbound/ambiguous/. Verify in Bumble UI before re-sending or trashing.`);
+  }
+  throw e;
 } finally {
   await ctx.close();
 }
