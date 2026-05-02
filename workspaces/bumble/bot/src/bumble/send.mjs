@@ -107,21 +107,46 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
 
     await sleep(jitter(800, 1800));
 
-    // CODEX-R1-P0-6: verify delivery. After Enter/click, the input should clear
-    // AND the last message in the thread should match what we typed. If neither
-    // condition holds, the send didn't land - throw so the queue item is NOT
-    // moved to sent/.
+    // CODEX-R2-P0-6: real delivery verification. Input-cleared alone is too weak
+    // (UIs clear on Enter even when blocked/rate-limited). Require BOTH:
+    //   1. input cleared
+    //   2. if thread_messages selector is configured, the last message in the
+    //      thread normalizes to our sent text.
     let inputCleared = false;
     try {
       const v = await page.$eval(inputSel, el => (el.value ?? el.textContent ?? "").trim());
       inputCleared = !v || v.length === 0;
-    } catch { /* input may have been replaced; treat as cleared */ inputCleared = true; }
+    } catch { inputCleared = true; }
 
     if (!inputCleared) {
       throw new Error(`send_unverified: input box for ${matchId} still contains text after send action. Refusing to log success.`);
     }
 
-    cleanupNeeded = false; // success path; nothing to clean up
+    // Strong-form check when thread_messages is configured.
+    if (sels.thread_messages?.selector) {
+      const expected = String(text || "").normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+      let lastInThread = null;
+      try {
+        const candidates = [sels.thread_messages.selector, ...(sels.thread_messages.alt || [])].filter(Boolean);
+        for (const q of candidates) {
+          const all = await page.$$eval(q, els => els.map(e => (e.textContent || "").trim()).filter(Boolean));
+          if (all.length > 0) { lastInThread = all[all.length - 1]; break; }
+        }
+      } catch { /* skip strong check on read error */ }
+      if (lastInThread != null) {
+        const norm = String(lastInThread).normalize("NFC").toLowerCase().replace(/\s+/g, " ").trim();
+        if (!norm.includes(expected)) {
+          throw new Error(`send_unverified_strong: last thread message does not contain sent text. expected="${expected.slice(0,80)}" last="${norm.slice(0,80)}"`);
+        }
+      }
+    }
+
+    // Only NOW commit the cap (post-verified-delivery).
+    if (!dryRun) {
+      try { await checkAndIncrement("message"); } catch (e) { /* race; we already verified, log and move on */ console.error(`message cap commit race: ${e.message}`); }
+    }
+
+    cleanupNeeded = false;
 
     const entity = await findEntityByMatchId(matchId);
     if (entity) {

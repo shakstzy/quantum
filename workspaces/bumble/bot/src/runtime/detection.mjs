@@ -26,6 +26,11 @@ const HALT_KINDS = [
   "account_restriction_banner",
 ];
 
+// CODEX-R2-P1-4: invalid selector strings used to be silently skipped here,
+// which made detection halt-signals fail open (a typo in the Turnstile selector
+// would mean Turnstile never trips a halt). Now: log invalid selectors loudly
+// so self-check / first run flags them. Still doesn't HALT on invalid syntax,
+// but the noise lets the operator catch it before a real ban event.
 async function present(page, sel) {
   if (!sel) return false;
   const candidates = [sel.selector, ...(sel.alt || [])].filter(s => s != null);
@@ -33,7 +38,9 @@ async function present(page, sel) {
     try {
       const el = await page.$(s);
       if (el) return true;
-    } catch { /* invalid selector, skip */ }
+    } catch (e) {
+      console.error(`detection: invalid selector ${JSON.stringify(s)} - ${e.message}. Treat as not-present but FIX in config/selectors.json.`);
+    }
   }
   return false;
 }
