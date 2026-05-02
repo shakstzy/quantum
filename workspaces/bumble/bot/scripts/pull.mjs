@@ -5,12 +5,17 @@ import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { scrapeMatches, scrapeThread } from "../src/bumble/matches.mjs";
 import { logSession } from "../src/runtime/logger.mjs";
 import { loadCaps } from "../src/runtime/caps.mjs";
+import { assertDateMode } from "../src/runtime/mode-guard.mjs";
 
 await abortIfHalted();
 const caps = await loadCaps();
 
 const { ctx, page } = await launchPersistent({ headless: false });
 try {
+  // CODEX-R6-P0-9: assert Date mode before any pull. Scraping BFF/Bizz threads
+  // into dating entities is exactly the cross-mode contamination the doctrine
+  // says to halt on.
+  await assertDateMode(page);
   const matches = await scrapeMatches(page);
   console.log(`matches: ${matches.length}`);
   let opened = 0;

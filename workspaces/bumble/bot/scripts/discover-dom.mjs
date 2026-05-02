@@ -103,6 +103,27 @@ const SURVEY = [
 
 const { ctx, page } = await launchPersistent({ headless: false });
 
+// CODEX-R6-P0-10: discover-dom is one of the riskiest moments. Hit Turnstile/
+// photo-verify/login-wall checks after every navigation. Halt loudly instead
+// of barreling through the mitigation surface.
+async function bailOnMitigation(page, label) {
+  const checks = [
+    { kind: "turnstile_iframe", q: "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']" },
+    { kind: "photo_verify_modal_text", q: "text=verify your photos" },
+    { kind: "login_wall_text", q: "text=Sign in" },
+  ];
+  for (const c of checks) {
+    try {
+      const el = await page.$(c.q);
+      if (el) {
+        console.error(`discover-dom: bailing at ${label} - mitigation ${c.kind} present`);
+        return c.kind;
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
 const result = {};
 try {
   for (const { label, url } of CANDIDATE_URLS) {
@@ -112,6 +133,12 @@ try {
     } catch (e) {
       result[label] = { url, error: e.message };
       continue;
+    }
+    const mitigation = await bailOnMitigation(page, label);
+    if (mitigation) {
+      result[label] = { url, error: `mitigation_present:${mitigation}` };
+      // Don't proceed to other URLs once a mitigation is up. Operator clears, re-runs.
+      break;
     }
     const url_after = page.url();
     const title = await page.title();

@@ -80,28 +80,33 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
   }
 
-  // CODEX-R5-P0-4: reserve cap atomically (under lock) BEFORE typing. If we
-  // fail to verify delivery, releaseCap rolls back. This closes the
-  // peek-then-commit race that allowed two concurrent senders to both go
-  // through under the cap.
+  // CODEX-R6-P0-6: wrap reservation + all subsequent risky operations in a
+  // single try/catch so any failure releases the cap. Previously a throw in
+  // openThread/scanForHalts/thread_input lookup could leak the reservation.
   let reservation = null;
-  if (!dryRun) {
-    reservation = await reserveCap("message");
+  if (!dryRun) reservation = await reserveCap("message");
+
+  let inputSel;
+  try {
+    const { openThread } = await import("./page.mjs");
+    await openThread(page, matchId);
+    await scanForHalts(page);
+
+    await idlePause({ min: 2200, max: 6500 });
+
+    inputSel = await pickFirst(page, sels.thread_input);
+    if (!inputSel) throw new Error(`thread_input not found for match ${matchId}`);
+
+    await humanClick(cursor, page, inputSel);
+    await sleep(jitter(200, 500));
+    try { await page.fill(inputSel, ""); } catch { /* continue */ }
+    await sleep(jitter(200, 500));
+  } catch (e) {
+    if (reservation) {
+      try { await releaseCap(reservation); } catch (rerr) { console.error(`releaseCap failed: ${rerr.message}`); }
+    }
+    throw e;
   }
-
-  const { openThread } = await import("./page.mjs");
-  await openThread(page, matchId);
-  await scanForHalts(page);
-
-  await idlePause({ min: 2200, max: 6500 });
-
-  const inputSel = await pickFirst(page, sels.thread_input);
-  if (!inputSel) throw new Error(`thread_input not found for match ${matchId}`);
-
-  await humanClick(cursor, page, inputSel);
-  await sleep(jitter(200, 500));
-  try { await page.fill(inputSel, ""); } catch { /* continue */ }
-  await sleep(jitter(200, 500));
 
   // CODEX-R3-P1: dryRun must not touch the real composer. Decide BEFORE typing.
   if (dryRun) {
@@ -129,15 +134,22 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
 
   // Belt-and-suspenders cleanup: if anything below throws, a finally clears the input.
   let cleanupNeeded = true;
+  let postClickReached = false;
   try {
     await humanType(page, text, { profile: text.length > 60 ? "thinky" : "normal" });
     await sleep(jitter(600, 1800));
+
+    // CODEX-R6-P0-7: scan halts AFTER typing, BEFORE clicking send. Long text
+    // can take seconds; Turnstile / photo-verify / restriction can appear in
+    // that window and we must not click send into a mitigation surface.
+    await scanForHalts(page);
 
     // CODEX-R5-P0-6: thread_send selector existence is verified above; no
     // Enter fallback. If the click fails, throw - delivery did not happen.
     const sendSel = await pickFirst(page, sels.thread_send);
     if (!sendSel) throw new Error(`thread_send selector did not resolve at click time for ${matchId}`);
     await humanClick(cursor, page, sendSel);
+    postClickReached = true; // anything past this point is "ambiguous" on failure
 
     await sleep(jitter(800, 1800));
 
@@ -193,7 +205,18 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     await logSession({ event: "send", match_id: matchId, mode, intent, draft_id: draftId, slug: entity?.slug || null });
     return { sent: true };
   } catch (e) {
-    // Send failed somewhere between reserve and verify - release reservation.
+    // CODEX-R6-P0-8: differentiate ambiguous vs clean failure. If we already
+    // clicked the send button, the message MAY have gone through but
+    // verification failed. In that case, KEEP the cap reservation (don't
+    // double-charge nor under-count) and signal ambiguous so the caller
+    // moves the queue item to a quarantine stage instead of letting cron
+    // retry it.
+    if (postClickReached) {
+      const ambiguous = new Error(`send_ambiguous: clicked send button, verification failed afterward. Treat as MAYBE-DELIVERED. Original: ${e.message}`);
+      ambiguous.ambiguous = true;
+      throw ambiguous;
+    }
+    // Pre-click failure: release the reservation, no message went out.
     if (reservation) {
       try { await releaseCap(reservation); } catch (rerr) { console.error(`releaseCap failed: ${rerr.message}`); }
       reservation = null;
