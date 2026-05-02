@@ -16,6 +16,17 @@ await expireOldPending();
 const entities = await listAllEntities();
 const triaged = sortByExpiry(entities);
 
+// CODEX-R1-P1-13: dedupe guard. Don't queue a new draft if there's already a
+// drafts/, pending/, or approved/ item for this slug. Otherwise repeated cron
+// runs accumulate duplicate drafts.
+const { listQueue } = await import("../src/runtime/queue.mjs");
+const inFlight = new Set();
+for (const stage of ["drafts", "pending", "approved"]) {
+  for (const item of await listQueue(stage)) {
+    if (item.meta.slug) inFlight.add(item.meta.slug);
+  }
+}
+
 console.log(`decide: ${entities.length} entities; expiry buckets:`);
 const counts = {};
 for (const e of entities) {
@@ -29,6 +40,7 @@ for (const ent of triaged) {
   const triage = expiryTriage(ent.meta.expires_at);
   if (triage.bucket === "expired") continue;
   if (ent.meta.status === "expired" || ent.meta.status === "unmatched") continue;
+  if (inFlight.has(ent.slug)) continue; // already has a pending draft
 
   // Side-channel cross-ref (best-effort; only fires if last name is known)
   let imessage_summary = null;
@@ -39,12 +51,13 @@ for (const ent of triaged) {
     } catch { /* skip */ }
   }
 
-  // Decide intent. v0.1: hand-coded heuristic, swap for smarter logic later.
-  const lastLine = (ent.conversation || "").split("\n").filter(l => l.startsWith("**her**")).slice(-1)[0];
-  const sheJustSpoke = !!lastLine;
+  // CODEX-R1-P1-12: opening_move lives in profile markdown as "- opening_move: ..."
+  // not as a top-level entity field. Use the profile section text.
+  const sheJustSpoke = (ent.conversation || "").includes("**her**");
+  const hasOpeningMove = /^- opening_move:\s*/m.test(ent.profile || "");
   const intent = sheJustSpoke
     ? "reply"
-    : (ent.opening_move ? "opening_move_response" : "reengage");
+    : (hasOpeningMove ? "opening_move_response" : "reengage");
 
   // Skeleton: queue a placeholder pending item. Real drafting wired below but
   // commented out until we've live-tested send.mjs at least once.

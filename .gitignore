@@ -18,13 +18,10 @@ references/
 # raw is cron-fed personal data; keep folder structure, never commit content
 raw/*/*
 !raw/*/.gitkeep
-
 # patchright persistent chrome profile — never commit; carries auth cookies
 workspaces/tinder/.profile/
-
 # downloaded match photos for visual ingest — never commit (PII)
 workspaces/tinder/bot/.photos/
-
 # tinder outbound queue — drafts contain personal context, do not commit
 workspaces/tinder/04-outbound/drafts/*
 !workspaces/tinder/04-outbound/drafts/.gitkeep
@@ -39,6 +36,20 @@ workspaces/tinder/04-outbound/expired/*
 workspaces/tinder/04-outbound/auto-sent/*
 !workspaces/tinder/04-outbound/auto-sent/.gitkeep
 workspaces/tinder/bot/.dev-fixtures/
-
 # library: scraper HTML cache, never commit
 workspaces/library/.dev-fixtures/
+workspaces/bumble/.profile/
+workspaces/bumble/bot/.photos/
+workspaces/bumble/04-outbound/drafts/*
+workspaces/bumble/04-outbound/pending/*
+workspaces/bumble/04-outbound/approved/*
+workspaces/bumble/04-outbound/sent/*
+workspaces/bumble/04-outbound/expired/*
+workspaces/bumble/04-outbound/auto-sent/*
+workspaces/bumble/bot/.dev-fixtures/
+!workspaces/bumble/04-outbound/drafts/.gitkeep
+!workspaces/bumble/04-outbound/pending/.gitkeep
+!workspaces/bumble/04-outbound/approved/.gitkeep
+!workspaces/bumble/04-outbound/sent/.gitkeep
+!workspaces/bumble/04-outbound/expired/.gitkeep
+!workspaces/bumble/04-outbound/auto-sent/.gitkeep

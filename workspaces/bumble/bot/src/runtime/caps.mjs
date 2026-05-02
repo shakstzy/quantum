@@ -94,15 +94,17 @@ export async function readCounters() {
   return { day: state.day[todayKey()] || {}, hour: state.hour[hourKey()] || {}, last: state.last || {} };
 }
 
+// CODEX-R1-P1-1: must run inside withState() lock, otherwise concurrent cron
+// fires (swipe + pull at the same minute) can both decide skipPlan independently.
 export async function shouldSkipDay() {
   const caps = await loadCaps();
-  const state = await loadState();
-  state.skipPlan = state.skipPlan || {};
-  const today = todayKey();
-  if (state.skipPlan[today] === undefined) {
-    state.skipPlan[today] = Math.random() < caps.global.skip_day_probability;
-    for (const k of Object.keys(state.skipPlan)) if (k !== today) delete state.skipPlan[k];
-    await saveState(state);
-  }
-  return state.skipPlan[today];
+  return withState((state) => {
+    state.skipPlan = state.skipPlan || {};
+    const today = todayKey();
+    if (state.skipPlan[today] === undefined) {
+      state.skipPlan[today] = Math.random() < caps.global.skip_day_probability;
+      for (const k of Object.keys(state.skipPlan)) if (k !== today) delete state.skipPlan[k];
+    }
+    return state.skipPlan[today];
+  });
 }

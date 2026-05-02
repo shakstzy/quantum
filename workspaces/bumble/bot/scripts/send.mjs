@@ -20,6 +20,7 @@ try {
     matchId: item.meta.match_id,
     text,
     mode: "hitl",
+    intent: item.meta.intent || "reply",
     draftId: item.id,
     lintScore: 1,
     dryRun: process.env.QUANTUM_BUMBLE_DRY_RUN === "1",
