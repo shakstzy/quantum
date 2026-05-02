@@ -146,28 +146,26 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     throw e;
   }
 
-  // CODEX-R5-P0-2: re-scan halts IMMEDIATELY before any click/type sequence.
-  // The post-openThread halt scan + idlePause leaves a window where Turnstile
-  // or photo-verify can appear. Don't type into mitigation surfaces.
-  await scanForHalts(page);
-
-  // CODEX-R5-P0-6: refuse to fall back to Enter. Bumble chat composers may be
-  // contenteditable; Enter behavior is unsafe. Require thread_send to be wired
-  // before any real send.
-  if (!sels.thread_send?.selector) {
-    if (reservation) await releaseCap(reservation);
-    throw new Error("missing_selector: thread_send is not configured. Refusing to send via Enter fallback. Run scripts/discover-dom.mjs.");
-  }
-  // CODEX-R5-P0-7: strong delivery verification requires thread_messages too.
-  if (!sels.thread_messages?.selector) {
-    if (reservation) await releaseCap(reservation);
-    throw new Error("missing_selector: thread_messages is not configured. Refusing to send without strong delivery verification. Run scripts/discover-dom.mjs.");
-  }
-
+  // CODEX-R8-P0-2: pre-click halt scan and selector existence checks must run
+  // INSIDE the same try/finally that owns the cap reservation. Previously a
+  // halt firing here (or a missing-selector throw) leaked the reservation
+  // because the catch only covered openThread/scanForHalts/thread_input.
   // Belt-and-suspenders cleanup: if anything below throws, a finally clears the input.
   let cleanupNeeded = true;
   let postClickReached = false;
   try {
+    await scanForHalts(page);
+
+    // CODEX-R5-P0-6: refuse to fall back to Enter. Bumble chat composers may be
+    // contenteditable; Enter behavior is unsafe. Require thread_send wired.
+    if (!sels.thread_send?.selector) {
+      throw new Error("missing_selector: thread_send is not configured. Refusing to send via Enter fallback. Run scripts/discover-dom.mjs.");
+    }
+    // CODEX-R5-P0-7: strong delivery verification requires thread_messages too.
+    if (!sels.thread_messages?.selector) {
+      throw new Error("missing_selector: thread_messages is not configured. Refusing to send without strong delivery verification. Run scripts/discover-dom.mjs.");
+    }
+
     await humanType(page, text, { profile: text.length > 60 ? "thinky" : "normal" });
     await sleep(jitter(600, 1800));
 

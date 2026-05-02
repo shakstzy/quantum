@@ -24,6 +24,24 @@ const ACCEPTED_MODES = ["date", "Date"];
 // the URL is on /app, that's a real signal something's wrong.
 export async function readActiveMode(page) {
   const sels = await selectors();
+
+  // CODEX-R8-P0-1: BFF/Bizz markers MUST be checked FIRST. Previously the
+  // mode_picker presence check returned "Date" early; if we landed on a BFF
+  // surface that ALSO renders the mode_picker selector, the non-Date check
+  // was unreachable and we'd false-pass BFF as Date. Order is fail-closed:
+  //   1. If body text shouts BFF/Bizz mode active -> return that (caller halts).
+  //   2. If mode_picker resolves AND no BFF/Bizz signal -> return Date.
+  //   3. Otherwise null.
+  try {
+    const bizzy = await page.evaluate(() => {
+      const text = (document.body?.innerText || "").toLowerCase();
+      const bffActive = /\bbff\s+mode\b|\bbumble\s+bff\b/.test(text) && !/switch to bff/.test(text);
+      const bizzActive = /\bbizz\s+mode\b|\bbumble\s+bizz\b/.test(text) && !/switch to bizz/.test(text);
+      return bffActive ? "BFF" : (bizzActive ? "Bizz" : null);
+    });
+    if (bizzy) return bizzy;
+  } catch { /* skip */ }
+
   const sel = sels.mode_picker;
   if (!sel?.selector) return null;
   const candidates = [sel.selector, ...(sel.alt || [])].filter(Boolean);
@@ -33,17 +51,6 @@ export async function readActiveMode(page) {
       if (found) return "Date";
     } catch { /* invalid selector; try next */ }
   }
-  // Also reject if BFF or Bizz markers ARE present (signals active non-Date mode).
-  try {
-    const bizzy = await page.evaluate(() => {
-      const text = (document.body?.innerText || "").toLowerCase();
-      // BFF/Bizz mode is signalled by their distinctive surface labels.
-      const bffActive = /\bbff\s+mode\b|\bbumble\s+bff\b/.test(text) && !/switch to bff/.test(text);
-      const bizzActive = /\bbizz\s+mode\b|\bbumble\s+bizz\b/.test(text) && !/switch to bizz/.test(text);
-      return bffActive ? "BFF" : (bizzActive ? "Bizz" : null);
-    });
-    if (bizzy) return bizzy;
-  } catch { /* skip */ }
   return null;
 }
 
