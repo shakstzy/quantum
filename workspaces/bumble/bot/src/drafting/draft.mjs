@@ -1,0 +1,87 @@
+// Draft via `claude -p` (Claude Code subscription, no API key needed).
+// On Bumble, the man almost never sends the opener (women-message-first +
+// Opening Moves). Default intent is `reply`; the prompt encodes that.
+
+import { execFile as _execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import { loadVoice } from "./voice-loader.mjs";
+import { lintDraft } from "./voice-lint.mjs";
+
+const execFile = promisify(_execFile);
+
+const SYSTEM = `You are drafting a single Bumble message in Adithya's voice.
+
+Bumble context: in hetero matches, the woman either sends the first message OR sets an "Opening Move" prompt that Adithya can answer. Adithya almost never sends a cold opener. The intent is one of: reply (she sent something substantive), opening_move_response (she has an Opening Move set, no message yet), reengage (silence > 5 days, side-channel hint says she's still active elsewhere).
+
+Output: the literal message text only. No quotes, no preamble, no explanation, no emoji unless the voice profile calls for it.
+
+Hard constraints (rejection if violated): no em dashes, max 3 sentences, max 1 exclamation, no looks compliments, no "how was your day" variants, no formal greetings, no AI-tells.`;
+
+function formatBasicsLifestyle(obj) {
+  if (!obj || Object.keys(obj).length === 0) return "?";
+  return Object.entries(obj).map(([k, v]) => `${k}=${v}`).join(", ");
+}
+
+function formatProfileDiff(diff) {
+  if (!diff) return null;
+  const lines = [];
+  for (const [k, v] of Object.entries(diff.added || {})) lines.push(`  she ADDED ${k}: ${JSON.stringify(v)}`);
+  for (const [k, { from, to }] of Object.entries(diff.changed || {})) lines.push(`  she CHANGED ${k}: was ${JSON.stringify(from)}, now ${JSON.stringify(to)}`);
+  for (const [k, v] of Object.entries(diff.removed || {})) lines.push(`  she REMOVED ${k}: ${JSON.stringify(v)}`);
+  return lines.length ? lines.join("\n") : null;
+}
+
+function buildPrompt({ context, intent, voice }) {
+  const diffBlock = formatProfileDiff(context.profile_diff);
+  const lines = [
+    SYSTEM, "",
+    "## Voice profile and skills", voice, "",
+    "## Now draft for this match",
+    `intent: ${intent}`,
+    "",
+    "match profile:",
+    `  name: ${context.name || "?"}`,
+    `  age: ${context.age ?? "?"}`,
+    `  bio: ${context.bio || "?"}`,
+    `  looking_for: ${context.looking_for || "?"}`,
+    `  opening_move: ${context.opening_move || "?"}`,
+    `  interests: ${(context.interests || []).join(", ") || "?"}`,
+    `  basics: ${formatBasicsLifestyle(context.basics)}`,
+    `  lifestyle: ${formatBasicsLifestyle(context.lifestyle)}`,
+    `  schools: ${(context.schools || []).join(", ") || "?"}`,
+    `  jobs: ${(context.jobs || []).join(", ") || "?"}`,
+    "",
+  ];
+  if (diffBlock) {
+    lines.push("PROFILE CHANGES SINCE LAST SCRAPE (recent edits she made):");
+    lines.push(diffBlock);
+    lines.push("If a change is recent and interesting, you MAY anchor the message on it. Don't force it.");
+    lines.push("");
+  }
+  lines.push(
+    "thread so far (oldest first; empty if no messages yet):",
+    (context.thread || []).map(m => `  ${m.direction === "out" ? "you" : "her"}: ${m.text}`).join("\n") || "  (empty)",
+    "",
+    "side-channel signal:",
+    `  ${context.imessage_summary || "(none)"}`,
+    "",
+    "Write the next message now. Just the message text, nothing else.",
+  );
+  return lines.join("\n");
+}
+
+export async function draftMessage({ context, intent }) {
+  const voice = await loadVoice();
+  const prompt = buildPrompt({ context, intent, voice });
+  const draftId = randomUUID();
+
+  const { stdout } = await execFile("claude", ["-p", prompt, "--model", process.env.QUANTUM_BUMBLE_MODEL || "sonnet"], {
+    timeout: 120000,
+    maxBuffer: 1024 * 1024,
+  });
+
+  const text = stdout.trim().replace(/^["']|["']$/g, "");
+  const lint = lintDraft(text);
+  return { draftId, text, lint, intent };
+}
