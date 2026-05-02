@@ -65,8 +65,12 @@ export async function gotoMatches(page) {
 export async function openThread(page, matchId) {
   if (!matchId) throw new Error("openThread: matchId required");
   await gotoMatches(page);
+  // CODEX-R7-P1-1: matchId is opaque (Bumble user/connection id). Use CSS.escape
+  // to defend against attribute values that contain ], ", \, or other special
+  // chars. Single-quote escaping alone was unsafe.
   const clicked = await page.evaluate((uid) => {
-    const row = document.querySelector(`[data-qa-role='contact'][data-qa-uid='${uid.replace(/'/g, "\\'")}']`);
+    const sel = `[data-qa-role='contact'][data-qa-uid="${CSS.escape(uid)}"]`;
+    const row = document.querySelector(sel);
     if (!row) return false;
     row.click();
     return true;

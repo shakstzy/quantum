@@ -147,16 +147,24 @@ export async function swipeSession(page, { sessionMinutesMax = null } = {}) {
     //   - if no card visible (overlay obscuring) -> KEEP reservation, halt loop
     //     (we did click; we don't know whether it took, so refuse to release
     //      and force the operator to verify).
+    // CODEX-R7-P1-7: card-change check used to compare only name. Two consecutive
+    // people with the same first name (Sarah, Sarah) registered as "stuck" and
+    // released the cap after a real swipe. Compare on the (name, age, distance)
+    // identity tuple instead — even same-named profiles will differ on at least one.
+    const idOf = (p) => `${p.name || ""}::${p.age ?? ""}::${p.distance_mi ?? ""}`;
+    const profileId = idOf(profile);
     let cardChanged = false;
     let lastSeenName = null;
+    let lastSeenId = null;
     for (let probe = 0; probe < 6; probe++) {
       await sleep(jitter(250, 500));
       const next = await readVisibleCard(page);
       lastSeenName = next.name;
-      if (next.name && next.name !== profile.name) { cardChanged = true; break; }
+      lastSeenId = idOf(next);
+      if (next.name && lastSeenId !== profileId) { cardChanged = true; break; }
     }
     if (!cardChanged) {
-      if (lastSeenName === profile.name) {
+      if (lastSeenId === profileId) {
         // Same card persists, no overlay - the click missed. Safe to release.
         await releaseCap(reservation);
         await logSwipe({ decision: "stuck_card", filter_pass: inFilter, profile, last_seen_name: lastSeenName, day_count: null });
