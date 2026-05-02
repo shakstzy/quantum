@@ -216,6 +216,12 @@ function normalizeProfile(p) {
   for (const [k, v] of Object.entries(p.basics || {})) norm.basics[keyize(k)] = v;
   for (const [k, v] of Object.entries(p.lifestyle || {})) norm.lifestyle[keyize(k)] = v;
   if (Array.isArray(p.interests)) norm.interests = p.interests.map(s => String(s).trim()).filter(Boolean);
+  // Bridge readVisibleCard/readThreadProfile (work/school singletons) to the
+  // entity schema (jobs/schools arrays). Without this, the diff function
+  // saw old=jobs:["X"], new=jobs:[] and false-flagged a "removed" change
+  // every scrape.
+  if (p.work && (!Array.isArray(norm.jobs) || norm.jobs.length === 0)) norm.jobs = [p.work];
+  if (p.school && (!Array.isArray(norm.schools) || norm.schools.length === 0)) norm.schools = [p.school];
   return norm;
 }
 
