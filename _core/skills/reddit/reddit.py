@@ -181,14 +181,14 @@ def cmd_search(args):
 def cmd_listing(args):
     endpoint = args.cmd
     params = {"limit": args.limit}
-    if endpoint == "top":
+    if endpoint in ("top", "controversial"):
         params["t"] = args.time
     data = fetch(f"/r/{args.subreddit}/{endpoint}", params, args.ua)
     posts = extract_posts(data)
     if args.json:
         print(json.dumps(posts, indent=2))
         return
-    suffix = f" ({args.time})" if endpoint == "top" else ""
+    suffix = f" ({args.time})" if endpoint in ("top", "controversial") else ""
     print(f"# r/{args.subreddit} — {endpoint}{suffix}")
     print()
     if not posts:
@@ -197,6 +197,41 @@ def cmd_listing(args):
     for i, p in enumerate(posts, 1):
         print(fmt_post(p, i))
         print()
+
+
+def cmd_info(args):
+    """Subreddit metadata: subscribers, description, type, NSFW, created."""
+    data = fetch(f"/r/{args.subreddit}/about", {}, args.ua)
+    d = data.get("data", {}) if isinstance(data, dict) else {}
+    if not d:
+        print(f"r/{args.subreddit} not found or inaccessible", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        print(json.dumps(d, indent=2))
+        return
+    name = d.get("display_name_prefixed") or f"r/{args.subreddit}"
+    title = d.get("title", "")
+    subs = d.get("subscribers", 0)
+    active = d.get("active_user_count")
+    created = ago(d.get("created_utc"))
+    nsfw = "NSFW" if d.get("over18") else ""
+    sub_type = d.get("subreddit_type", "public")
+    desc = (d.get("public_description") or d.get("description") or "").strip()
+    print(f"# {name}")
+    if title:
+        print(f"**{title}**")
+    bits = [f"{subs:,} subscribers"]
+    if active is not None:
+        bits.append(f"{active:,} online")
+    bits.append(f"created {created} ago")
+    bits.append(sub_type)
+    if nsfw:
+        bits.append(nsfw)
+    print(" · ".join(bits))
+    print(f"https://reddit.com/r/{args.subreddit}")
+    if desc:
+        print()
+        print(trim(desc, 800))
 
 
 def parse_post_id(s):
@@ -229,15 +264,29 @@ def cmd_post(args):
     print(f"## top {args.top} comments (depth {args.depth})")
     print()
     shown = 0
+    link_re = re.compile(r"https?://[^\s)\]]+")
+    links = []
     for c in comments:
         line = fmt_comment(c, 0, args.depth)
         if line:
             print(line)
+            if args.links:
+                links.extend(link_re.findall(line))
             shown += 1
             if shown >= args.top:
                 break
     if shown == 0:
         print("(no comments)")
+    if args.links and links:
+        print()
+        print("## links extracted from comments")
+        # dedupe preserving order, drop reddit-internal
+        seen = set()
+        for u in links:
+            if u in seen or "reddit.com" in u:
+                continue
+            seen.add(u)
+            print(f"- {u}")
 
 
 def cmd_user(args):
@@ -287,11 +336,11 @@ def main():
     s.add_argument("--sort", choices=["relevance", "hot", "top", "new", "comments"], default="relevance")
     s.set_defaults(fn=cmd_search)
 
-    for ep in ("hot", "new", "top"):
+    for ep in ("hot", "new", "top", "controversial", "rising"):
         sp = sub.add_parser(ep, help=f"{ep} posts in subreddit", parents=[common])
         sp.add_argument("subreddit")
         sp.add_argument("--limit", type=int, default=10)
-        if ep == "top":
+        if ep in ("top", "controversial"):
             sp.add_argument("--time", choices=["hour", "day", "week", "month", "year", "all"], default="day")
         sp.set_defaults(fn=cmd_listing)
 
@@ -299,6 +348,7 @@ def main():
     pp.add_argument("id", help="post ID, full URL, or /r/.../comments/ID/...")
     pp.add_argument("--top", type=int, default=10, help="top N comments")
     pp.add_argument("--depth", type=int, default=2, help="max reply depth")
+    pp.add_argument("--links", action="store_true", help="extract URLs from shown comments")
     pp.set_defaults(fn=cmd_post)
 
     up = sub.add_parser("user", help="user's recent posts or comments", parents=[common])
@@ -306,6 +356,10 @@ def main():
     up.add_argument("--limit", type=int, default=10)
     up.add_argument("--kind", choices=["submitted", "comments"], default="submitted")
     up.set_defaults(fn=cmd_user)
+
+    ip = sub.add_parser("info", help="subreddit metadata (about page)", parents=[common])
+    ip.add_argument("subreddit")
+    ip.set_defaults(fn=cmd_info)
 
     args = p.parse_args()
     try:
@@ -316,7 +370,16 @@ def main():
             body = e.read().decode("utf-8", "ignore")[:200]
         except Exception:
             pass
-        print(f"reddit HTTP {e.code}: {body}", file=sys.stderr)
+        hint = ""
+        if e.code == 404:
+            hint = " (subreddit/post not found, or sub is banned)"
+        elif e.code == 403:
+            hint = " (private, quarantined, or requires login)"
+        elif e.code == 451:
+            hint = " (legally restricted)"
+        elif e.code == 429:
+            hint = " (rate-limited; set REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET for 6x cap)"
+        print(f"reddit HTTP {e.code}{hint}: {body}", file=sys.stderr)
         sys.exit(2)
     except urllib.error.URLError as e:
         print(f"reddit network error: {e}", file=sys.stderr)
