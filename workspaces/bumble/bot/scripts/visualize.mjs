@@ -61,6 +61,11 @@ async function captureProfilePhotoUrls(page, matchId) {
   await sleep(jitter(2400, 3500));
   await scanForHalts(page);
 
+  // Wait for the profile pane to actually render before snapshotting. Lazy
+  // photo carousel can take a beat to mount.
+  try { await page.waitForSelector(".page__profile img.media-box__picture-image, .page__profile img[class*='profile__photo']", { timeout: 8000 }); }
+  catch { /* pane might be empty profile or load slower */ }
+
   const collected = new Set();
 
   async function snapshotPaneUrls() {

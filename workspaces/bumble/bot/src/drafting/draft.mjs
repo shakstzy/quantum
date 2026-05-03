@@ -71,6 +71,12 @@ function buildPrompt({ context, intent, voice }) {
     `${formatPrompts(context.prompts)}`,
     "",
   ];
+  if (visualBlock) {
+    lines.push("visual signal from her photos (NON-FACIAL — settings, props, vibe, activities):");
+    lines.push(visualBlock);
+    lines.push("Use these signals to anchor the message on something specific and observable (a place, a prop, an activity, a notable_signal). NEVER reference how she looks, her body, or her face.");
+    lines.push("");
+  }
   if (diffBlock) {
     lines.push("PROFILE CHANGES SINCE LAST SCRAPE (recent edits she made):");
     lines.push(diffBlock);
