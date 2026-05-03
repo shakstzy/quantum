@@ -37,8 +37,15 @@ function formatPrompts(prompts) {
   return prompts.map(p => `    Q: ${p.q}\n    A: ${p.a}`).join("\n");
 }
 
+function formatVisual(visual) {
+  if (!visual || !String(visual).trim()) return null;
+  // Strip the HTML provenance comment that visualize.mjs prepends.
+  return String(visual).replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
 function buildPrompt({ context, intent, voice }) {
   const diffBlock = formatProfileDiff(context.profile_diff);
+  const visualBlock = formatVisual(context.visual);
   const lines = [
     SYSTEM, "",
     "## Voice profile and skills", voice, "",

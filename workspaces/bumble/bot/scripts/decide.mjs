@@ -133,6 +133,7 @@ for (const ent of triaged) {
     lives_in: profile.lives_in || null,
     hometown: profile.hometown || null,
     prompts: profile.prompts || [],
+    visual: ent.visual || null,
     thread,
     imessage_summary,
     profile_diff,
