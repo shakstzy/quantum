@@ -76,9 +76,14 @@ async function captureProfilePhotoUrls(page, matchId) {
         if (!s) return;
         let u = s;
         if (u.startsWith("//")) u = "https:" + u;
-        if (u.includes("bumbcdn.com")) hits.add(u);
+        if (!u.includes("bumbcdn.com")) return;
+        // Skip non-photo asset URLs (lifestyle badge icons, sprite sheets, etc.)
+        if (u.includes("/lifestyle_badges/") || u.includes("/assets/")) return;
+        hits.add(u);
       };
-      for (const img of root.querySelectorAll("img.media-box__picture-image, img[class*='media-box']")) {
+      // Encounters surface uses .media-box__picture-image; thread pane uses .profile__photo.
+      // Both share host bumbcdn.com but differ on class.
+      for (const img of root.querySelectorAll("img.media-box__picture-image, img.profile__photo, img[class*='profile__photo'], img[class*='media-box']")) {
         collect(img.src);
         collect(img.currentSrc);
         if (img.srcset) for (const part of img.srcset.split(",")) collect(part.trim().split(/\s+/)[0]);
@@ -110,6 +115,20 @@ async function captureProfilePhotoUrls(page, matchId) {
     await snapshotPaneUrls();
     if (collected.size === before) break;
   }
+
+  // Diagnostic: if we got 0, dump whatever IS in the pane to help debug.
+  if (collected.size === 0) {
+    try {
+      const diag = await page.evaluate(() => {
+        const root = document.querySelector(".page__profile");
+        if (!root) return { found: false, candidates: [...document.querySelectorAll("[class*='profile']")].slice(0, 5).map(e => e.className).join(" | ") };
+        const imgs = [...root.querySelectorAll("img")].slice(0, 6).map(i => ({ src: (i.src || "").slice(0, 100), cls: (i.className || "").slice(0, 80) }));
+        return { found: true, htmlSize: root.innerHTML.length, imgCount: root.querySelectorAll("img").length, sampleImgs: imgs };
+      });
+      console.error(`captureProfilePhotoUrls diag for ${matchId.slice(0, 12)}: ${JSON.stringify(diag)}`);
+    } catch {}
+  }
+
   return [...collected];
 }
 
