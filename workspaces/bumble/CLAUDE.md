@@ -34,6 +34,7 @@ There is no human-facing CLI. Cron fires `node scripts/<X>.mjs` directly (see `s
 | `scripts/pull.mjs` | Scrape match list + thread snapshots into `raw/bumble/<slug>.md` |
 | `scripts/decide.mjs` | Walk every entity, cross-ref iMessage, draft replies via `claude -p`, queue to `04-outbound/` |
 | `scripts/send.mjs` | Drain `04-outbound/approved/` via patchright (one msg per fire) |
+| `scripts/visualize.mjs` | Per-entity visual ingest: open thread, capture photos from `.page__profile`, download to `bot/.photos/<slug>/`, send to `_core/skills/cloud-llm` (Gemini Pro -> claude fallback), append `## Visual` (vibe / settings / activities / props / pets / group_context / style_signals / environments / notable_signals / red_flags). NO-FACIAL-FEATURES guardrail in the prompt. Re-scrapes profile while there. Skips entities that already have a `## Visual` section unless `QUANTUM_BUMBLE_VISUALIZE_FORCE=<slug,slug>` is set. `QUANTUM_BUMBLE_VISUALIZE_SLUG=<one>` to target a single match. `QUANTUM_BUMBLE_VISUALIZE_LIMIT=<n>` to cap a session. |
 | `scripts/status.mjs` | Counters, queue sizes, halt state, entity counts by city/status |
 | `scripts/self-check.mjs` | Pre-flight env / deps / config / halt |
 | `scripts/selector-check.mjs` | Interactive DOM selector verification |
