@@ -92,26 +92,35 @@ function parseFrontmatter(text) {
 }
 
 function splitSections(body) {
-  const sections = { profile: "", conversation: "", outbound: "", profile_changes: "" };
-  const re = /##\s+(Profile changes|Profile|Conversation|Outbound log)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
+  const sections = { profile: "", conversation: "", outbound: "", profile_changes: "", visual: "" };
+  const re = /##\s+(Profile changes|Profile|Conversation|Outbound log|Visual)\s*\n([\s\S]*?)(?=\n##\s+|$)/g;
   let m;
   while ((m = re.exec(body)) !== null) {
     const heading = m[1].toLowerCase();
-    const key = heading === "profile changes" ? "profile_changes"
-              : heading === "outbound log" ? "outbound" : heading;
+    let key;
+    if (heading === "profile changes") key = "profile_changes";
+    else if (heading === "outbound log") key = "outbound";
+    else key = heading; // "profile" | "conversation" | "visual"
     sections[key] = m[2].trim();
   }
   return sections;
 }
 
-function renderEntity({ meta, profile, conversation, outbound, profile_changes = "" }) {
-  return [
+function renderEntity({ meta, profile, conversation, outbound, profile_changes = "", visual = "" }) {
+  const lines = [
     fmYaml(meta), "",
     "## Profile", "", profile.trim() || "(no profile yet)", "",
     "## Profile changes", "", profile_changes.trim() || "(none yet)", "",
+  ];
+  // Visual section is optional — only render if visualize.mjs has populated it.
+  if (visual && visual.trim()) {
+    lines.push("## Visual", "", visual.trim(), "");
+  }
+  lines.push(
     "## Conversation", "", conversation.trim() || "(no messages yet)", "",
     "## Outbound log", "", outbound.trim() || "(none)", "",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 // Normalize a profile object for storage. The browser-side extractors return
@@ -311,9 +320,9 @@ export async function loadEntity(slug) {
   return { slug, path, meta, ...sections };
 }
 
-export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "" }) {
+export async function saveEntity({ slug, meta, profile, conversation, outbound, profile_changes = "", visual = "" }) {
   const path = resolve(RAW_DIR, `${slug}.md`);
-  await atomicWrite(path, renderEntity({ meta, profile, conversation, outbound, profile_changes }));
+  await atomicWrite(path, renderEntity({ meta, profile, conversation, outbound, profile_changes, visual }));
   return path;
 }
 
@@ -380,6 +389,7 @@ export async function upsertMatch({ matchId, personId, name, source = "bumble", 
         conversation: ent.conversation,
         outbound: ent.outbound,
         profile_changes: nextChanges,
+        visual: ent.visual || "",
       });
       return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
     }
@@ -509,7 +519,7 @@ export async function appendMessages(slug, messages) {
       last_activity: finalLastActivity,
       phone: ent.meta.phone || extractedPhone || null,
     };
-    await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta, profile: ent.profile, conversation, outbound: ent.outbound, profile_changes: ent.profile_changes, visual: ent.visual || "" });
     return { added: newLines.length, phone_discovered: extractedPhone };
   });
 }
@@ -521,7 +531,7 @@ export async function appendOutboundEvent(slug, { event, mode, intent, draftId, 
     const line = `- ${t} ${event} (${mode}, ${intent}) [draft:${draftId.slice(0, 8)}] lint=${lintPass} ${JSON.stringify(text)}`;
     const baseOutbound = cleanStub(ent.outbound, "(none)");
     const outbound = [baseOutbound, line].filter(Boolean).join("\n");
-    await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta: ent.meta, profile: ent.profile, conversation: ent.conversation, outbound, profile_changes: ent.profile_changes, visual: ent.visual || "" });
   });
 }
 
@@ -529,7 +539,7 @@ export async function setStatus(slug, status) {
   return await withEntityLock(async () => {
     const ent = await loadEntity(slug);
     const meta = { ...ent.meta, status };
-    await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes });
+    await saveEntity({ slug, meta, profile: ent.profile, conversation: ent.conversation, outbound: ent.outbound, profile_changes: ent.profile_changes, visual: ent.visual || "" });
   });
 }
 
