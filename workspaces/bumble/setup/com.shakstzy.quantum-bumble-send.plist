@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Send approved messages spread across the day. 10 fires; rate limiter caps to 10/hr. -->
+<!-- Send approved messages spread across the day. 15 fires + 2 sends/fire = ~30/day max. Rolling 10/hr cap still bounds bursts. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.shakstzy.quantum-bumble-send</string>
@@ -14,14 +14,19 @@
   <array>
     <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
     <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>30</integer></dict>
     <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
     <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
     <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
-    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>30</integer></dict>
-    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>45</integer></dict>
   </array>
   <key>StandardOutPath</key><string>/Users/shakstzy/Library/Logs/quantum-bumble.stdout.log</string>
   <key>StandardErrorPath</key><string>/Users/shakstzy/Library/Logs/quantum-bumble.stderr.log</string>

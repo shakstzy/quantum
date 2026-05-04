@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Drain 04-outbound/approved/ via patchright (one msg per fire).
+// Drain 04-outbound/approved/ via patchright. Default: up to 2 sends per fire,
+// with a 60-180s human-pause between sends. Override with QUANTUM_BUMBLE_SEND_PER_FIRE.
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { listQueue, moveQueueItem, extractDraftedReply } from "../src/runtime/queue.mjs";
@@ -32,12 +33,13 @@ function isTransient(err) {
   return TRANSIENT_PATTERNS.some(re => re.test(m));
 }
 
+const MAX_PER_FIRE = Math.max(1, parseInt(process.env.QUANTUM_BUMBLE_SEND_PER_FIRE || "2", 10));
 const { ctx, page } = await launchPersistent({ headless: false });
-let sent = false;
+let sentCount = 0;
 let attempts = 0;
 try {
   for (const item of approved) {
-    if (sent) break;
+    if (sentCount >= MAX_PER_FIRE) break;
     attempts += 1;
     // Refuse legacy placeholder drafts.
     if (item.meta.placeholder === true || item.meta.placeholder === "true") {
@@ -61,7 +63,15 @@ try {
       });
       if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", mode === "auto" ? "auto-sent" : "sent");
       console.log(`send_result (attempt ${attempts}, slug=${item.meta.slug}):`, JSON.stringify(r));
-      sent = true;
+      sentCount += 1;
+      if (sentCount < MAX_PER_FIRE) {
+        // Human-pause before next send so we don't trip min_gap and so the
+        // intra-fire cadence doesn't look mechanical. Pulls from the lower
+        // half of caps.messages.between_messages_ms to keep the fire short.
+        const gapMs = 60000 + Math.floor(Math.random() * 120000); // 60-180s
+        console.log(`drain: sent ${sentCount}/${MAX_PER_FIRE}, sleeping ${Math.round(gapMs / 1000)}s before next attempt`);
+        await new Promise(r => setTimeout(r, gapMs));
+      }
     } catch (e) {
       // CODEX-R6-P0-8: ambiguous send must always quarantine, never retry.
       if (e.ambiguous) {
@@ -96,7 +106,8 @@ try {
   await ctx.close();
 }
 
-if (!sent) {
+if (sentCount === 0) {
   console.log(`no eligible drafts could be sent this fire (attempts=${attempts})`);
   process.exit(0);
 }
+console.log(`drain complete: sent=${sentCount}/${MAX_PER_FIRE} attempts=${attempts}`);
