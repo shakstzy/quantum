@@ -25,11 +25,27 @@ export async function scrapeMatches(page) {
   // mode_picker selectors resolve - asserting before navigation always nulls.
   await assertDateMode(page);
 
-  // Scroll through the conversations list to load all rows (lazy-rendered).
-  // Cap at 12 scroll passes - typical user has < 50 active conversations.
-  for (let pass = 0; pass < 12; pass++) {
+  // CRITICAL FIX (2026-05-03 Adithya audit): the previous loop used humanScroll
+  // (mouse wheel), which scrolls whatever's under the cursor — typically the
+  // encounters card surface in the center, NOT the sidebar contacts list.
+  // That capped us at the initially-rendered ~15 rows even though the sidebar
+  // actually contained 86. Probe verified: scrolling the sidebar container
+  // directly via scrollTop=scrollHeight gets all rows. Cap raised to 30 passes
+  // (10 rows / pass empirically) so users with 100+ matches are fully caught.
+  for (let pass = 0; pass < 30; pass++) {
     const before = await page.$$eval(sels.matches_list_item.selector, els => els.length);
-    await humanScroll(page, { distance: jitter(280, 540), steps: jitter(5, 9) });
+    await page.evaluate(() => {
+      const scroller = document.querySelector(
+        "[data-qa-role='conversations-tab-section-content'], [data-qa-role='conversations-tab-section'], .sidebar__contact-list"
+      );
+      if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+        scroller.scrollTop = scroller.scrollHeight;
+      } else {
+        // Fall back to scrolling the last contact into view to trigger lazy-load.
+        const all = document.querySelectorAll("[data-qa-role='contact']");
+        if (all.length) all[all.length - 1].scrollIntoView({ block: "end", behavior: "instant" });
+      }
+    });
     await sleep(jitter(700, 1500));
     await scanForHalts(page);
     const after = await page.$$eval(sels.matches_list_item.selector, els => els.length);
