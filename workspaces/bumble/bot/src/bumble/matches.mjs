@@ -7,7 +7,7 @@ import { selectors, scanForHalts } from "../runtime/detection.mjs";
 import { gotoMatches, openThread, readThreadProfile } from "./page.mjs";
 import { humanScroll, idlePause, sleep, jitter } from "../runtime/humanize.mjs";
 import { logSession } from "../runtime/logger.mjs";
-import { upsertMatch, appendMessages } from "../runtime/entity-store.mjs";
+import { upsertMatch, appendMessages, setStatus } from "../runtime/entity-store.mjs";
 import { loadCaps } from "../runtime/caps.mjs";
 import { assertDateMode } from "../runtime/mode-guard.mjs";
 import { parseExpiryIndicatorText } from "../runtime/expiry.mjs";
@@ -115,21 +115,28 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   // Falls back to sidebar hints from scrapeMatches when the in-thread notice
   // is missing. Previously the regex only matched integer "hour" text and
   // silently null-ed everything else (corrupting expiry triage).
-  const expiryHint = await page.$eval(".messages-notice.expiration-status-average, .contact__expiration-status-text", el => (el.textContent || "").trim()).catch(() => null);
   let expires_at = null;
-  const candidateTexts = [expiryHint, sidebarHints?.expiryText].filter(Boolean);
-  for (const t of candidateTexts) {
-    const parsed = parseExpiryIndicatorText(t);
-    if (parsed && parsed.hoursLeft != null) {
-      expires_at = new Date(Date.now() + parsed.hoursLeft * 3600 * 1000).toISOString();
-      break;
+  if (isExpiredView) {
+    // The expired interstitial is the authoritative signal — set expires_at
+    // to a past timestamp so triage classifies as "expired" and decide.mjs
+    // routes accordingly. Sidebar data-progress can still report 100 here
+    // (visual lag); the interstitial overrides.
+    expires_at = new Date(Date.now() - 1000).toISOString();
+  } else {
+    const expiryHint = await page.$eval(".messages-notice.expiration-status-average, .contact__expiration-status-text", el => (el.textContent || "").trim()).catch(() => null);
+    const candidateTexts = [expiryHint, sidebarHints?.expiryText].filter(Boolean);
+    for (const t of candidateTexts) {
+      const parsed = parseExpiryIndicatorText(t);
+      if (parsed && parsed.hoursLeft != null) {
+        expires_at = new Date(Date.now() + parsed.hoursLeft * 3600 * 1000).toISOString();
+        break;
+      }
     }
-  }
-  // Fall back to sidebar progress (0-100, 0=expired) if available.
-  if (!expires_at && sidebarHints?.expiryProgress != null) {
-    // Conservative estimate: progress 100 ~ 24h left, progress 0 ~ expired now.
-    const hoursLeft = (sidebarHints.expiryProgress / 100) * 24;
-    expires_at = new Date(Date.now() + hoursLeft * 3600 * 1000).toISOString();
+    // Fall back to sidebar progress (0-100, 0=expired) if available.
+    if (!expires_at && sidebarHints?.expiryProgress != null) {
+      const hoursLeft = (sidebarHints.expiryProgress / 100) * 24;
+      expires_at = new Date(Date.now() + hoursLeft * 3600 * 1000).toISOString();
+    }
   }
 
   // Use the name we already know (from the sidebar row) if profile pane didn't give one.
@@ -153,6 +160,11 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
     added = result.added;
   }
 
+  // Persist the expired status so decide.mjs and rematch.mjs can route on it.
+  if (isExpiredView && entityResult?.slug) {
+    try { await setStatus(entityResult.slug, "expired"); } catch (e) { console.error(`setStatus(expired) failed for ${entityResult.slug}: ${e.message}`); }
+  }
+
   await idlePause({ min: caps.scrape.between_thread_opens_ms[0], max: caps.scrape.between_thread_opens_ms[1] });
   return {
     matchId,
@@ -161,5 +173,6 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
     messages_new: added,
     profile_diff: entityResult?.profile_diff || null,
     expires_at,
+    expired_view: isExpiredView,
   };
 }
