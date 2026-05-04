@@ -36,8 +36,9 @@ const SCROLL_DWELL_MIN_MS = 6000;
 const SCROLL_DWELL_MAX_MS = 10000;
 const INITIAL_DWELL_MIN_MS = 4500;
 const INITIAL_DWELL_MAX_MS = 7000;
-const MAX_SCROLLS = 50;
-const STABLE_NEEDED = 5;
+const MAX_SCROLLS = 80;
+const MIN_SCROLLS_BEFORE_STABLE = 20;   // don't even count stable until N scrolls done
+const STABLE_NEEDED = 12;                // and need 12 zero-call scrolls in a row after that
 const MAX_API_CALLS = 30;
 const REVIEW_PAUSE_EVERY = 12;
 const REVIEW_PAUSE_MIN_MS = 14000;
@@ -163,8 +164,12 @@ async function main() {
       const newIds = allIds.size - beforeIds;
 
       if (newCalls === 0 && newIds === 0) {
-        stable++;
-        console.log(`scroll ${scrolls}: 0 new calls (stable ${stable}/${STABLE_NEEDED}, total ${allIds.size})`);
+        if (scrolls >= MIN_SCROLLS_BEFORE_STABLE) {
+          stable++;
+          console.log(`scroll ${scrolls}: 0 new (stable ${stable}/${STABLE_NEEDED}, total ${allIds.size})`);
+        } else {
+          console.log(`scroll ${scrolls}: 0 new (priming, ${scrolls}/${MIN_SCROLLS_BEFORE_STABLE} forced, total ${allIds.size})`);
+        }
       } else {
         stable = 0;
         console.log(`scroll ${scrolls}: +${newCalls} call(s), +${newIds} ids (total ${allIds.size})`);
