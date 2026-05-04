@@ -15,7 +15,10 @@ try {
   if (args.json) console.log(JSON.stringify(result, null, 2));
   else {
     console.log(`Invitations (${direction}) at ${result.url}:`);
-    console.log((result.sections.invites || "").slice(0, 4000));
+    console.log(`Entries (${result.entries.length}):`);
+    for (const e of result.entries) console.log(`  ${e.slug}\t${e.displayName ?? ""}`);
+    console.log("\n--- raw page text (truncated) ---");
+    console.log((result.sections.invites || "").slice(0, 2000));
   }
 } catch (err) {
   console.error(`[list-invites] ${err.code ?? "ERR"} ${err.message}`);

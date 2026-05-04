@@ -211,9 +211,36 @@ export class LinkedInExtractor {
       : "/mynetwork/invitation-manager/";
     const url = `https://www.linkedin.com${path}`;
     await this.navigateTo(url);
-    await scrollMainScrollable(this.page, { attempts: 3, pauseMs: 500 });
+    // Scroll-to-load the virtualized list so older entries enter the DOM. /sent/ is heavily
+    // virtualized; without this, withdraw-invite can't find anything older than ~2 weeks.
+    let lastHeight = 0;
+    for (let i = 0; i < 30; i++) {
+      const h = await this.page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+        return document.body.scrollHeight;
+      }).catch(() => 0);
+      await sleep(500);
+      if (h && h === lastHeight) break;
+      lastHeight = h;
+    }
     const text = await this.getMainText();
-    return { url, sections: { invites: text } };
+    // Harvest structured (slug, displayName) pairs from the rendered list. Operators need this
+    // to pass the right slug to withdraw-invite (LinkedIn vanity slugs rarely match display kebab).
+    const entries = await this.page.evaluate(() => {
+      const out = [];
+      const seen = new Set();
+      for (const a of document.querySelectorAll('main a[href*="/in/"]')) {
+        const m = (a.getAttribute("href") || "").match(/^\/in\/([^/?#]+)\/?/);
+        if (!m) continue;
+        const slug = decodeURIComponent(m[1]);
+        if (seen.has(slug)) continue;
+        seen.add(slug);
+        const displayName = (a.innerText || a.textContent || "").trim().split("\n")[0] || null;
+        out.push({ slug, displayName });
+      }
+      return out;
+    }).catch(() => []);
+    return { url, sections: { invites: text }, entries };
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────
