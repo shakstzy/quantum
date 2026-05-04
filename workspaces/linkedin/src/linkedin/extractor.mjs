@@ -392,10 +392,26 @@ export class LinkedInExtractor {
   async withdrawInvite(username, { dryRun = true } = {}) {
     const url = "https://www.linkedin.com/mynetwork/invitation-manager/sent/";
     await this.navigateTo(url);
-    // Scroll to load all sent invites before searching.
-    for (let i = 0; i < 6; i++) {
-      await this.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {});
+    // Scroll-until-found: /sent/ is virtualized. Older invites (>2wk) only enter the DOM after
+    // we scroll past them. Stop early when target href appears OR when scrollHeight stops growing.
+    const targetSlug = String(username || "").trim();
+    let lastHeight = 0;
+    for (let i = 0; i < 30; i++) {
+      const found = await this.page.evaluate((slug) => {
+        return Array.from(document.querySelectorAll('main a[href*="/in/"]'))
+          .some((a) => {
+            const m = (a.getAttribute("href") || "").match(/^\/in\/([^/]+)\/?/);
+            return m && decodeURIComponent(m[1]) === slug;
+          });
+      }, targetSlug).catch(() => false);
+      if (found) break;
+      const h = await this.page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+        return document.body.scrollHeight;
+      }).catch(() => 0);
       await sleep(700);
+      if (h && h === lastHeight) break;
+      lastHeight = h;
     }
 
     // Find the withdraw control for THIS specific user. Per Codex r2 review of the targeting fix:

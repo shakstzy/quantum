@@ -2,11 +2,29 @@
 // but pinned to the LinkedIn .profile dir and with LinkedIn-flavored hardening.
 
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { chromium } from "patchright";
 import { PROFILE_DIR } from "./paths.mjs";
 
 const DEFAULT_VIEWPORT = { width: 1366, height: 820 };
 const DEFAULT_USER_AGENT = null; // let patchright/chromium pick to match installed Chromium build
+const MIN_INTER_LAUNCH_MS = 30_000; // 2026-05-04: live smoke surfaced /feed/ throttle when 4+ verbs fired in 2 min.
+const LAUNCH_TS_FILE = path.join(os.homedir(), ".quantum", "linkedin", "state", "last-launch.ts");
+
+async function paceLaunch() {
+  try {
+    const raw = await fs.readFile(LAUNCH_TS_FILE, "utf8").catch(() => null);
+    const last = raw ? Number(raw) : 0;
+    const wait = MIN_INTER_LAUNCH_MS - (Date.now() - last);
+    if (wait > 0 && wait <= MIN_INTER_LAUNCH_MS) {
+      process.stderr.write(`[profile] pacing ${Math.ceil(wait / 1000)}s before launch (last verb ran <30s ago)\n`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    await fs.mkdir(path.dirname(LAUNCH_TS_FILE), { recursive: true });
+    await fs.writeFile(LAUNCH_TS_FILE, String(Date.now()));
+  } catch { /* tolerate state-dir issues; pacing is best-effort */ }
+}
 
 export async function launchPersistent({
   headless = false,
@@ -15,6 +33,7 @@ export async function launchPersistent({
   userAgent = DEFAULT_USER_AGENT,
   closeStraggler = true,
 } = {}) {
+  await paceLaunch();
   await fs.mkdir(PROFILE_DIR, { recursive: true });
 
   const launchOpts = {

@@ -1,0 +1,17 @@
+#!/bin/bash
+# ha — thin wrapper around `hass-cli` that sources auth from macOS Keychain.
+# Service: quantum-home-assistant. Accounts: url, token.
+set -euo pipefail
+
+HASS_SERVER="${HASS_SERVER:-$(security find-generic-password -s quantum-home-assistant -a url -w 2>/dev/null || true)}"
+HASS_TOKEN="${HASS_TOKEN:-$(security find-generic-password -s quantum-home-assistant -a token -w 2>/dev/null || true)}"
+
+if [ -z "${HASS_SERVER}" ] || [ -z "${HASS_TOKEN}" ]; then
+  echo "ha: missing keychain entries. Run:" >&2
+  echo "  security add-generic-password -U -s quantum-home-assistant -a url -w 'http://homeassistant.local:8123'" >&2
+  echo "  security add-generic-password -U -s quantum-home-assistant -a token -w '<long-lived-access-token>'" >&2
+  exit 2
+fi
+
+export HASS_SERVER HASS_TOKEN
+exec hass-cli "$@"
