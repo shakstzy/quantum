@@ -1,0 +1,17 @@
+{
+  "name": "quantum-distrokid",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Patchright-driven DistroKid workspace. Manual login, persistent Chrome session, no api.distrokid.com calls.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "patchright": "1.59.4"
+  },
+  "scripts": {
+    "postinstall": "patchright install chrome",
+    "login": "node scripts/login.mjs"
+  }
+}
