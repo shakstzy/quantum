@@ -154,17 +154,21 @@ Session-level events go to `~/.quantum/bumble/sessions.ndjson`; entity files sta
 - **Reads `raw/imessage/YYYY-MM.ndjson`** to detect if a Bumble match has moved to iMessage and whether she's been replying.
 - **Writes nothing outside `raw/bumble/` and `04-outbound/`.**
 
-## Auto-send vs HITL split
+## Auto-send doctrine (2026-05-04 flip)
+
+Adithya doctrine flip: **all lint-pass drafts auto-approve**. No HITL gate. Lint is the only guardrail; lint-fail drafts are discarded (not sent) and the next decide cycle re-drafts.
 
 | Type | Mode | Why |
 |------|------|-----|
-| Reply where she sent something substantive | HITL | Taste call, escalation, escalation timing |
-| 24h-expiry nudge to her ("hey, before this expires") | n/a | NOT used; Bumble shows extend buttons in-app, take that route |
+| Reply where she sent something substantive | auto (was HITL) | Adithya 2026-05-04: "auto approve and auto send and never wait for my input again" |
+| 24h-expiry nudge to her ("hey, before this expires") | n/a | NOT used; Bumble shows extend buttons in-app, `scripts/rematch.mjs` automates that |
 | Re-engagement after iMessage silence (5+ days) | auto | Short, one-shot, low-stakes |
-| Anything matching `voice-lint.mjs` failure | HITL | Forces human review of voice-rule violations |
-| Anything past message #6 in the thread | HITL | Move toward number/date - high stakes |
+| Anything matching `voice-lint.mjs` failure | DISCARD | em-dash / AI-tells / banned phrases / >320 chars / >3 sentences are silently dropped; re-draft on next decide cycle |
+| Anything past message #6 in the thread | auto (was HITL) | Same flip; lint guardrail still applies |
 
-HITL items expire to `expired/` after 6 hours. AppleScript pings Adithya's own iMessage when pending queue grows past 3.
+`drafts/` and `pending/` stages are no longer used by `decide.mjs`. Lint-pass drafts go straight to `approved/` with `mode: auto, auto_approved: true`. `send.mjs` drains `approved/` -> `auto-sent/` (auto items) or `sent/` (legacy HITL items, if any).
+
+Volume is rate-limited by the cap layer (10 messages/hour rolling, 60-300s between sends, 50 swipes/day) and the launchd schedule (~10 send fires/day spread 9:15a-22:30, each fire sends one message, randomized 0-15min jitter). At max throughput that's ~10 sent/day = natural human pace.
 
 ## Detection ladder (halt and log on any)
 
