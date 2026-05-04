@@ -177,11 +177,19 @@ export async function reserveCap(kind) {
       if (lastTs && gap < min) throw new Error(`min_gap: swipes need ${min}ms between, only ${gap}ms since last`);
     }
 
+    // 2026-05-04: capture state.last[kind] BEFORE clobbering, so releaseCap
+    // can restore it on failed-send. Without this, a thread_not_found at
+    // openThread time would update state.last to "now", and the next send
+    // attempt 11s later would trip min_gap=60s on a send that never happened.
+    // Use a SHARED `now` so reservedAt === state.last[kind] exactly,
+    // letting releaseCap detect "still our value, safe to restore".
+    const now = Date.now();
+    const priorLast = state.last[kind];
     state.day[today][kind] = dayUsed + 1;
     state.hour[thisHour][kind] = hourUsed + 1;
-    state.last[kind] = Date.now();
+    state.last[kind] = now;
     if (kind === "message") {
-      rollingNow.push(Date.now());
+      rollingNow.push(now);
       state.rolling[kind] = rollingNow;
     }
     return {
@@ -190,7 +198,8 @@ export async function reserveCap(kind) {
       hourUsed: hourUsed + 1,
       rollingCount: kind === "message" ? rollingNow.length : null,
       kind, today, thisHour,
-      reservedAt: Date.now(),
+      reservedAt: now,
+      priorLast,
     };
   });
 }
@@ -210,6 +219,13 @@ export async function releaseCap(reservation) {
     if (reservation.kind === "message" && state.rolling?.message?.length) {
       const idx = state.rolling.message.findIndex(ts => Math.abs(ts - reservation.reservedAt) < 1000);
       if (idx >= 0) state.rolling.message.splice(idx, 1);
+    }
+    // Restore state.last so the min_gap check doesn't fire as if a real action
+    // happened. Only restore if state.last hasn't been overwritten by a
+    // subsequent successful action since this reservation.
+    state.last = state.last || {};
+    if (state.last[reservation.kind] === reservation.reservedAt) {
+      state.last[reservation.kind] = reservation.priorLast || 0;
     }
   });
 }
