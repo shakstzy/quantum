@@ -211,18 +211,10 @@ export class LinkedInExtractor {
       : "/mynetwork/invitation-manager/";
     const url = `https://www.linkedin.com${path}`;
     await this.navigateTo(url);
-    // Scroll-to-load the virtualized list so older entries enter the DOM. /sent/ is heavily
-    // virtualized; without this, withdraw-invite can't find anything older than ~2 weeks.
-    let lastHeight = 0;
-    for (let i = 0; i < 30; i++) {
-      const h = await this.page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-        return document.body.scrollHeight;
-      }).catch(() => 0);
-      await sleep(500);
-      if (h && h === lastHeight) break;
-      lastHeight = h;
-    }
+    // /sent/ uses a nested scrollable container, not window-scroll. scrollMainScrollable walks
+    // descendants to find the overflowY:auto element with growing scrollHeight. attempts:30 loops
+    // until exhausted (helper short-circuits when scrollHeight stops growing).
+    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 600 });
     const text = await this.getMainText();
     // Harvest structured (slug, displayName) pairs from the rendered list. Operators need this
     // to pass the right slug to withdraw-invite (LinkedIn vanity slugs rarely match display kebab).
@@ -230,7 +222,10 @@ export class LinkedInExtractor {
       const out = [];
       const seen = new Set();
       for (const a of document.querySelectorAll('main a[href*="/in/"]')) {
-        const m = (a.getAttribute("href") || "").match(/^\/in\/([^/?#]+)\/?/);
+        const raw = a.getAttribute("href") || "";
+        let pathname;
+        try { pathname = new URL(raw, location.origin).pathname; } catch { continue; }
+        const m = pathname.match(/^\/in\/([^/?#]+)\/?/);
         if (!m) continue;
         const slug = decodeURIComponent(m[1]);
         if (seen.has(slug)) continue;
@@ -419,27 +414,9 @@ export class LinkedInExtractor {
   async withdrawInvite(username, { dryRun = true } = {}) {
     const url = "https://www.linkedin.com/mynetwork/invitation-manager/sent/";
     await this.navigateTo(url);
-    // Scroll-until-found: /sent/ is virtualized. Older invites (>2wk) only enter the DOM after
-    // we scroll past them. Stop early when target href appears OR when scrollHeight stops growing.
-    const targetSlug = String(username || "").trim();
-    let lastHeight = 0;
-    for (let i = 0; i < 30; i++) {
-      const found = await this.page.evaluate((slug) => {
-        return Array.from(document.querySelectorAll('main a[href*="/in/"]'))
-          .some((a) => {
-            const m = (a.getAttribute("href") || "").match(/^\/in\/([^/]+)\/?/);
-            return m && decodeURIComponent(m[1]) === slug;
-          });
-      }, targetSlug).catch(() => false);
-      if (found) break;
-      const h = await this.page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-        return document.body.scrollHeight;
-      }).catch(() => 0);
-      await sleep(700);
-      if (h && h === lastHeight) break;
-      lastHeight = h;
-    }
+    // /sent/ is virtualized; older invites only enter DOM after scrolling the nested container.
+    // scrollMainScrollable walks descendants to find the actual overflow container.
+    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 600 });
 
     // Find the withdraw control for THIS specific user. Per Codex r2 review of the targeting fix:
     //   Single-card invariant: walk UP from the user's /in/<u>/ link, find the first ancestor
