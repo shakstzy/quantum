@@ -70,11 +70,16 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
       throw new Error(`role_guard: intent=opening_move_response but thread is not empty or no opening_move (slug=${ent.slug})`);
     }
 
-    // Refuse stale or unmatched.
+    // Refuse if status is authoritative-stale. The expires_at field is unreliable
+    // here: we set it from the initial 24h timer the first time we saw the match,
+    // but the timer resets when messages are exchanged and we don't always
+    // re-derive expires_at on every pull (no in-thread expiry hint exists for
+    // active conversations). status="expired" is the strong signal — it's only
+    // set when scrapeThread observed the .chat-blocker.expiration-status-expired
+    // interstitial. Trust that, not the stale clock.
     const expired_status = ["expired", "unmatched"].includes(ent.meta.status);
-    const expired_clock = ent.meta.expires_at && new Date(ent.meta.expires_at).getTime() < Date.now();
-    if (expired_status || expired_clock) {
-      throw new Error(`stale_match: refused to send to ${matchId} (slug=${ent.slug}). status=${ent.meta.status}, expires_at=${ent.meta.expires_at}`);
+    if (expired_status) {
+      throw new Error(`stale_match: refused to send to ${matchId} (slug=${ent.slug}). status=${ent.meta.status}`);
     }
   } else {
     throw new Error(`role_guard: no entity record for matchId=${matchId}. Refusing send (cannot prove role-eligibility).`);
