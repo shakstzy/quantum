@@ -162,14 +162,24 @@ for (const ent of triaged) {
     hours_left: triage.hoursLeft?.toFixed(2) ?? null,
   };
 
+  // 2026-05-04: doctrine flip per Adithya — auto-approve every lint-pass draft.
+  // Lint-pass goes straight to approved/ with mode=auto; lint-fail is dropped
+  // (the rule set exists to keep AI-tells / em-dashes / banned phrases off
+  // his name, so we WON'T send those). Re-runs may produce a clean variant.
+  if (!draft.lint?.pass) {
+    console.log(`  ${ent.slug}: lint_FAIL (issues=${(draft.lint?.issues || []).join(",")}). Discarding draft per auto policy. Will retry on next decide cycle.`);
+    continue;
+  }
+  meta.auto_approved = true;
+  meta.mode = "auto";
   await writeQueueItem({
-    stage: "drafts",
+    stage: "approved",
     id: draft.draftId,
     meta,
-    body: `## Drafted reply\n${draft.text}\n\n## Lint\n- pass: ${draft.lint?.pass}\n- issues: ${(draft.lint?.issues || []).join(", ") || "none"}\n`,
+    body: `## Drafted reply\n${draft.text}\n\n## Lint\n- pass: true\n- issues: none\n`,
   });
   drafted += 1;
-  console.log(`  drafted: ${JSON.stringify(draft.text)} (lint=${draft.lint?.pass ? "pass" : draft.lint.issues.join(",")})`);
+  console.log(`  ${ent.slug}: AUTO-APPROVED -> ${JSON.stringify(draft.text)}`);
 }
 
 console.log(`queued: ${drafted} drafts`);

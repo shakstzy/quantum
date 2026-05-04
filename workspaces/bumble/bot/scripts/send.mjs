@@ -25,19 +25,24 @@ const text = extractDraftedReply(item.body);
 const { ctx, page } = await launchPersistent({ headless: false });
 try {
   // CODEX-R8-P1: lintScore is logged into the entity outbound; hardcoding 1
-  // makes the log say lint=true even when an approved draft has lint issues
-  // (e.g., human approved past lint). Read from the queue item's lint_pass.
+  // makes the log say lint=true even when an approved draft has lint issues.
+  // Read from the queue item's lint_pass.
   const lintPassFromMeta = item.meta.lint_pass === true || item.meta.lint_pass === "true";
+  // 2026-05-04: mode now read from queue item (auto-approved drafts mark mode="auto").
+  // Defaults to "hitl" so legacy items still get the right label in the outbound log.
+  const mode = item.meta.mode === "auto" ? "auto" : "hitl";
   const r = await sendMessage(page, {
     matchId: item.meta.match_id,
     text,
-    mode: "hitl",
+    mode,
     intent: item.meta.intent || "reply",
     draftId: item.id,
     lintScore: lintPassFromMeta ? 1 : 0,
     dryRun: process.env.QUANTUM_BUMBLE_DRY_RUN === "1",
   });
-  if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", "sent");
+  // Auto-approved sends land in auto-sent/, HITL'd sends land in sent/.
+  // Doctrine table in workspaces/bumble/CLAUDE.md uses both buckets for triage.
+  if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", mode === "auto" ? "auto-sent" : "sent");
   console.log("send_result:", JSON.stringify(r));
 } catch (e) {
   // CODEX-R6-P0-8: ambiguous send (post-click failure could be partial delivery).
