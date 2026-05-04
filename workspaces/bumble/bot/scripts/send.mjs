@@ -14,48 +14,82 @@ if (approved.length === 0) {
   console.log("no approved drafts to send");
   process.exit(0);
 }
-const item = approved[0];
-// CODEX-R3-P1 + R4-P0-1: refuse to send a draft that decide.mjs marked placeholder.
-if (item.meta.placeholder === true || item.meta.placeholder === "true") {
-  console.error(`refusing to send placeholder draft id=${item.id} slug=${item.meta.slug}. Wire decide.mjs full body before approving.`);
-  process.exit(2);
+
+// 2026-05-04: per Adithya's auto-send doctrine, transient failures on the
+// FIRST item (sidebar rotation, role-guard race, missing selector) shouldn't
+// block the whole queue. Try items in order until one sends successfully or
+// we exhaust the queue. Hard failures (HALTED, paywall, ambiguous post-click)
+// still bubble up.
+const TRANSIENT_PATTERNS = [
+  /^thread_not_found:/,
+  /^role_guard:/,
+  /^live_role_guard:/,
+  /^min_gap:/,
+  /^thread_input not found/,
+];
+function isTransient(err) {
+  const m = String(err?.message || "");
+  return TRANSIENT_PATTERNS.some(re => re.test(m));
 }
-const text = extractDraftedReply(item.body);
 
 const { ctx, page } = await launchPersistent({ headless: false });
+let sent = false;
+let attempts = 0;
 try {
-  // CODEX-R8-P1: lintScore is logged into the entity outbound; hardcoding 1
-  // makes the log say lint=true even when an approved draft has lint issues.
-  // Read from the queue item's lint_pass.
-  const lintPassFromMeta = item.meta.lint_pass === true || item.meta.lint_pass === "true";
-  // 2026-05-04: mode now read from queue item (auto-approved drafts mark mode="auto").
-  // Defaults to "hitl" so legacy items still get the right label in the outbound log.
-  const mode = item.meta.mode === "auto" ? "auto" : "hitl";
-  const r = await sendMessage(page, {
-    matchId: item.meta.match_id,
-    text,
-    mode,
-    intent: item.meta.intent || "reply",
-    draftId: item.id,
-    lintScore: lintPassFromMeta ? 1 : 0,
-    dryRun: process.env.QUANTUM_BUMBLE_DRY_RUN === "1",
-  });
-  // Auto-approved sends land in auto-sent/, HITL'd sends land in sent/.
-  // Doctrine table in workspaces/bumble/CLAUDE.md uses both buckets for triage.
-  if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", mode === "auto" ? "auto-sent" : "sent");
-  console.log("send_result:", JSON.stringify(r));
-} catch (e) {
-  // CODEX-R6-P0-8: ambiguous send (post-click failure could be partial delivery).
-  // Quarantine to 04-outbound/ambiguous/ so cron does NOT retry and double-text.
-  if (e.ambiguous) {
-    const ambDir = resolve(OUTBOUND_DIR, "ambiguous");
-    await mkdir(ambDir, { recursive: true });
-    const fromPath = resolve(OUTBOUND_DIR, "approved", `${item.id}.md`);
-    const toPath = resolve(ambDir, `${item.id}.md`);
-    try { await rename(fromPath, toPath); } catch (renameErr) { console.error(`quarantine rename failed: ${renameErr.message}`); }
-    console.error(`AMBIGUOUS send for ${item.id}; quarantined to 04-outbound/ambiguous/. Verify in Bumble UI before re-sending or trashing.`);
+  for (const item of approved) {
+    if (sent) break;
+    attempts += 1;
+    // Refuse legacy placeholder drafts.
+    if (item.meta.placeholder === true || item.meta.placeholder === "true") {
+      console.error(`skip ${item.id} slug=${item.meta.slug}: placeholder draft (legacy). Discarding.`);
+      try { await moveQueueItem(item.id, "approved", "expired"); } catch {}
+      continue;
+    }
+    const text = extractDraftedReply(item.body);
+    const lintPassFromMeta = item.meta.lint_pass === true || item.meta.lint_pass === "true";
+    const mode = item.meta.mode === "auto" ? "auto" : "hitl";
+
+    try {
+      const r = await sendMessage(page, {
+        matchId: item.meta.match_id,
+        text,
+        mode,
+        intent: item.meta.intent || "reply",
+        draftId: item.id,
+        lintScore: lintPassFromMeta ? 1 : 0,
+        dryRun: process.env.QUANTUM_BUMBLE_DRY_RUN === "1",
+      });
+      if (r.sent && !r.dryRun) await moveQueueItem(item.id, "approved", mode === "auto" ? "auto-sent" : "sent");
+      console.log(`send_result (attempt ${attempts}, slug=${item.meta.slug}):`, JSON.stringify(r));
+      sent = true;
+    } catch (e) {
+      // CODEX-R6-P0-8: ambiguous send must always quarantine, never retry.
+      if (e.ambiguous) {
+        const ambDir = resolve(OUTBOUND_DIR, "ambiguous");
+        await mkdir(ambDir, { recursive: true });
+        const fromPath = resolve(OUTBOUND_DIR, "approved", `${item.id}.md`);
+        const toPath = resolve(ambDir, `${item.id}.md`);
+        try { await rename(fromPath, toPath); } catch (renameErr) { console.error(`quarantine rename failed: ${renameErr.message}`); }
+        console.error(`AMBIGUOUS send for ${item.id} slug=${item.meta.slug}; quarantined.`);
+        throw e;
+      }
+      // HALTED bubbles immediately.
+      if (String(e.message || "").startsWith("HALTED")) throw e;
+      // Transient failures: log and try the next item.
+      if (isTransient(e)) {
+        console.error(`skip ${item.id} slug=${item.meta.slug} (transient): ${e.message}`);
+        continue;
+      }
+      // Unknown failure shape: surface it.
+      console.error(`unknown send failure ${item.id} slug=${item.meta.slug}: ${e.message}`);
+      throw e;
+    }
   }
-  throw e;
 } finally {
   await ctx.close();
+}
+
+if (!sent) {
+  console.log(`no eligible drafts could be sent this fire (attempts=${attempts})`);
+  process.exit(0);
 }
