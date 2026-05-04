@@ -1,34 +1,47 @@
 #!/usr/bin/env node
-// Minimal proof-of-concept: replay ONE paginated /v2/matches call within
-// the existing browser session and verify it returns more matches without
-// tripping detection.
+// PARANOID pagination probe.
 //
-// Total call shape:
-//   React client (natural):  GET /v2/matches?count=60&message=0 + ...&message=1
-//   Us (replay, 1 call):     GET /v2/matches?count=60&message=1&page_token=<cursor>
+// Account is close to a ban. Hard rules:
+//   - Max 3 replay attempts total in this run
+//   - 90s minimum gap between every replay
+//   - Hard breaker on 401 / 403 / 429 (writes ~/.quantum/tinder/.halt)
+//   - Hard breaker if the same status code appears 2x in a row
+//   - Stop immediately on first 200
+//   - Stop immediately on any network error
 //
-// Uses page.context().request which inherits the browser's exact cookies,
-// UA, TLS fingerprint — indistinguishable from the React client's own
-// fetch. No raw HTTP. No new headers. No different origin.
+// Each variant is meaningfully different — we are NOT spam-retrying
+// the same URL.
 //
-// Halt-safe before + after. Single-strike breaker on any 401/403/429.
+// Variants (in likely-success order):
+//   A: ?count=60&message=1&page_token=<token>  (drop include_conversations + is_tinder_u + locale)
+//   B: ?<original-params>&page_token=<token>   (kitchen-sink, what we already tried)
+//   C: ?count=60&message=1&last_activity_date=<iso-decoded>  (older API form)
 
-import { writeFile } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { launchPersistent } from "../src/runtime/profile.mjs";
 import { abortIfHalted } from "../src/runtime/halt.mjs";
 import { sleep, jitter } from "../src/runtime/humanize.mjs";
 import { scanForHalts } from "../src/runtime/detection.mjs";
 
 const OUT_PATH = "/tmp/tinder-pagination-probe.json";
+const HALT_PATH = `${process.env.HOME}/.quantum/tinder/.halt`;
 const INITIAL_DWELL_MIN_MS = 4000;
 const INITIAL_DWELL_MAX_MS = 6500;
-const PRE_REPLAY_GAP_MIN_MS = 12000;
-const PRE_REPLAY_GAP_MAX_MS = 18000;
+const INTER_REPLAY_MIN_MS = 90000;   // 90s minimum
+const INTER_REPLAY_MAX_MS = 120000;  // up to 2 min
+const MAX_ATTEMPTS = 3;
+const BAN_STATUSES = new Set([401, 403, 429]);
+
+async function writeHalt(reason) {
+  await mkdir(`${process.env.HOME}/.quantum/tinder`, { recursive: true });
+  await writeFile(HALT_PATH, `pagination-probe: ${reason} at ${new Date().toISOString()}\n`);
+  console.error(`!! HALT WRITTEN: ${reason}`);
+}
 
 async function main() {
   await abortIfHalted();
-  console.log("MINIMAL POC: pagination via page.context().request replay");
-  console.log("- 0 raw HTTP. 0 new origins. Same browser session as React client.");
+  console.log("PARANOID PAGINATION PROBE");
+  console.log(`- max ${MAX_ATTEMPTS} attempts, ≥90s between each, hard breaker on 401/403/429`);
   console.log(`- output: ${OUT_PATH}\n`);
 
   const { ctx, page } = await launchPersistent({ headless: false });
@@ -38,23 +51,19 @@ async function main() {
   page.on("response", async (response) => {
     try {
       const url = response.url();
-      // Match the message=1 (with-messages) initial page only — that's where
-      // the cursor field is most likely to appear.
       if (!/api\.gotinder\.com\/v2\/matches\?/.test(url)) return;
       if (!url.includes("message=1")) return;
-      if (firstPageBody) return; // first one only
+      if (firstPageBody) return;
       const text = await response.text();
       firstPageUrl = url;
-      try {
-        firstPageBody = JSON.parse(text);
-      } catch (e) {
-        firstPageBody = { _parseError: e.message, _len: text.length };
-      }
+      try { firstPageBody = JSON.parse(text); }
+      catch (e) { firstPageBody = { _parseError: e.message }; }
       console.log(`captured initial /v2/matches?message=1 response (len=${text.length})`);
-    } catch (e) {
-      console.error(`response handler: ${e.message}`);
-    }
+    } catch (e) { console.error(`response handler: ${e.message}`); }
   });
+
+  const attempts = [];
+  let lastStatus = null;
 
   try {
     console.log("nav -> /app/matches ...");
@@ -68,105 +77,139 @@ async function main() {
     }
 
     const data = firstPageBody.data || {};
-    console.log(`\ndata.* keys: ${Object.keys(data).join(", ")}`);
     const matches1 = Array.isArray(data.matches) ? data.matches : [];
-    console.log(`page 1 match count: ${matches1.length}`);
-    if (matches1.length > 0) {
-      console.log(`page 1 first/last created_date: ${matches1[0].created_date} / ${matches1[matches1.length - 1].created_date}`);
-    }
-
-    // Hunt for cursor field. Tinder API historically uses `next_page_token`
-    // but also supports `last_activity_date` as a cursor.
-    const cursor =
-      data.next_page_token
-      ?? data.page_token
-      ?? data.next_token
-      ?? null;
-    console.log(`cursor field: next_page_token=${data.next_page_token} page_token=${data.page_token} next_token=${data.next_token}`);
-
-    if (!cursor) {
-      console.warn("\nno explicit cursor field — trying last_activity_date based pagination");
-    }
-
     const ids1 = new Set(matches1.map(m => m._id || m.id).filter(Boolean));
+    const cursor = data.next_page_token ?? null;
+    const oldestLAD = matches1[matches1.length - 1]?.last_activity_date ?? null;
 
-    // Pace the replay: wait 12-18s, scan for halts, then fire 1 paginated call
-    const gap = jitter(PRE_REPLAY_GAP_MIN_MS, PRE_REPLAY_GAP_MAX_MS);
-    console.log(`\nidling ${gap}ms before replay (let React client settle)...`);
-    await sleep(gap);
-    await scanForHalts(page);
+    console.log(`page 1: ${matches1.length} matches`);
+    console.log(`  next_page_token: ${cursor}`);
+    console.log(`  oldest last_activity_date: ${oldestLAD}`);
 
-    // Construct page-2 URL using the same param set the React client used,
-    // plus page_token if found, else fall back to last_activity_date cursor.
+    if (!cursor && !oldestLAD) {
+      console.error("no cursor and no last_activity_date — cannot paginate");
+      process.exit(2);
+    }
+
+    // Build variants
     const url1 = new URL(firstPageUrl);
-    const params = new URLSearchParams(url1.search);
+    const variants = [];
     if (cursor) {
-      params.set("page_token", cursor);
-    } else if (matches1.length > 0) {
-      // Fallback: use the oldest last_activity_date as the cursor
-      const oldest = matches1[matches1.length - 1].last_activity_date;
-      if (oldest) params.set("last_activity_date", oldest);
+      // A: minimal — just count, message, page_token
+      const a = new URL(url1.origin + url1.pathname);
+      a.searchParams.set("count", "60");
+      a.searchParams.set("message", "1");
+      a.searchParams.set("page_token", cursor);
+      variants.push({ label: "A_minimal_page_token", url: a.toString() });
+
+      // B: kitchen-sink — original params + page_token (what we tried)
+      const b = new URL(url1);
+      b.searchParams.set("page_token", cursor);
+      variants.push({ label: "B_full_page_token", url: b.toString() });
     }
-    const url2 = `${url1.origin}${url1.pathname}?${params.toString()}`;
-    console.log(`\nreplay GET ${url2}`);
-
-    const t0 = Date.now();
-    const resp2 = await page.context().request.get(url2);
-    const elapsed = Date.now() - t0;
-    const status2 = resp2.status();
-    console.log(`replay response: status=${status2} elapsed=${elapsed}ms`);
-
-    if (status2 === 401 || status2 === 403 || status2 === 429) {
-      console.error(`!! BREAKER: status ${status2} on replay — DETECTION SIGNAL`);
-      console.error(`   touching ~/.quantum/tinder/.halt — bot run halted`);
-      const { writeFile, mkdir } = await import("node:fs/promises");
-      await mkdir(`${process.env.HOME}/.quantum/tinder`, { recursive: true });
-      await writeFile(`${process.env.HOME}/.quantum/tinder/.halt`,
-        `pagination-probe got status=${status2} at ${new Date().toISOString()}\n`);
-      await ctx.close();
-      process.exit(3);
+    if (oldestLAD) {
+      // C: legacy last_activity_date form
+      const c = new URL(url1.origin + url1.pathname);
+      c.searchParams.set("count", "60");
+      c.searchParams.set("message", "1");
+      c.searchParams.set("last_activity_date", oldestLAD);
+      variants.push({ label: "C_last_activity_date", url: c.toString() });
     }
 
-    const body2 = await resp2.json();
-    const matches2 = Array.isArray(body2?.data?.matches) ? body2.data.matches : [];
-    const ids2 = new Set(matches2.map(m => m._id || m.id).filter(Boolean));
-    const newOnPage2 = [...ids2].filter(id => !ids1.has(id));
+    let success = null;
+    let pagedMatches = [];
+    let pagedNewIds = new Set();
 
-    console.log(`\npage 2 match count: ${matches2.length}`);
-    console.log(`page 2 unique-vs-page-1: ${newOnPage2.length}`);
-    if (matches2.length > 0) {
-      console.log(`page 2 first/last created_date: ${matches2[0]?.created_date} / ${matches2[matches2.length - 1]?.created_date}`);
+    for (let i = 0; i < Math.min(MAX_ATTEMPTS, variants.length); i++) {
+      const v = variants[i];
+      const gap = jitter(INTER_REPLAY_MIN_MS, INTER_REPLAY_MAX_MS);
+      console.log(`\nidling ${(gap / 1000).toFixed(0)}s before attempt ${i + 1}/${variants.length} (${v.label})...`);
+      await sleep(gap);
+      await scanForHalts(page);
+
+      console.log(`attempt ${i + 1}: ${v.label}`);
+      console.log(`  GET ${v.url}`);
+
+      let status, body, parseErr, networkErr;
+      const t0 = Date.now();
+      try {
+        const resp = await page.context().request.get(v.url);
+        status = resp.status();
+        try { body = await resp.json(); }
+        catch (e) {
+          parseErr = e.message;
+          try { body = await resp.text(); }
+          catch { /* ignore */ }
+        }
+      } catch (e) {
+        networkErr = e.message;
+      }
+      const elapsed = Date.now() - t0;
+
+      const a = { ...v, status, elapsed_ms: elapsed, parseErr, networkErr };
+      attempts.push(a);
+      console.log(`  -> status=${status} elapsed=${elapsed}ms${parseErr ? ` parseErr=${parseErr}` : ""}${networkErr ? ` net=${networkErr}` : ""}`);
+
+      // Hard breakers
+      if (networkErr) {
+        console.error("network error — stopping immediately, NOT writing halt (no signal from server)");
+        break;
+      }
+      if (BAN_STATUSES.has(status)) {
+        await writeHalt(`got ${status} on ${v.label}`);
+        break;
+      }
+      if (status >= 500) {
+        console.error(`server 5xx (${status}) — stopping, NOT writing halt (server-side issue)`);
+        break;
+      }
+      if (status === lastStatus && i > 0) {
+        console.error(`same status ${status} as previous attempt — stopping (avoid look-bot-spam)`);
+        break;
+      }
+      lastStatus = status;
+
+      if (status === 200) {
+        const m = Array.isArray(body?.data?.matches) ? body.data.matches : [];
+        pagedMatches = m;
+        pagedNewIds = new Set(m.map(x => x._id || x.id).filter(Boolean));
+        const newCount = [...pagedNewIds].filter(id => !ids1.has(id)).length;
+        console.log(`  ✅ 200 with ${m.length} matches (${newCount} new vs page 1)`);
+        success = v.label;
+        a.matchCount = m.length;
+        a.newVsPage1 = newCount;
+        a.nextPageToken = body?.data?.next_page_token ?? null;
+        break;
+      }
+
+      // 400 = malformed; safe to try next variant after the 90s+ gap above
+      console.log(`  status ${status} — will try next variant`);
     }
-    console.log(`page 2 next_page_token: ${body2?.data?.next_page_token}`);
 
     await scanForHalts(page);
 
-    await writeFile(OUT_PATH, JSON.stringify({
+    const result = {
       ts: new Date().toISOString(),
       page1: {
         url: firstPageUrl,
         count: matches1.length,
-        ids: [...ids1],
-        cursor_keys_present: {
-          next_page_token: !!data.next_page_token,
-          page_token: !!data.page_token,
-          next_token: !!data.next_token,
-        },
-        oldest_last_activity_date: matches1[matches1.length - 1]?.last_activity_date,
+        cursor,
+        oldestLAD,
       },
-      page2: {
-        url: url2,
-        status: status2,
-        elapsed_ms: elapsed,
-        count: matches2.length,
-        new_vs_page1: newOnPage2.length,
-        next_page_token: body2?.data?.next_page_token ?? null,
-      },
-      union: ids1.size + newOnPage2.length,
-    }, null, 2));
+      attempts,
+      success_variant: success,
+      pagedCount: pagedMatches.length,
+      newVsPage1: [...pagedNewIds].filter(id => !ids1.has(id)).length,
+      union: ids1.size + [...pagedNewIds].filter(id => !ids1.has(id)).length,
+    };
+    await writeFile(OUT_PATH, JSON.stringify(result, null, 2));
     console.log(`\nwrote ${OUT_PATH}`);
-    console.log(`\nUNION (page1 + page2 unique): ${ids1.size + newOnPage2.length}`);
-    console.log(`\n✅ pragmatic replay worked. no breaker fired.`);
+    if (success) {
+      console.log(`\n✅ pagination works via variant: ${success}`);
+      console.log(`   page1=${matches1.length} + page2=${pagedMatches.length} (${result.newVsPage1} new) → union ${result.union}`);
+    } else {
+      console.log(`\n❌ no variant returned 200; cap stays at page-1 size`);
+    }
   } finally {
     await ctx.close();
   }
