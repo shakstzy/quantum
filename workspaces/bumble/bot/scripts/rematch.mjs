@@ -37,16 +37,27 @@ if (!interstitialSel || !rematchBtnSel) {
   throw new Error("missing_selector: match_expired_interstitial / rematch_button. Update config/selectors.json or run scripts/discover-dom.mjs.");
 }
 
-// Decide which entities to walk. Prefer those already marked status=expired
-// (cheap path, no thread open), then any with expires_at in the past.
+// Decide which entities to walk. Three signals:
+//   1. status === "expired"           (set by prior scrapeThread that saw the interstitial)
+//   2. expires_at < now               (parser detected expiry)
+//   3. zero messages either side      (likely a Your-Move expired with no convo)
+// Signal 3 is a weak heuristic — the live thread inspection in this script is
+// the authority. If interstitial isn't present at click time, we skip. This
+// catches entities pulled BEFORE the expired-view detection landed.
 const all = await listAllEntities();
+
+function messageCount(ent) {
+  return ((ent.conversation || "").match(/^\*\*(her|you)\*\*/gm) || []).length;
+}
+
 const candidates = [];
 for (const ent of all) {
   if (ONLY_SLUG && ent.slug !== ONLY_SLUG) continue;
   if (ent.meta.status === "unmatched") continue;
-  const isExpired = ent.meta.status === "expired"
+  const isExpiredStrong = ent.meta.status === "expired"
     || (ent.meta.expires_at && new Date(ent.meta.expires_at).getTime() < Date.now());
-  if (isExpired) candidates.push(ent);
+  const isExpiredWeak = messageCount(ent) === 0 && ent.meta.status !== "expired";
+  if (isExpiredStrong || isExpiredWeak) candidates.push(ent);
 }
 
 console.log(`rematch: ${candidates.length} expired candidate(s) (limit=${REMATCH_LIMIT}${DRY ? ", DRY" : ""})`);
