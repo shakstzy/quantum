@@ -75,6 +75,13 @@ try {
       }
       // HALTED bubbles immediately.
       if (String(e.message || "").startsWith("HALTED")) throw e;
+      // stale_match: match is expired/unmatched, never recoverable. Move
+      // draft to expired/ so it stops blocking the queue, then continue.
+      if (String(e.message || "").startsWith("stale_match:")) {
+        console.error(`skip ${item.id} slug=${item.meta.slug} (stale_match): ${e.message}`);
+        try { await moveQueueItem(item.id, "approved", "expired"); } catch (mvErr) { console.error(`expire move failed: ${mvErr.message}`); }
+        continue;
+      }
       // Transient failures: log and try the next item.
       if (isTransient(e)) {
         console.error(`skip ${item.id} slug=${item.meta.slug} (transient): ${e.message}`);
