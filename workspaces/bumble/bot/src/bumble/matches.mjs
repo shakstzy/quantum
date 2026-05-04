@@ -87,6 +87,13 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   await openThread(page, matchId);
   await scanForHalts(page);
 
+  // Detect "This match has expired" interstitial. When present, the thread
+  // renders the chat-blocker article instead of the composer; this overrides
+  // any sidebar expiry hint (which can still show full data-progress for
+  // visually-expired rows). Live-verified 2026-05-03 against Lacie's thread.
+  const expiredInterstitial = await page.$(".chat-blocker.expiration-status-expired, [class*='expiration-status-expired']").catch(() => null);
+  const isExpiredView = !!expiredInterstitial;
+
   // Read messages.
   const messages = await page.$$eval(sels.thread_messages.selector, els => els.map(el => {
     const cls = el.getAttribute("class") || "";

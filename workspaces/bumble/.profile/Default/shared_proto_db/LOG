@@ -1,3 +1,6 @@
-2026/05/03-22:32:21.230 31dfe0 Reusing MANIFEST /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/shared_proto_db/MANIFEST-000001
-2026/05/03-22:32:21.231 31dfe0 Recovering log #3
-2026/05/03-22:32:21.231 31dfe0 Reusing old log /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/shared_proto_db/000003.log 
+2026/05/03-22:32:57.449 31ea6a Reusing MANIFEST /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/shared_proto_db/MANIFEST-000001
+2026/05/03-22:32:57.449 31ea6a Recovering log #3
+2026/05/03-22:32:57.449 31ea6a Reusing old log /Users/shakstzy/QUANTUM/workspaces/bumble/.profile/Default/shared_proto_db/000003.log 
+2026/05/03-22:32:57.494 31ea5c Level-0 table #5: started
+2026/05/03-22:32:57.497 31ea5c Level-0 table #5: 112805 bytes OK
+2026/05/03-22:32:57.498 31ea5c Delete type=0 #3

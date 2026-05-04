@@ -62,21 +62,55 @@ export async function gotoMatches(page) {
 
 // Open a thread by clicking the contact row whose `data-qa-uid` matches matchId.
 // matchId is the opaque Bumble user identifier we stored when scraping the list.
+// The sidebar is lazy-rendered; if the row isn't visible we scroll the sidebar
+// progressively until it appears or we exhaust the list. Without this scroll,
+// any contact past ~15 in the list wouldn't be findable (audit 2026-05-03).
 export async function openThread(page, matchId) {
   if (!matchId) throw new Error("openThread: matchId required");
   await gotoMatches(page);
-  // CODEX-R7-P1-1: matchId is opaque (Bumble user/connection id). Use CSS.escape
-  // to defend against attribute values that contain ], ", \, or other special
-  // chars. Single-quote escaping alone was unsafe.
-  const clicked = await page.evaluate((uid) => {
-    const sel = `[data-qa-role='contact'][data-qa-uid="${CSS.escape(uid)}"]`;
-    const row = document.querySelector(sel);
-    if (!row) return false;
-    row.click();
-    return true;
-  }, matchId);
-  if (!clicked) throw new Error(`thread_not_found: contact with data-qa-uid='${matchId.slice(0, 24)}...' not in sidebar`);
-  await sleep(jitter(2400, 4000));
+
+  async function attemptClick() {
+    return await page.evaluate((uid) => {
+      const sel = `[data-qa-role='contact'][data-qa-uid="${CSS.escape(uid)}"]`;
+      const row = document.querySelector(sel);
+      if (!row) return false;
+      row.scrollIntoView({ block: "center", behavior: "instant" });
+      row.click();
+      return true;
+    }, matchId);
+  }
+
+  if (await attemptClick()) {
+    await sleep(jitter(2400, 4000));
+    return;
+  }
+
+  // Not yet in DOM. Scroll the sidebar to load more rows; retry up to 30 passes
+  // (up to ~300 rows; matches the scrapeMatches scroll cap).
+  for (let pass = 0; pass < 30; pass++) {
+    const grew = await page.evaluate(() => {
+      const before = document.querySelectorAll("[data-qa-role='contact']").length;
+      const scroller = document.querySelector(
+        "[data-qa-role='conversations-tab-section-content'], [data-qa-role='conversations-tab-section'], .sidebar__contact-list"
+      );
+      if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+        scroller.scrollTop = scroller.scrollHeight;
+      } else {
+        const all = document.querySelectorAll("[data-qa-role='contact']");
+        if (all.length) all[all.length - 1].scrollIntoView({ block: "end", behavior: "instant" });
+      }
+      return { before };
+    });
+    await sleep(jitter(700, 1300));
+    if (await attemptClick()) {
+      await sleep(jitter(2400, 4000));
+      return;
+    }
+    const after = await page.$$eval("[data-qa-role='contact']", els => els.length);
+    if (after === grew.before) break; // sidebar exhausted; row genuinely missing
+  }
+
+  throw new Error(`thread_not_found: contact with data-qa-uid='${matchId.slice(0, 24)}...' not in sidebar`);
 }
 
 // Read the active rec card with the full profile shape.

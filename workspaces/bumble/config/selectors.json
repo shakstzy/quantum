@@ -100,6 +100,18 @@
     "alt": [],
     "last_verified": null
   },
+  "match_expired_interstitial": {
+    "_note": "Live-verified 2026-05-03 (Lacie's thread). When a match has expired without messages, the thread renders this article instead of the composer. Body text begins 'This match has expired'.",
+    "selector": ".chat-blocker.expiration-status-expired",
+    "alt": ["[class*='expiration-status-expired']", ".cta-box[data-qa='cta-box']"],
+    "last_verified": "2026-05-03"
+  },
+  "rematch_button": {
+    "_note": "Live-verified 2026-05-03. Green Rematch CTA shown inside the expired interstitial. button class 'color-feature-rematch' is the most specific marker; text fallback is 'Rematch'.",
+    "selector": "button.color-feature-rematch",
+    "alt": ["button.button--filled.color-feature-rematch", "[class*='color-feature-rematch']"],
+    "last_verified": "2026-05-03"
+  },
   "match_expiry_indicator": {
     "_note": "Per-conversation expiry text in the sidebar contact row. Also '.contact-avatar--color-expiration-status-average' colors the avatar by urgency. In-thread: '.messages-notice.expiration-status-average' system notice.",
     "selector": ".contact__expiration-status-text",
