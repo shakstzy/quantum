@@ -12,7 +12,7 @@
 
 import { chromium } from 'patchright';
 import { chmod, mkdir } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Profile dir, pidfile, and breaker file are runtime-evaluated so the
@@ -46,16 +46,29 @@ function isAlive(pid) {
 
 function acquirePidfile() {
   const pidfile = getPidfile();
-  if (existsSync(pidfile)) {
-    const old = parseInt(readFileSync(pidfile, 'utf8').trim(), 10);
-    if (old && isAlive(old)) {
-      throw new Error(`Profile locked by pid ${old}. Wait or kill it.`);
+  // Atomic acquire: O_EXCL fails if the file exists. No TOCTOU race vs a
+  // concurrent run on the same profile.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(pidfile, 'wx');
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+      process.on('exit', releasePidfile);
+      process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
+      process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });
+      return;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      // Stale-pidfile recovery: read the existing pid; if dead, clear it
+      // and retry once.
+      const old = parseInt(readFileSync(pidfile, 'utf8').trim(), 10);
+      if (old && isAlive(old)) {
+        throw new Error(`Profile locked by pid ${old}. Wait or kill it.`);
+      }
+      try { unlinkSync(pidfile); } catch (_) {}
     }
   }
-  writeFileSync(pidfile, String(process.pid));
-  process.on('exit', releasePidfile);
-  process.on('SIGINT', () => { releasePidfile(); process.exit(130); });
-  process.on('SIGTERM', () => { releasePidfile(); process.exit(143); });
+  throw new Error(`Could not acquire pidfile ${pidfile} after stale cleanup`);
 }
 
 function releasePidfile() {
@@ -201,30 +214,25 @@ export async function launchContext({ force = false, visible = false } = {}) {
     } catch (_) {}
   });
 
-  // Response capture via Playwright. Buffer the JSON body for the first
-  // matching response per op. Resolve any waiters.
-  //
-  // Gemini round 3 medium: synchronously claim the slot BEFORE awaiting
-  // resp.text(), so concurrent same-op requests don't both pass the
-  // .has() check. The placeholder gets replaced atomically when text()
-  // resolves; later same-op responses still see has()===true and bail.
-  //
-  // Gemini round 3 medium: globally trip the breaker on 401/403/429 from
-  // ANY captured GraphQL response, not just the verb's expectedOp. A side
-  // op like UserTweets failing 429 should halt before we burn more reqs.
-  page.on('response', async (resp) => {
-    try {
-      const url = resp.url();
-      if (!isXGraphqlUrl(url)) return;
-      const parsed = parseOpFromUrl(url);
-      if (!parsed) return;
-      const status = resp.status();
-      if (status === 401 || status === 403) {
-        tripBreaker(`background-response-${status}:${parsed.op}`);
-      }
-      if (responses.has(parsed.op)) return;
-      // Synchronously claim the slot to block concurrent same-op responses.
-      responses.set(parsed.op, { op: parsed.op, queryId: parsed.queryId, url, status, ok: resp.ok(), pending: true });
+  // Response capture. Synchronously claim the per-op slot, then dispatch
+  // body-fetch as a fire-and-forget IIFE so the listener returns instantly.
+  // Awaiting text() inside the listener serializes same-page responses
+  // (Playwright runs response handlers sequentially per page), which
+  // gates concurrent ops like UserTweets behind UserByScreenName.
+  // Globally trips the breaker on 401/403 from any captured op so a
+  // side-op failure halts the run before we burn more requests.
+  page.on('response', (resp) => {
+    const url = resp.url();
+    if (!isXGraphqlUrl(url)) return;
+    const parsed = parseOpFromUrl(url);
+    if (!parsed) return;
+    const status = resp.status();
+    if (status === 401 || status === 403) {
+      tripBreaker(`background-response-${status}:${parsed.op}`);
+    }
+    if (responses.has(parsed.op)) return;
+    responses.set(parsed.op, { op: parsed.op, queryId: parsed.queryId, url, status, ok: resp.ok(), pending: true });
+    (async () => {
       let body = null;
       let parseErr = null;
       try {
@@ -253,9 +261,7 @@ export async function launchContext({ force = false, visible = false } = {}) {
       const waiters = responseWaiters.get(parsed.op) || [];
       responseWaiters.delete(parsed.op);
       for (const w of waiters) w(captured);
-    } catch (_) {
-      // Swallow; never let response listener crash the run.
-    }
+    })().catch(() => { /* never let the body fetch crash the run */ });
   });
 
   return {

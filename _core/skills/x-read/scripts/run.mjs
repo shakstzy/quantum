@@ -9,6 +9,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker,
+  rateLimitResetSeconds, readBreaker, writeBreaker, getProfileDir
+} from './browser.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL_ROOT = resolve(HERE, '..');
