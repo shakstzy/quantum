@@ -136,7 +136,7 @@ export async function launchContext({ force = false, visible = false } = {}) {
 
   // Wrap entire setup in a single try/catch so any throw between
   // launchPersistentContext and CDP wiring releases the pidfile and tears
-  // down a partially-constructed context. Round 2 finding IMP-13.
+  // down a partially-constructed context.
   let context, page, cdp;
   try {
     const windowArgs = visible
@@ -416,7 +416,7 @@ export async function pageApi(page, opName, template, { variables = null } = {})
     };
     return { status: r.status, ok: r.ok, body: json, rateLimit: rl };
   }, { replayUrl, headers });
-  // Round 2 finding CRIT-2: pageApi must enforce single-strike breaker on
+  // pageApi enforces the single-strike breaker on
   // auth failures so v2 callers can't accidentally hammer an expired session.
   if (result.status === 401 || result.status === 403) {
     tripBreaker(`pageApi-${result.status}:${opName}`);

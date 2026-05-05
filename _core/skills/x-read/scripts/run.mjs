@@ -509,7 +509,7 @@ async function search(argv) {
   const query = argv.positional.join(' ').trim();
   if (!query) die('Usage: search <query...>  (use --product=Top|Latest|People|Photos|Videos to switch tab; default Top)');
   const product = (argv.flags.product || 'Top');
-  // Gemini round 3 finding: X uses non-obvious f= fragments per tab.
+  // X uses non-obvious `f=` fragments per tab.
   const productFragment = {
     Top: null, // omit f= entirely
     Latest: 'live',
