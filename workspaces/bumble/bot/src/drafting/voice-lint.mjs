@@ -6,6 +6,27 @@ const BANNED_PHRASES = [
   /good morning beautiful/i,
   /you are absolutely stunning/i,
   /just wanted to say/i,
+  /\bhow's it going\b/i,
+  /\bhow's everything\b/i,
+  /\bhow have you been\b/i,
+  /\bgood morning (princess|gorgeous)\b/i,
+  /\bhey (beautiful|gorgeous|pretty|cutie|stranger|lady)\b/i,
+  /\bi don't usually do this\b/i,
+  /\bi'm not usually like this\b/i,
+  /\byou don't see many (girls|women) like you\b/i,
+  /\btell me about yourself\b/i,
+  /\bwhat do you do for fun\b/i,
+  /\bnice to meet you\b/i,
+  /\bi noticed (you|that you) (matched|swiped)\b/i,
+  /\bnice (dog|cat|smile|outfit|shirt|hair)\b/i,
+  /\bif you don't mind me asking\b/i,
+  /\bcan i ask you (a question|something)\b/i,
+  /\byou (look|seem) like (the|a) kind of (girl|woman) who\b/i,
+  /\bi bet you (get|hear) this a lot\b/i,
+  /\byou're probably (out of my league|too good for me)\b/i,
+  /\bnamaste\b/i,
+  /\bchai vs coffee\b/i,
+  /\bwhat's your favorite (color|food|movie|song)\b/i,
 ];
 
 const AI_TELLS = [
@@ -14,6 +35,11 @@ const AI_TELLS = [
   /i'm here to help/i,
   /\bcertainly!?\b/i,
   /\bi'd be happy to\b/i,
+  /\babsolutely!\s*$/i,
+  /\bi'd love to hear\b/i,
+  /\bthat's (so|really) (cool|interesting|awesome)\b/i,
+  /\bgreat (to|connecting with you|hearing from you)\b/i,
+  /\bthank you for sharing\b/i,
 ];
 
 export function lintDraft(text) {
