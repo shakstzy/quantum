@@ -2,9 +2,10 @@
 """
 Instagram post/reel fetcher + summarizer.
 
-Posts (single image or carousel): caption + metadata + visual analysis of images (MLX Gemma 4 26B-A4B).
-Reels: caption + metadata + audio transcript (faster-whisper) + visual analysis of sampled frames.
+Posts: caption + metadata + visual analysis (cloud-llm).
+Reels: same plus audio transcript (faster-whisper).
 """
+import json
 import re
 import sys
 import time
@@ -17,11 +18,9 @@ from concurrent.futures import ThreadPoolExecutor
 from instaloader import Instaloader, Post
 from instaloader.exceptions import InstaloaderException, LoginRequiredException
 
-# Delegate cloud LLM dispatch (gemini cycling + claude fallback) to the cloud-llm
-# skill. If providers, model names, or cycling shape changes, only that skill's
-# client.py is edited.
+# Cloud LLM dispatch lives in the cloud-llm skill so providers/models change in one place.
 sys.path.insert(0, "/Users/shakstzy/QUANTUM/_core/skills/cloud-llm")
-from client import describe_images, ask_text, CloudLLMUnreachable
+from client import describe_images, CloudLLMUnreachable
 
 SHORTCODE_RE = re.compile(
     r"instagram\.com/(?:share/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)"
@@ -46,15 +45,14 @@ def shortcode(url: str) -> str:
     return m.group(1)
 
 
-def fetch_post(url: str) -> dict:
+def fetch_post(url: str) -> Post:
     L = Instaloader(quiet=True)
     try:
-        post = Post.from_shortcode(L.context, shortcode(url))
+        return Post.from_shortcode(L.context, shortcode(url))
     except LoginRequiredException:
-        return {"error": "LoginRequired: run `~/.quantum/instagram-summary/.venv/bin/instaloader --login=<username>` once."}
+        sys.exit("LoginRequired: run `~/.quantum/instagram-summary/.venv/bin/instaloader --login=<username>` once.")
     except InstaloaderException as e:
-        return {"error": f"{type(e).__name__}: {e}"}
-    return {"post": post}
+        sys.exit(f"{type(e).__name__}: {e}")
 
 
 def post_image_urls(post: Post, cap: int) -> list[str]:

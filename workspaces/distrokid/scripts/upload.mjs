@@ -272,16 +272,66 @@ try {
 
   if (SUBMIT) {
     await step("click-continue", async () => {
-      const btn = page.locator("#doneButton");
-      // wait for WAV upload to complete first — DistroKid disables submit until done
-      await page.waitForTimeout(8000);
-      // scroll into view + click
-      await btn.scrollIntoViewIfNeeded();
-      await btn.click({ force: true });
+      // Wait for WAV upload + cropper to settle. DistroKid hides #doneButton
+      // and enables a different #saveAndContinue button only after S3 ack.
+      await page.waitForTimeout(15000);
+      await snap("just-before-click");
+      // Try multiple submit-button candidates in priority order.
+      const candidates = [
+        "#saveAndContinue:visible",
+        "#doneButton:visible",
+        'button:visible:has-text("Save and continue")',
+        'button:visible:has-text("Looks good")',
+        'input[type=submit]:visible',
+      ];
+      let clicked = false;
+      for (const sel of candidates) {
+        const loc = page.locator(sel).first();
+        if (await loc.count()) {
+          const txt = await loc.evaluate((el) => (el.value || el.textContent || "").trim().slice(0, 60)).catch(() => "?");
+          console.log(`  trying: ${sel} text="${txt}"`);
+          await loc.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(500);
+          await loc.click({ force: true });
+          clicked = true;
+          console.log(`  clicked: ${sel}`);
+          break;
+        }
+      }
+      if (!clicked) console.log("  WARN: no submit button matched");
+    });
+
+    await step("post-click-diag", async () => {
+      await page.waitForTimeout(3000);
+      const diag = await page.evaluate(() => {
+        const errs = [];
+        document.querySelectorAll(".error, .invalid, [class*='error' i]:not(.areyousure):not(div):not(form)").forEach((el) => {
+          const r = el.getBoundingClientRect();
+          const t = (el.textContent || "").trim();
+          if (r.width > 0 && r.height > 0 && t && t.length < 200) errs.push(t);
+        });
+        const dialogs = [];
+        document.querySelectorAll('[role=dialog], .modal, .ui-dialog, [class*="modal" i][style*="display: block"]').forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            const t = (el.textContent || "").trim().slice(0, 200);
+            const btns = Array.from(el.querySelectorAll('button, input[type=submit], input[type=button], a.button')).map(b => (b.value || b.textContent || "").trim()).filter(Boolean);
+            dialogs.push({ text: t, buttons: btns });
+          }
+        });
+        return { errs, dialogs, url: location.href };
+      });
+      console.log("[diag] url:", diag.url);
+      console.log("[diag] errors:", diag.errs.length);
+      diag.errs.forEach((e) => console.log("  ERR:", e));
+      console.log("[diag] dialogs:", diag.dialogs.length);
+      diag.dialogs.forEach((d, i) => {
+        console.log(`  DLG${i}.text:`, d.text);
+        console.log(`  DLG${i}.btns:`, d.buttons.join(" | "));
+      });
     });
 
     await step("post-submit-wait", async () => {
-      // Either nav happens, or a validation toast appears. Wait up to 30s.
       await Promise.race([
         page.waitForURL(/distrokid\.com\/(?!new)/, { timeout: 30000 }).catch(() => null),
         page.waitForTimeout(15000),
