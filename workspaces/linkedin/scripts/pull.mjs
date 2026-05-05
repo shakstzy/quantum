@@ -8,7 +8,8 @@ import { LinkedInExtractor } from "../src/linkedin/extractor.mjs";
 import { upsertPerson } from "../src/runtime/entity-store.mjs";
 import { toSlug } from "../src/runtime/slug.mjs";
 import { gate, record } from "../src/policy/rate-limits.mjs";
-import { interActionSpacing } from "../src/runtime/humanize.mjs";
+import { sleep, jitter } from "../src/runtime/humanize.mjs";
+import { loadCaps } from "../src/runtime/caps.mjs";
 import { sprinkleBetween, tickBurst, maybeGetDistracted } from "../src/runtime/messy-human.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -38,12 +39,12 @@ try {
         profileSnapshot: null,
         threadEvent: { direction: "system", text: `Pulled thread snapshot (${(conv.sections.conversation || "").length} chars)`, ts: new Date().toISOString() },
       });
-      // Append the conversation as a versioned section so we don't lose history.
       await record("get_profile", { target: t.threadId });
     } catch (err) {
       console.error(`[pull] thread ${t.threadId} skipped: ${err.code ?? "ERR"} ${err.message}`);
     }
-    await interActionSpacing();
+    const [lo, hi] = (await loadCaps()).pacing.inter_action_seconds;
+    await sleep(jitter(lo * 1000, hi * 1000));
     await tickBurst(page);
   }
 

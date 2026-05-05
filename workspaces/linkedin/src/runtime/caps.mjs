@@ -51,12 +51,6 @@ export function dayKey(d = new Date(), tz = "America/Chicago") {
   return fmt.format(d);
 }
 
-export function weekKey(d = new Date(), tz = "America/Chicago") {
-  // ISO-week-ish: the last 7 dayKeys ending today. We store a ring of 7 daily counts and
-  // sum them on read, which avoids week-boundary edge cases.
-  return dayKey(d, tz);
-}
-
 function inActiveHours(caps, d = new Date()) {
   const tz = caps.active_hours.tz;
   const hr = Number(

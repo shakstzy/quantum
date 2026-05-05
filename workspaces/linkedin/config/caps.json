@@ -1,5 +1,5 @@
 {
-  "_comment": "2026-04-30 bump (Adithya, Premium account). Daily connect raised to 30; cold-DM cap removed (Premium InMail + Open Profile is effectively uncapped). Weekly connect held at 100 (Premium Career/Business hard ceiling per Gemini 3 Pro grounding; Sales Navigator is 200 — bump weekly.send_connect to 200 in place if operator confirms Sales Nav). Pending-invite ceiling stays at 400 (hard freeze at 700).",
+  "_comment": "Premium account. Sales Nav unlocks weekly.send_connect=200 (vs Career/Business 100). Pending-invite ceiling 400 (hard freeze 700).",
   "active_hours": { "start": 9, "end": 19, "tz": "America/Chicago", "weekdays_only": true },
   "daily": {
     "send_connect": 30,
@@ -15,7 +15,6 @@
     "send_connect": 100
   },
   "pending_ceiling": {
-    "max_outstanding": 400,
     "force_withdraw_when_above": 400,
     "force_withdraw_batch_size": 25,
     "force_withdraw_min_age_days": 14

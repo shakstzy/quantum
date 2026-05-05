@@ -74,11 +74,3 @@ export async function microFidget(page) {
   await page.mouse.move(jitter(50, vp.width - 50), jitter(50, vp.height - 50), { steps: jitter(3, 7) });
   await sleep(jitter(250, 1200));
 }
-
-// Inter-action spacing. Use between distinct verbs.
-export async function interActionSpacing() {
-  const caps = await loadCaps();
-  const [lo, hi] = caps.pacing.inter_action_seconds;
-  const ms = jitter(lo * 1000, hi * 1000);
-  await sleep(ms);
-}

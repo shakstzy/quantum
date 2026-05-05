@@ -4,11 +4,9 @@
 import { toSlug } from "./slug.mjs";
 
 const PROFILE_URL_RE = /^https?:\/\/(?:www\.)?linkedin\.com\/in\/([^/?#]+)/i;
-const URN_RE = /^urn:li:fsd_profile:([A-Za-z0-9_-]+)$/;
 
 // Strictly validate a decoded public_id. LinkedIn vanities are alphanumeric + . _ -.
-// Per Codex P1 (withdraw-fix r2): user input flows into CSS selectors, so anything outside
-// this character class is a bug or attempted injection.
+// User input flows into CSS selectors; anything outside this class is a bug or injection.
 function validPublicId(s) {
   return typeof s === "string" && /^[A-Za-z0-9._-]+$/.test(s);
 }
@@ -36,17 +34,7 @@ export function publicIdToUrl(publicId) {
   return `https://www.linkedin.com/in/${encodeURIComponent(publicId)}/`;
 }
 
-export function isFsdProfileUrn(urn) {
-  return typeof urn === "string" && URN_RE.test(urn);
-}
-
-// Voyager messaging URNs are URL-encoded twice in some endpoints. Encode once here; callers can
-// double-encode when an endpoint requires it.
-export function encodeUrn(urn) {
-  return encodeURIComponent(urn);
-}
-
-// Build a slug from a Voyager profile dict. Prefers full name + first company.
+// Build a slug from a profile dict. Prefers full name + first company.
 export function profileToSlug(profile) {
   const first = profile?.firstName ?? "";
   const last = profile?.lastName ?? "";

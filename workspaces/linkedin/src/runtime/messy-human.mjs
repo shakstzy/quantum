@@ -63,5 +63,3 @@ export async function tickBurst(page = null) {
   }
   await sleep(ms);
 }
-
-export function resetBurst() { _actionsThisBurst = 0; }
