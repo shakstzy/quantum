@@ -153,84 +153,65 @@ async function openSessionAndCapture({ navUrl, expectedOp }) {
   }
 }
 
+// X 2026 dropped the single Viewer op. We read rest_id from the `twid`
+// cookie (format `u%3D<rest_id>`), navigate to /i/user/<rest_id> which
+// redirects to the profile URL and fires UserByScreenName.
 async function whoami() {
-  // Read rest_id from the twid cookie (deterministic), then navigate to
-  // /i/user/<rest_id> which X redirects to the profile URL and fires
-  // UserByScreenName for us. That response contains the full user object
-  // including the new core.{screen_name,name} fields.
-  const { launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker } = await import('./browser.mjs');
+  ensureDeps();
   const ctx = await launchContext({ visible: false });
   try {
     const cookies = await ctx.context.cookies();
     const twid = cookies.find(c => c.name === 'twid');
-    if (!twid) {
-      die(`[x-read] twid cookie missing; not authenticated. Run \`login\`.`, 3);
-    }
+    if (!twid) bail(`[x-read] twid cookie missing; not authenticated. Run \`login\`.`, 3);
     const m = decodeURIComponent(twid.value).match(/u=(\d+)/);
     const restId = m ? m[1] : null;
-    if (!restId) {
-      die(`[x-read] could not parse rest_id from twid cookie. Run \`login\`.`, 3);
-    }
+    if (!restId) bail(`[x-read] could not parse rest_id from twid cookie. Run \`login\`.`, 3);
+
     if (DEBUG) process.stderr.write(`[x-read] restId=${restId}; navigating to /i/user/${restId}\n`);
     await ctx.page.goto(`https://x.com/i/user/${restId}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 1500));
     const url = ctx.page.url();
     if (isAuthChallengeUrl(url)) {
       tripBreaker(`challenge-url:${url}`);
-      die(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`login\` after verifying.`, 3);
+      bail(`[x-read] redirected to challenge URL ${url}. Breaker tripped. Run \`login\` after verifying.`, 3);
     }
     const dom = await detectDomChallenge(ctx.page).catch(() => null);
     if (dom) {
       tripBreaker(`dom-challenge:${dom}`);
-      die(`[x-read] DOM challenge detected (${dom}). Breaker tripped.`, 3);
+      bail(`[x-read] DOM challenge detected (${dom}). Breaker tripped.`, 3);
     }
     const resp = await ctx.waitForResponse('UserByScreenName', { timeoutMs: 30000 });
     if (!resp) {
       const ops = ctx.listCapturedResponses();
-      die(`[x-read] no UserByScreenName response within 30s. Captured: [${ops.join(', ')}]. Session may need re-login.`, 3);
+      bail(`[x-read] no UserByScreenName response within 30s. Captured: [${ops.join(', ')}]. Session may need re-login.`, 3);
     }
     if (resp.status === 401 || resp.status === 403) {
       tripBreaker(`response-${resp.status}:UserByScreenName`);
-      die(`[x-read] ${resp.status} from UserByScreenName. Run \`login\`.`, 3);
+      bail(`[x-read] ${resp.status} from UserByScreenName. Run \`login\`.`, 3);
     }
-    const user = resp.body?.data?.user?.result || null;
-    if (!user) {
-      die(`[x-read] UserByScreenName payload had no data.user.result; X shape may have changed.`, 5);
-    }
-    const userCore = user.core || {};
-    const legacy = user.legacy || {};
-    console.log(JSON.stringify({
-      ok: true,
-      id: user.rest_id || restId,
-      handle: userCore.screen_name || legacy.screen_name || null,
-      name: userCore.name || legacy.name || null,
-      verified: !!(user.is_blue_verified ?? legacy.verified),
-      premium: !!user.is_blue_verified,
-      followers: legacy.followers_count ?? null,
-      following: legacy.friends_count ?? null,
-      tweets: legacy.statuses_count ?? null,
-      bio: legacy.description ?? null,
-      profile_url: ctx.page.url()
-    }, null, 2));
-  } finally { await ctx.close(); }
+    const user = resp.body?.data?.user?.result;
+    if (!user) bail(`[x-read] UserByScreenName payload had no data.user.result; X shape may have changed.`, 5);
+    console.log(JSON.stringify({ ok: true, ...formatUser(user, restId), profile_url: ctx.page.url() }, null, 2));
+  } finally { await ctx.close().catch(() => {}); }
 }
 
-// Recursively find a user_results.result with the given rest_id.
-function findUserByRestId(node, restId, depth = 0) {
-  if (!node || typeof node !== 'object' || depth > 14) return null;
-  if (Array.isArray(node)) {
-    for (const x of node) { const hit = findUserByRestId(x, restId, depth + 1); if (hit) return hit; }
-    return null;
-  }
-  if (node.user_results && node.user_results.result && node.user_results.result.rest_id === restId) {
-    return node.user_results.result;
-  }
-  // Some responses use `core.user_results.result` shape. Tested above is enough.
-  for (const k of Object.keys(node)) {
-    const hit = findUserByRestId(node[k], restId, depth + 1);
-    if (hit) return hit;
-  }
-  return null;
+// Shape the User-typed result block consistently across whoami and profile.
+function formatUser(user, fallbackRestId = null) {
+  const core = user?.core || {};
+  const legacy = user?.legacy || {};
+  return {
+    id: user?.rest_id || fallbackRestId,
+    handle: core.screen_name || legacy.screen_name || null,
+    name: core.name || legacy.name || null,
+    bio: legacy.description ?? null,
+    verified: !!(user?.is_blue_verified ?? legacy.verified),
+    premium: !!user?.is_blue_verified,
+    protected: !!legacy.protected,
+    followers: legacy.followers_count ?? null,
+    following: legacy.friends_count ?? null,
+    tweets: legacy.statuses_count ?? null,
+    location: legacy.location || null,
+    website: legacy.entities?.url?.urls?.[0]?.expanded_url || null
+  };
 }
 
 async function thread(argv) {
@@ -244,39 +225,24 @@ async function thread(argv) {
     const out = parseTweetDetail(resp.body, tweetId);
     out.fetched_at = new Date().toISOString();
     if (out.ok && out.root && out.root.id !== tweetId) {
-      // Codex round 1: silent root mismatch corrupts output. Fail loud.
+      // Silent root mismatch would corrupt the caller's output; fail loud.
       out.ok = false;
       out.error = `root.id mismatch: expected ${tweetId}, got ${out.root.id}`;
     }
     console.log(JSON.stringify(out, null, 2));
     if (!out.ok) process.exitCode = 5;
-  } finally { await ctx.close(); }
+  } finally { await ctx.close().catch(() => {}); }
 }
 
 // ---- TweetDetail parser ------------------------------------------------
 
 // Shared timeline parser used by thread / profile / bookmarks / search.
-// Returns a deduped, normalized tweet array. Walks ALL instruction shapes
-// recursively (Gemini round 3 high finding: TimelineAddToModule, module
-// items, etc carry tweets under non-.entries paths).
+// Walks every instruction (any shape — TimelineAddEntries, TimelineAddToModule,
+// TimelineReplaceEntry, etc) for `tweet_results.result` nodes, then normalizes
+// and dedupes by rest_id.
 function extractTweetsFromInstructions(instructions, { limit = Infinity } = {}) {
   const tweetResults = [];
-  for (const inst of instructions || []) {
-    // Direct entries[] (most common: TimelineAddEntries).
-    if (Array.isArray(inst?.entries)) {
-      for (const entry of inst.entries) collectTweetResultsDeep(entry, tweetResults);
-    }
-    // Module items (TimelineAddToModule, etc).
-    if (Array.isArray(inst?.moduleItems)) {
-      for (const item of inst.moduleItems) collectTweetResultsDeep(item, tweetResults);
-    }
-    // Replace / pin / arbitrary single-entry instructions (TimelineReplaceEntry,
-    // TimelinePinEntry, etc).
-    if (inst?.entry) collectTweetResultsDeep(inst.entry, tweetResults);
-    // Last resort: deep-walk the whole instruction for anything we missed.
-    collectTweetResultsDeep(inst, tweetResults);
-  }
-  // Dedupe by rest_id (entries can repeat across modules).
+  for (const inst of instructions || []) collectTweetResultsDeep(inst, tweetResults);
   const seen = new Set();
   const tweets = [];
   for (const r of tweetResults) {
@@ -326,19 +292,6 @@ function parseTweetDetail(body, focalId) {
   }
 }
 
-function collectEntriesDeep(node, out, depth = 0) {
-  if (!node || typeof node !== 'object' || depth > 8) return;
-  if (Array.isArray(node)) {
-    for (const x of node) collectEntriesDeep(x, out, depth + 1);
-    return;
-  }
-  if (Array.isArray(node.entries)) out.push(...node.entries);
-  for (const k of Object.keys(node)) {
-    if (k === 'entries') continue;
-    collectEntriesDeep(node[k], out, depth + 1);
-  }
-}
-
 // Recursively find any object that looks like a tweet_results.result wrapper.
 function collectTweetResultsDeep(node, out, depth = 0) {
   if (!node || typeof node !== 'object' || depth > 12) return;
@@ -365,38 +318,30 @@ function unwrapVisibilityResult(r) {
   return r;
 }
 
-function normalizeTweet(rawResult) {
+function normalizeTweet(rawResult, depth = 0) {
   const r = unwrapVisibilityResult(rawResult);
-  // Tombstone after unwrap.
   if (r?.__typename === 'TweetTombstone' || r?.__typename === 'TweetUnavailable') {
-    return {
-      id: r?.rest_id || null,
-      tombstone: r?.tombstone?.text?.text || r?.__typename,
-      text: null,
-      author: null
-    };
+    return { id: r?.rest_id || null, tombstone: r?.tombstone?.text?.text || r?.__typename, text: null, author: null };
   }
   const tweet = r;
   const legacy = tweet?.legacy || {};
 
-  // Note Tweets: long-form. When present, prefer note's entity set for
-  // mentions/urls; media still comes from legacy unless note-specific media
-  // is present.
+  // Note Tweets are long-form. Use note text + entities when present.
   const noteResult = tweet?.note_tweet?.note_tweet_results?.result;
   const noteEntities = noteResult?.entity_set;
   const text = noteResult?.text || legacy?.full_text || null;
 
+  // Author: X 2026 moved screen_name + name to userResult.core; legacy
+  // is the older shape and still used by some pre-2026 cached responses.
   const userResult = tweet?.core?.user_results?.result;
-  // X 2026 moved screen_name + name from legacy.* to a new userResult.core.*
-  // block. Fall back to legacy for older shapes.
   const userCore = userResult?.core || {};
   const userLegacy = userResult?.legacy || {};
-  const handle = userCore.screen_name || userLegacy.screen_name || null;
-  const displayName = userCore.name || userLegacy.name || null;
 
-  // Retweet unwrap. legacy.retweeted_status_result.result is the original.
+  // Retweet/quote unwrap. Bounded recursion: a retweet of a quote of a
+  // retweet is rare and adversarial nesting is not a real shape.
   const retweet = tweet?.legacy?.retweeted_status_result?.result;
   const quoted = tweet?.quoted_status_result?.result;
+  const recurse = depth < 3;
 
   return {
     id: tweet?.rest_id || legacy?.id_str || null,
@@ -418,12 +363,12 @@ function normalizeTweet(rawResult) {
     urls: extractUrls(legacy, noteEntities),
     author: {
       id: userResult?.rest_id || null,
-      handle,
-      name: displayName,
+      handle: userCore.screen_name || userLegacy.screen_name || null,
+      name: userCore.name || userLegacy.name || null,
       verified: !!(userResult?.is_blue_verified ?? userLegacy?.verified)
     },
-    retweet_of: retweet ? normalizeTweet(retweet) : null,
-    quoted: quoted ? normalizeTweet(quoted) : null
+    retweet_of: retweet && recurse ? normalizeTweet(retweet, depth + 1) : null,
+    quoted: quoted && recurse ? normalizeTweet(quoted, depth + 1) : null
   };
 }
 
