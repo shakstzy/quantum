@@ -23,11 +23,11 @@ const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
 const page = ctx.pages()[0] || (await ctx.newPage());
 
 console.log("navigating to /new/...");
-await page.goto("https://distrokid.com/new/", { waitUntil: "networkidle", timeout: 30000 });
+await page.goto("https://distrokid.com/new/", { waitUntil: "domcontentloaded", timeout: 60000 });
 await page.bringToFront();
 
-// give React a moment
-await page.waitForTimeout(2500);
+// give React + lazy-loaded chunks time to mount
+await page.waitForTimeout(5000);
 
 const formData = await page.evaluate(() => {
   const out = { url: location.href, title: document.title, controls: [] };
