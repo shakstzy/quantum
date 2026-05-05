@@ -60,55 +60,79 @@ for (let i = 0; i < 6; i++) {
   }
   seen.add(url);
 
-  // 1. Pick the $0 / "originals" / decline option if available.
-  const picked = await page.evaluate(() => {
-    const radios = Array.from(document.querySelectorAll('input[type=radio]')).filter((r) => {
-      const rect = r.getBoundingClientRect();
-      // include hidden styled radios — DK uses CSS-hidden inputs with visible labels
-      return true;
-    });
-    function labelText(el) {
-      if (el.id) {
-        const lab = document.querySelector(`label[for="${el.id}"]`);
-        if (lab) return (lab.textContent || "").trim();
-      }
-      const w = el.closest("label");
-      return w ? (w.textContent || "").trim() : "";
+  // 1. Click the "Use my originals" card. It's a styled radio: clicking the card
+  //    text propagates to the underlying input. Try multiple strategies.
+  let picked = null;
+  // Strategy A: text-targeted click on visible "Use my originals" card.
+  try {
+    const card = page.getByText(/use my originals/i).first();
+    if (await card.count()) {
+      await card.click({ timeout: 5000 });
+      picked = { strategy: "text-click", label: "Use my originals" };
     }
-    for (const r of radios) {
-      const t = labelText(r).toLowerCase();
-      if (/use my originals|originals.*\$0|\$0|no thanks|skip|decline/i.test(t)) {
-        if (!r.checked) {
-          r.checked = true;
-          r.dispatchEvent(new Event("change", { bubbles: true }));
-          r.dispatchEvent(new Event("click", { bubbles: true }));
+  } catch {}
+  // Strategy B: programmatic radio.
+  if (!picked) {
+    picked = await page.evaluate(() => {
+      const radios = Array.from(document.querySelectorAll('input[type=radio]'));
+      for (const r of radios) {
+        // walk DOM up looking for any text containing "originals" or "$0"
+        let p = r;
+        for (let i = 0; i < 6 && p; i++) {
+          const t = (p.textContent || "").toLowerCase();
+          if (/use my originals/.test(t) || (t.includes("$0") && !t.includes("$10"))) {
+            r.checked = true;
+            r.dispatchEvent(new Event("change", { bubbles: true }));
+            r.click();
+            return { strategy: "ancestor-radio", id: r.id || r.name };
+          }
+          p = p.parentElement;
         }
-        return { id: r.id || r.name, label: t.slice(0, 80) };
       }
-    }
-    return null;
-  });
+      return null;
+    });
+  }
   console.log(`  picked:`, picked);
 
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1500);
   await snap(`iter${i}-picked`);
 
-  // 2. Click Continue / Submit / Place Order.
-  const clicked = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button, input[type=button], input[type=submit], a.button'));
-    const visible = btns.filter((b) => {
-      const r = b.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
-    });
-    for (const b of visible) {
-      const txt = ((b.value || b.textContent || "").trim()).toLowerCase();
-      if (/^(continue|submit|place order|complete|finish|distribute|finalize)$/i.test(txt)) {
-        b.click();
-        return { txt, id: b.id || "", classes: (b.className || "").slice(0, 60) };
+  // 2. Click Continue / Submit / Place Order. Wait for it to be enabled.
+  let clicked = null;
+  try {
+    const btn = page.getByRole("button", { name: /^(continue|submit|place order|complete|finish|distribute|finalize)$/i }).first();
+    if (await btn.count()) {
+      await btn.waitFor({ state: "visible", timeout: 5000 });
+      // wait for enabled
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const enabled = await btn.isEnabled();
+        if (enabled) break;
+        await page.waitForTimeout(500);
       }
+      const txt = (await btn.innerText()).trim();
+      await btn.click({ force: true });
+      clicked = { strategy: "role-button", txt };
     }
-    return null;
-  });
+  } catch (e) {
+    console.log(`  role-button click failed: ${e.message.slice(0, 80)}`);
+  }
+  if (!clicked) {
+    clicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, input[type=button], input[type=submit], a.button'));
+      const visible = btns.filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && !b.disabled;
+      });
+      for (const b of visible) {
+        const txt = ((b.value || b.textContent || "").trim()).toLowerCase();
+        if (/^(continue|submit|place order|complete|finish|distribute|finalize)$/i.test(txt)) {
+          b.click();
+          return { strategy: "evaluate", txt };
+        }
+      }
+      return null;
+    });
+  }
   console.log(`  clicked:`, clicked);
   if (!clicked) {
     console.log(`  no continue button — bailing`);
@@ -116,7 +140,7 @@ for (let i = 0; i < 6; i++) {
     break;
   }
 
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(5000);
   await snap(`iter${i}-after-click`);
 }
 
