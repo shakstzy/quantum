@@ -23,7 +23,7 @@ The most-repeated win pattern across women's responses is "comment on or ask abo
 4. Bio detail (work, school, lives_in if non-trivial, hometown if non-default)
 5. Lifestyle badges or basics (only if 2-4 are absent)
 
-If NONE of 1-5 are usable, skip the draft entirely. Bumble specifically: if she said only "hey" / "hi" with no anchor, skip — wait for a substantive message OR write a single anchor-question targeting her photo content.
+If NONE of 1-5 are usable, skip the draft entirely. Bumble specifically: if she said only "hey" / "hi" with no anchor, skip  -  wait for a substantive message OR write a single anchor-question targeting her photo content.
 
 ## 2. Length is the second biggest dial
 
@@ -46,7 +46,7 @@ The single highest-upvoted Tinder opener-pattern across the corpus is "make up a
 - Visual = climbing wall: "betting good money your camera roll is 80% climbing photos and 20% screenshots of climbing photos"
 - Visual = dog: "your dog looks like he's interviewing me for the position"
 
-NEVER: "is that your dog" / "I see you climb" / "nice photo" — those are observation, not story.
+NEVER: "is that your dog" / "I see you climb" / "nice photo"  -  those are observation, not story.
 
 ## 4. What WOMEN say kills replies (rank by frequency in corpus)
 
