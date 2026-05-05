@@ -261,10 +261,37 @@ try {
       return out;
     });
     console.log(`  performer-filled=${fills.performer}, producer-filled=${fills.producer}`);
-    if (!fills.performer || !fills.producer) {
-      console.log(`  candidates (${fills.candidates.length}):`);
-      fills.candidates.slice(0, 30).forEach((c) => console.log(`    ph="${c.ph}" name="${c.name}" id="${c.id}"`));
-    }
+
+    // Role dropdowns are required ("Performer role required", "Producer role required").
+    // Identify each select by its option list: performer has "Singing & vocals",
+    // producer has a literal "Producer" option.
+    const roles = await page.evaluate(() => {
+      const out = { performer: null, producer: null };
+      const selects = Array.from(document.querySelectorAll("select")).filter((s) => {
+        const r = s.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      for (const s of selects) {
+        const opts = Array.from(s.options).map((o) => (o.text || o.textContent || "").trim());
+        const sIdx = opts.findIndex((t) => /^singing\s*&?\s*vocals/i.test(t));
+        const pIdx = opts.findIndex((t) => /^producer$/i.test(t));
+        if (sIdx >= 0 && out.performer === null) {
+          s.selectedIndex = sIdx;
+          s.dispatchEvent(new Event("change", { bubbles: true }));
+          out.performer = opts[sIdx];
+        } else if (pIdx >= 0 && out.producer === null && (out.performer || sIdx < 0)) {
+          // skip the songwriter "Music and lyrics" select (also has Producer? no — only the credits one)
+          // Producer select is one whose options start with "Select a role" then producer roles
+          if (opts[0] && /select a role/i.test(opts[0])) {
+            s.selectedIndex = pIdx;
+            s.dispatchEvent(new Event("change", { bubbles: true }));
+            out.producer = opts[pIdx];
+          }
+        }
+      }
+      return out;
+    });
+    console.log(`  performer-role=${roles.performer}, producer-role=${roles.producer}`);
   });
 
   await step("mandatory-checkboxes", async () => {
