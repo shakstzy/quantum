@@ -234,34 +234,22 @@ try {
   });
 
   await step("mandatory-checkboxes", async () => {
-    const ids = [
-      "#areyousureyoutube",
-      "#areyousurenonstandardscaps",
-      "#areyousurepromoservices",
-      "#areyousurerecorded",
-      "#areyousureotherartist",
-      "#areyousuretandc",
-    ];
-    for (const id of ids) {
-      const cb = page.locator(id);
-      if (await cb.count() && !(await cb.isChecked())) {
-        await cb.click({ force: true });
-      }
-    }
-    // Snapchat opt-in (appears after Snapchat selected). Pattern: another `areyousure*` checkbox.
-    const snapOpt = page.locator('input[type=checkbox][id*="areyousure"][id*="napchat" i], input[type=checkbox][id*="napchat" i]').first();
-    if (await snapOpt.count() && (await snapOpt.isVisible()) && !(await snapOpt.isChecked())) {
-      await snapOpt.click({ force: true });
-    }
-    // Catch-all: any visible unchecked .areyousure
-    const any = page.locator("input.areyousure[type=checkbox]");
-    const n = await any.count();
-    for (let i = 0; i < n; i++) {
-      const c = any.nth(i);
-      if ((await c.isVisible()) && !(await c.isChecked())) {
-        await c.click({ force: true }).catch(() => {});
-      }
-    }
+    // .areyousure checkboxes are jQuery-styled: real <input> is CSS-hidden, label wraps it.
+    // Skip the actionability check entirely and flip them in JS, dispatching change.
+    const flipped = await page.evaluate(() => {
+      const out = [];
+      const all = document.querySelectorAll("input.areyousure[type=checkbox], input[type=checkbox][id^='areyousure']");
+      all.forEach((el) => {
+        if (!el.checked) {
+          el.checked = true;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("click", { bubbles: true }));
+        }
+        out.push({ id: el.id, checked: el.checked });
+      });
+      return out;
+    });
+    console.log(`  flipped ${flipped.length} mandatory boxes:`, flipped.map((b) => b.id).join(", "));
   });
 
   await snap("pre-submit");
