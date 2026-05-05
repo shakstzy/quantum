@@ -133,12 +133,9 @@ try {
     await page.selectOption("#artistName", { label: "Shak STZY" }).catch(() => {});
   });
 
-  await step("facebook-yes-group", async () => {
-    const r = page.locator("#facebookProfileArtistID1Yes");
-    if (await r.count() && !(await r.isChecked())) {
-      await r.click({ force: true });
-    }
-  });
+  // Facebook profile: leave default ("No - Shak STZY doesn't yet have a profile").
+  // Choosing "Yes - group" requires a real FB artist URL we don't have, and
+  // DistroKid rejects submission with "Please enter a valid Facebook Profile URL".
 
   await step("release-date-today", async () => {
     const today = new Date();
@@ -215,38 +212,59 @@ try {
   });
 
   await step("apple-credits", async () => {
-    // Bounded: a hidden span matching the regex hangs click() for 30s. Use a
-    // short timeout and only click VISIBLE matches; fall through fast otherwise.
-    const expand = page.locator("a:visible, button:visible").filter({ hasText: /add credits for each song/i }).first();
-    try {
-      if (await expand.count({ timeout: 1500 })) {
-        await expand.click({ timeout: 3000 });
-        await page.waitForTimeout(1000);
-      }
-    } catch {}
+    // Find the "Add credits..." expander by walking the DOM; click + scroll.
+    const expanded = await page.evaluate(() => {
+      const all = Array.from(document.querySelectorAll("a, button, div, span, p"));
+      const hit = all.find((el) => {
+        const t = (el.textContent || "").trim();
+        return /add credits for each song on this release/i.test(t)
+          && t.length < 200
+          && el.getBoundingClientRect().width > 0;
+      });
+      if (!hit) return { found: false };
+      hit.scrollIntoView({ block: "center" });
+      hit.click();
+      // Bubble up — sometimes the handler is on a parent.
+      let p = hit.parentElement;
+      for (let i = 0; i < 3 && p; i++) { try { p.click(); } catch {} p = p.parentElement; }
+      return { found: true, tag: hit.tagName, text: hit.textContent.trim().slice(0, 80) };
+    });
+    console.log(`  expand:`, expanded);
+    await page.waitForTimeout(1500);
 
-    // Fill any visible performer/producer text inputs that surfaced.
-    await page.evaluate(() => {
-      function fillByLabelMatch(re, value) {
-        const inputs = document.querySelectorAll('input[type="text"]');
-        for (const el of inputs) {
-          const ph = (el.placeholder || "").toLowerCase();
-          const nm = (el.name || "").toLowerCase();
-          const id = (el.id || "").toLowerCase();
-          const cl = (el.className || "").toLowerCase();
-          if (re.test(ph) || re.test(nm) || re.test(id) || re.test(cl)) {
-            const r = el.getBoundingClientRect();
-            if (r.width > 0 && r.height > 0 && !el.value) {
-              el.value = value;
-              el.dispatchEvent(new Event("input", { bubbles: true }));
-              el.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }
+    // Fill performer + producer inputs that should now be visible.
+    const fills = await page.evaluate(() => {
+      const out = { performer: false, producer: false, candidates: [] };
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type])'));
+      const visible = inputs.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      for (const el of visible) {
+        const ctx = `${el.placeholder || ""} ${el.name || ""} ${el.id || ""} ${el.className || ""}`.toLowerCase();
+        out.candidates.push({ ph: el.placeholder, name: el.name, id: el.id, cls: (el.className||"").slice(0,40) });
+        if (!out.performer && /performer/.test(ctx) && !el.value) {
+          el.value = "Shak STZY";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur", { bubbles: true }));
+          out.performer = true;
+        }
+        if (!out.producer && /producer/.test(ctx) && !el.value) {
+          el.value = "Shak STZY";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur", { bubbles: true }));
+          out.producer = true;
         }
       }
-      fillByLabelMatch(/performer/i, "Shak STZY");
-      fillByLabelMatch(/producer/i, "Shak STZY");
+      return out;
     });
+    console.log(`  performer-filled=${fills.performer}, producer-filled=${fills.producer}`);
+    if (!fills.performer || !fills.producer) {
+      console.log(`  candidates (${fills.candidates.length}):`);
+      fills.candidates.slice(0, 30).forEach((c) => console.log(`    ph="${c.ph}" name="${c.name}" id="${c.id}"`));
+    }
   });
 
   await step("mandatory-checkboxes", async () => {
