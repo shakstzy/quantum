@@ -161,9 +161,12 @@ export async function launchContext({ force = false, visible = false } = {}) {
     });
 
     page = await context.newPage();
+    // Close every other tab on launch — patchright's persistent profile can
+    // restore zombie tabs from prior crashed runs and from --restore flags
+    // bypassed by the user. Tab hygiene is non-negotiable per the learning.
     for (const p of context.pages()) {
-      if (p !== page && p.url() === 'about:blank') {
-        try { await p.close(); } catch (_) {}
+      if (p !== page) {
+        try { await p.close({ runBeforeUnload: false }); } catch (_) {}
       }
     }
   } catch (e) {
@@ -291,6 +294,14 @@ export async function launchContext({ force = false, visible = false } = {}) {
       });
     },
     async close() {
+      // Close every page explicitly before closing the context. Otherwise
+      // some patchright/Chrome combos persist the tab list to the profile
+      // and the next launch resurrects them.
+      try {
+        for (const p of context.pages()) {
+          try { await p.close({ runBeforeUnload: false }); } catch (_) {}
+        }
+      } catch (_) {}
       try { await context.close(); } finally { releasePidfile(); }
     }
   };
