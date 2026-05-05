@@ -87,12 +87,22 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   await openThread(page, matchId);
   await scanForHalts(page);
 
-  // Detect "This match has expired" interstitial. When present, the thread
-  // renders the chat-blocker article instead of the composer; this overrides
-  // any sidebar expiry hint (which can still show full data-progress for
-  // visually-expired rows). Live-verified 2026-05-03 against Lacie's thread.
+  // Detect chat-blocker interstitials. Two distinct dead-states:
+  //   1. expired: "This match has expired" (24h timer ran out)
+  //   2. unmatched/left-bumble: "X has left Bumble. Perhaps it's time to make another connection"
+  //      (account deleted/banned, or she manually unmatched).
+  // Both block the composer; both must stop send attempts. The text content
+  // disambiguates which one it is.
+  // Live-verified 2026-05-03 (expired-Lacie) and 2026-05-04 (left-Emily).
   const expiredInterstitial = await page.$(".chat-blocker.expiration-status-expired, [class*='expiration-status-expired']").catch(() => null);
   const isExpiredView = !!expiredInterstitial;
+  let isLeftBumble = false;
+  if (!isExpiredView) {
+    const blockerText = await page.$eval(".chat-blocker, [class*='chat-blocker']", el => (el.textContent || "").toLowerCase()).catch(() => "");
+    if (blockerText && (blockerText.includes("left bumble") || blockerText.includes("make another connection"))) {
+      isLeftBumble = true;
+    }
+  }
 
   // Read messages.
   const messages = await page.$$eval(sels.thread_messages.selector, els => els.map(el => {
@@ -163,6 +173,12 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   // Persist the expired status so decide.mjs and rematch.mjs can route on it.
   if (isExpiredView && entityResult?.slug) {
     try { await setStatus(entityResult.slug, "expired"); } catch (e) { console.error(`setStatus(expired) failed for ${entityResult.slug}: ${e.message}`); }
+  }
+  // Persist the unmatched status so decide.mjs skips drafting and send.mjs
+  // refuses delivery. Distinct from "expired" because rematch.mjs cannot
+  // resurrect a left-Bumble account (no rematch button is offered).
+  if (isLeftBumble && entityResult?.slug) {
+    try { await setStatus(entityResult.slug, "unmatched"); } catch (e) { console.error(`setStatus(unmatched) failed for ${entityResult.slug}: ${e.message}`); }
   }
 
   await idlePause({ min: caps.scrape.between_thread_opens_ms[0], max: caps.scrape.between_thread_opens_ms[1] });
