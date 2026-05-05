@@ -8,9 +8,9 @@ import { detectRateLimit, isLoggedIn } from "./page-actions.mjs";
 const FEED_URL = "https://www.linkedin.com/feed/";
 
 export async function ensureLoggedIn(page, { allowInteractive = false, interactiveTimeoutMs = 5 * 60_000 } = {}) {
-  // 2026-05-04: skip the /feed/ pre-nav when li_at cookie is present. Hitting /feed/ on every
-  // verb is the most expensive nav on LinkedIn AND was the cause of our throttle bug. The caller
-  // will hit /authwall on its action URL if the session is actually stale; detectRateLimit catches it.
+  // li_at fast-path: skip /feed/ pre-nav when the auth cookie is present. /feed/ is LinkedIn's
+  // most expensive page and was the cause of our throttle bug. If the session is actually stale,
+  // the caller's action URL will redirect to /authwall and detectRateLimit catches it there.
   if (!allowInteractive) {
     const cookies = await page.context().cookies("https://www.linkedin.com").catch(() => []);
     if (cookies.some((c) => c.name === "li_at" && c.value)) {

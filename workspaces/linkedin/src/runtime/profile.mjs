@@ -8,8 +8,10 @@ import { chromium } from "patchright";
 import { PROFILE_DIR } from "./paths.mjs";
 
 const DEFAULT_VIEWPORT = { width: 1366, height: 820 };
-const DEFAULT_USER_AGENT = null; // let patchright/chromium pick to match installed Chromium build
-const MIN_INTER_LAUNCH_MS = 30_000; // 2026-05-04: live smoke surfaced /feed/ throttle when 4+ verbs fired in 2 min.
+const DEFAULT_USER_AGENT = null;
+// Rapid sequential verbs trigger LinkedIn's /feed/ throttle. Cross-process file lock keeps
+// back-to-back CLI invocations >=30s apart.
+const MIN_INTER_LAUNCH_MS = 30_000;
 const LAUNCH_TS_FILE = path.join(os.homedir(), ".quantum", "linkedin", "state", "last-launch.ts");
 
 async function paceLaunch() {
@@ -18,12 +20,12 @@ async function paceLaunch() {
     const last = raw ? Number(raw) : 0;
     const wait = MIN_INTER_LAUNCH_MS - (Date.now() - last);
     if (wait > 0 && wait <= MIN_INTER_LAUNCH_MS) {
-      process.stderr.write(`[profile] pacing ${Math.ceil(wait / 1000)}s before launch (last verb ran <30s ago)\n`);
+      process.stderr.write(`[profile] pacing ${Math.ceil(wait / 1000)}s before launch\n`);
       await new Promise((r) => setTimeout(r, wait));
     }
     await fs.mkdir(path.dirname(LAUNCH_TS_FILE), { recursive: true });
     await fs.writeFile(LAUNCH_TS_FILE, String(Date.now()));
-  } catch { /* tolerate state-dir issues; pacing is best-effort */ }
+  } catch { /* best-effort */ }
 }
 
 export async function launchPersistent({

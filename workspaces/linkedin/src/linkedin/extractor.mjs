@@ -211,13 +211,11 @@ export class LinkedInExtractor {
       : "/mynetwork/invitation-manager/";
     const url = `https://www.linkedin.com${path}`;
     await this.navigateTo(url);
-    // /sent/ uses a nested scrollable container, not window-scroll. scrollMainScrollable walks
-    // descendants to find the overflowY:auto element with growing scrollHeight. attempts:30 loops
-    // until exhausted (helper short-circuits when scrollHeight stops growing).
-    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 600 });
+    // /sent/ + /received/ are virtualized: older entries only enter DOM after scrolling the
+    // nested overflow container (not window). scrollMainScrollable short-circuits at end of list.
+    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 350 });
     const text = await this.getMainText();
-    // Harvest structured (slug, displayName) pairs from the rendered list. Operators need this
-    // to pass the right slug to withdraw-invite (LinkedIn vanity slugs rarely match display kebab).
+    // LinkedIn vanity slugs rarely match display kebab, so withdraw-invite needs the real slug.
     const entries = await this.page.evaluate(() => {
       const out = [];
       const seen = new Set();
@@ -414,9 +412,7 @@ export class LinkedInExtractor {
   async withdrawInvite(username, { dryRun = true } = {}) {
     const url = "https://www.linkedin.com/mynetwork/invitation-manager/sent/";
     await this.navigateTo(url);
-    // /sent/ is virtualized; older invites only enter DOM after scrolling the nested container.
-    // scrollMainScrollable walks descendants to find the actual overflow container.
-    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 600 });
+    await scrollMainScrollable(this.page, { attempts: 30, pauseMs: 350 });
 
     // Find the withdraw control for THIS specific user. Per Codex r2 review of the targeting fix:
     //   Single-card invariant: walk UP from the user's /in/<u>/ link, find the first ancestor

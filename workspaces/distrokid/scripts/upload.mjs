@@ -377,13 +377,82 @@ try {
     });
 
     await step("post-submit-wait", async () => {
+      // Wait for nav off /new/ root (could go to /new/mixea/ or /new/done/).
       await Promise.race([
-        page.waitForURL(/distrokid\.com\/(?!new)/, { timeout: 30000 }).catch(() => null),
+        page.waitForURL(/distrokid\.com\/new\/(mixea|done)/, { timeout: 30000 }).catch(() => null),
         page.waitForTimeout(15000),
       ]);
       await snap("post-submit");
       console.log(`[url] ${page.url()}`);
     });
+
+    // Walk through any post-form upsells (Mixea, etc) until we reach /done/ or leave /new/.
+    await step("post-form-upsells", async () => {
+      const seen = new Set();
+      for (let i = 0; i < 6; i++) {
+        const url = page.url();
+        console.log(`  iter${i} url=${url}`);
+        if (/\/new\/done\//.test(url) || !/\/new\//.test(url)) {
+          console.log("  reached terminal page");
+          break;
+        }
+        if (seen.has(url)) { console.log("  same URL twice — bailing"); break; }
+        seen.add(url);
+
+        // Pick the $0 / "Use my originals" / decline option if any radio surface exists.
+        let pickedLabel = null;
+        try {
+          const card = page.getByText(/use my originals/i).first();
+          if (await card.count()) {
+            await card.click({ timeout: 4000 });
+            pickedLabel = "use my originals";
+          }
+        } catch {}
+        if (!pickedLabel) {
+          pickedLabel = await page.evaluate(() => {
+            const radios = Array.from(document.querySelectorAll('input[type=radio]'));
+            for (const r of radios) {
+              let p = r;
+              for (let i = 0; i < 6 && p; i++) {
+                const t = (p.textContent || "").toLowerCase();
+                if (/use my originals/.test(t) || (t.includes("$0") && !t.includes("$10"))) {
+                  r.checked = true;
+                  r.dispatchEvent(new Event("change", { bubbles: true }));
+                  r.click();
+                  return t.slice(0, 60);
+                }
+                p = p.parentElement;
+              }
+            }
+            return null;
+          });
+        }
+        if (pickedLabel) console.log(`  picked: "${pickedLabel}"`);
+        await page.waitForTimeout(1000);
+
+        // Click Continue (or final submit verb).
+        let clicked = null;
+        try {
+          const btn = page.getByRole("button", { name: /^(continue|submit|place order|complete|finish|distribute|finalize)$/i }).first();
+          if (await btn.count()) {
+            for (let attempt = 0; attempt < 8; attempt++) {
+              if (await btn.isEnabled()) break;
+              await page.waitForTimeout(500);
+            }
+            const txt = (await btn.innerText()).trim();
+            await btn.click({ force: true });
+            clicked = txt;
+          }
+        } catch {}
+        if (!clicked) { console.log("  no continue — bailing"); break; }
+        console.log(`  clicked: "${clicked}"`);
+        await page.waitForTimeout(4000);
+        await snap(`upsell-iter${i}`);
+      }
+      console.log(`  final-url: ${page.url()}`);
+    });
+
+    await snap("final");
   } else {
     console.log("[skip-submit] form filled, leaving open for review (--submit false)");
     await page.waitForTimeout(60000);
