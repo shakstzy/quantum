@@ -24,8 +24,14 @@ const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
 const page = ctx.pages()[0] || (await ctx.newPage());
 
 await page.goto("https://distrokid.com/signin/", { waitUntil: "domcontentloaded" });
-console.log("Chrome open at https://distrokid.com/signin/ — log in manually.");
-console.log("Close the browser window when finished.");
+await page.bringToFront();
+
+// Force-raise the patchright window over Adithya's other Chrome instances.
+await page.evaluate(() => { try { window.focus(); } catch {} });
+
+console.log("Chrome window: https://distrokid.com/signin/ — log in manually.");
+console.log("If you don't see it, check Mission Control (F3) — it's a separate Chrome window.");
+console.log("Close the browser when finished.");
 console.log(`Profile dir: ${PROFILE_DIR}`);
 
 await new Promise((resolve) => ctx.on("close", resolve));
