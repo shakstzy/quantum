@@ -56,6 +56,14 @@ function die(msg, code = 1) {
   process.exit(code);
 }
 
+// Throw inside helpers so catch blocks can clean up before the top-level
+// dispatcher converts the error to process.exit. Use die() only at the
+// outermost verb scope where there's nothing left to clean up.
+class Bail extends Error {
+  constructor(msg, code) { super(msg); this.code = code; }
+}
+function bail(msg, code = 1) { throw new Bail(msg, code); }
+
 function ensureDeps() {
   if (existsSync(join(NODE_MODULES, 'patchright'))) return;
   console.error('[x-read] First run: installing patchright + Chrome. This may take 2-3 minutes.');
@@ -97,76 +105,52 @@ function parseTweetId(input) {
   die(`could not parse tweet ID from "${input}"; pass an x.com/<handle>/status/<id> URL or a bare numeric ID`);
 }
 
-// Boot a session, navigate, and wait for a target op's response to be captured
-// from the page's organic traffic.
+// Boot a session, navigate, capture the target op's organic response.
+// On any failure, tears down the context before throwing so callers can
+// always rely on the session being closed when this rejects.
 async function openSessionAndCapture({ navUrl, expectedOp }) {
   ensureDeps();
-  const { launchContext, isAuthChallengeUrl, detectDomChallenge, tripBreaker } = await import('./browser.mjs');
-
   const ctx = await launchContext({ visible: false });
   try {
     if (DEBUG) process.stderr.write(`[x-read] navigating to ${navUrl}\n`);
     await ctx.page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    const url = ctx.page.url();
+    if (isAuthChallengeUrl(url)) {
+      tripBreaker(`challenge-url:${url}`);
+      bail(`[x-read] redirected to challenge URL ${url}. Breaker tripped. After verifying the account in a real browser, run \`login\`.`, 3);
+    }
+    const dom = await detectDomChallenge(ctx.page).catch(() => null);
+    if (dom) {
+      tripBreaker(`dom-challenge:${dom}`);
+      bail(`[x-read] DOM challenge detected (${dom}). Breaker tripped. Verify the account in a real browser, then run \`login\`.`, 3);
+    }
+
+    const resp = await ctx.waitForResponse(expectedOp, { timeoutMs: 30000 });
+    if (!resp) {
+      const ops = ctx.listCapturedResponses();
+      bail(`[x-read] expected op "${expectedOp}" response not seen within 30s. Captured: [${ops.join(', ') || 'none'}]. Run \`login\` if "none".`, 3);
+    }
+    if (resp.status === 401 || resp.status === 403) {
+      tripBreaker(`response-${resp.status}:${expectedOp}`);
+      bail(`[x-read] ${resp.status} from ${expectedOp}; session likely expired. Run \`login\`.`, 3);
+    }
+    if (resp.status === 429) {
+      const wait = rateLimitResetSeconds(resp.rateLimit?.reset);
+      bail(`[x-read] 429 rate-limited on ${expectedOp}; reset in ${wait}s.`, 4);
+    }
+    if (!resp.ok) {
+      bail(`[x-read] ${expectedOp} returned ${resp.status}: ${typeof resp.body === 'string' ? resp.body.slice(0, 400) : JSON.stringify(resp.body).slice(0, 400)}`);
+    }
+    if (resp.parseError) bail(`[x-read] ${expectedOp} response body capture failed: ${resp.parseError}`);
+    if (!resp.body || typeof resp.body !== 'object') {
+      bail(`[x-read] ${expectedOp} body was not a JSON object (got ${typeof resp.body}). Likely a captcha interstitial or transient error.`);
+    }
+    return { ctx, resp };
   } catch (e) {
-    await ctx.close();
+    await ctx.close().catch(() => {});
     throw e;
   }
-
-  // Settle briefly so URL redirects + initial DOM render finish.
-  await new Promise(r => setTimeout(r, 1500));
-
-  // URL-level challenge check.
-  const url = ctx.page.url();
-  if (isAuthChallengeUrl(url)) {
-    tripBreaker(`challenge-url:${url}`);
-    await ctx.close();
-    die(`[x-read] redirected to challenge URL ${url}. Breaker tripped (single-strike on Premium account). After verifying the account in a real browser, run \`node scripts/run.mjs login\`.`, 3);
-  }
-
-  // DOM-level challenge check.
-  const domChallenge = await detectDomChallenge(ctx.page).catch(() => null);
-  if (domChallenge) {
-    tripBreaker(`dom-challenge:${domChallenge}`);
-    await ctx.close();
-    die(`[x-read] DOM challenge detected (${domChallenge}). Breaker tripped. Verify the account in a real browser, then run \`login\`.`, 3);
-  }
-
-  // Wait for the response we need.
-  const resp = await ctx.waitForResponse(expectedOp, { timeoutMs: 30000 });
-  if (!resp) {
-    const ops = ctx.listCapturedResponses();
-    await ctx.close();
-    die(`[x-read] expected op "${expectedOp}" response not seen within 30s. Captured response ops: [${ops.join(', ') || 'none'}]. If "none", session likely expired; run \`node scripts/run.mjs login\`.`, 3);
-  }
-
-  // Auth-failure check on the response itself.
-  if (resp.status === 401 || resp.status === 403) {
-    tripBreaker(`response-${resp.status}:${expectedOp}`);
-    await ctx.close();
-    die(`[x-read] ${resp.status} from ${expectedOp}; session likely expired. Breaker tripped. Run \`node scripts/run.mjs login\`.`, 3);
-  }
-  if (resp.status === 429) {
-    const { rateLimitResetSeconds } = await import('./browser.mjs');
-    const wait = rateLimitResetSeconds(resp.rateLimit?.reset);
-    await ctx.close();
-    die(`[x-read] 429 rate-limited on ${expectedOp}; reset in ${wait}s.`, 4);
-  }
-  if (!resp.ok) {
-    await ctx.close();
-    die(`[x-read] ${expectedOp} returned ${resp.status}: ${typeof resp.body === 'string' ? resp.body.slice(0, 400) : JSON.stringify(resp.body).slice(0, 400)}`);
-  }
-  // Round 2 finding: parseError can mask body-read failures as null-body
-  // success. Treat as capture failure rather than parser failure downstream.
-  if (resp.parseError) {
-    await ctx.close();
-    die(`[x-read] ${expectedOp} response body capture failed: ${resp.parseError}`);
-  }
-  if (!resp.body || typeof resp.body !== 'object') {
-    await ctx.close();
-    die(`[x-read] ${expectedOp} body was not a JSON object (got ${typeof resp.body}). Likely a captcha interstitial or transient error.`);
-  }
-
-  return { ctx, resp };
 }
 
 async function whoami() {
@@ -743,5 +727,6 @@ const argv = parseArgs(argvRaw);
 try {
   await VERBS[verb](argv);
 } catch (e) {
+  if (e instanceof Bail) die(e.message, e.code ?? 1);
   die(`[error] ${e.message}`);
 }
