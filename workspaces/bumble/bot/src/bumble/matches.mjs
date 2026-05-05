@@ -154,6 +154,14 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   if (!displayName) {
     return { matchId, slug: null, messages_total: messages.length, messages_new: 0, expires_at };
   }
+  // 2026-05-04: Bumble shows "Deleted account" as the sidebar name when the
+  // user deleted their profile. Treat as unmatched alongside the in-thread
+  // "left Bumble" interstitial. Both paths set isLeftBumble so the persist
+  // block below sets status=unmatched.
+  const isDeletedAccount = /^deleted account$/i.test(String(displayName).trim());
+  if (isDeletedAccount) {
+    isLeftBumble = true;
+  }
 
   const entityResult = await upsertMatch({
     matchId,
