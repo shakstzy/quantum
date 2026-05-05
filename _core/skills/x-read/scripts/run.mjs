@@ -263,10 +263,9 @@ function parseTweetDetail(body, focalId) {
       || [];
     const tweets = extractTweetsFromInstructions(instructions);
     let root = tweets.find(t => t.id === focalId) || null;
-    // Round 2 finding: if the focal tweet is unavailable/tombstoned and X
-    // returned no rest_id on the tombstone result, the parser would otherwise
-    // bail with "not found" instead of surfacing the unavailable reason.
-    // Look for an unidentified tombstone among tweets and adopt it as root.
+    // If the focal tweet is unavailable/tombstoned with no rest_id, adopt
+    // an unidentified tombstone so the caller sees the unavailable reason
+    // instead of a generic "not found".
     if (!root) {
       const tombstone = tweets.find(t => t.tombstone && (t.id === null || t.id === focalId));
       if (tombstone) {
@@ -374,8 +373,8 @@ function normalizeTweet(rawResult, depth = 0) {
 
 function extractMedia(legacy, noteEntities) {
   // Note tweets carry media under the note's entity set; legacy media may
-  // be empty for long-form posts. Round 2 finding IMP-10: include note
-  // media as a fallback so long-form posts don't lose their attachments.
+  // be empty for long-form posts; fall back to note media so long-form
+  // posts don't lose their attachments.
   const fromLegacy = (legacy?.entities?.media || []).map(m => ({
     type: m.type,
     url: m.media_url_https,
@@ -404,7 +403,7 @@ function extractUrls(legacy, noteEntities) {
 // ---- profile <handle> --------------------------------------------------
 
 // Reserved X routes that look like handles but aren't. Navigating to them
-// triggers auth challenges and trips the breaker. Gemini round 3 finding.
+// triggers auth challenges and trips the breaker.
 const RESERVED_X_ROUTES = new Set([
   'login', 'logout', 'home', 'explore', 'notifications', 'messages',
   'i', 'search', 'compose', 'settings', 'tos', 'privacy', 'help',
@@ -431,31 +430,12 @@ async function profile(argv) {
     expectedOp: 'UserByScreenName'
   });
   try {
-    const user = resp.body?.data?.user?.result || null;
-    if (!user) {
-      die(`[x-read] UserByScreenName had no data.user.result for @${handle}; user may be suspended or X shape changed.`, 5);
-    }
-    const userCore = user.core || {};
-    const legacy = user.legacy || {};
-    const profileOut = {
-      id: user.rest_id || null,
-      handle: userCore.screen_name || legacy.screen_name || null,
-      name: userCore.name || legacy.name || null,
-      bio: legacy.description || null,
-      verified: !!user.is_blue_verified,
-      premium: !!user.is_blue_verified,
-      protected: !!legacy.protected,
-      created_at: legacy.created_at || null,
-      followers: legacy.followers_count ?? null,
-      following: legacy.friends_count ?? null,
-      tweets: legacy.statuses_count ?? null,
-      location: legacy.location || null,
-      website: (legacy.entities?.url?.urls?.[0]?.expanded_url) || null
-    };
-    // UserTweets fires alongside UserByScreenName. Wait briefly to capture it.
+    const user = resp.body?.data?.user?.result;
+    if (!user) bail(`[x-read] UserByScreenName had no data.user.result for @${handle}; user may be suspended or X shape changed.`, 5);
+    // UserTweets fires alongside UserByScreenName.
     let recentTweets = [];
     const userTweetsResp = await ctx.waitForResponse('UserTweets', { timeoutMs: 8000 });
-    if (userTweetsResp && userTweetsResp.ok && userTweetsResp.body) {
+    if (userTweetsResp?.ok && userTweetsResp.body) {
       const instr = userTweetsResp.body?.data?.user?.result?.timeline?.timeline?.instructions
         || userTweetsResp.body?.data?.user?.result?.timeline_v2?.timeline?.instructions
         || [];
@@ -463,13 +443,13 @@ async function profile(argv) {
     }
     console.log(JSON.stringify({
       ok: true,
-      profile: profileOut,
+      profile: { ...formatUser(user), created_at: user?.legacy?.created_at || null },
       recent_tweets: recentTweets,
       count: recentTweets.length,
       truncated_note: 'recent_tweets is the first page of UserTweets only; cursor pagination not walked in v1.',
       fetched_at: new Date().toISOString()
     }, null, 2));
-  } finally { await ctx.close(); }
+  } finally { await ctx.close().catch(() => {}); }
 }
 
 // ---- bookmarks ---------------------------------------------------------
@@ -490,7 +470,7 @@ async function bookmarks(argv) {
       truncated_note: 'first page of bookmarks only; cursor pagination not walked in v1.',
       fetched_at: new Date().toISOString()
     }, null, 2));
-  } finally { await ctx.close(); }
+  } finally { await ctx.close().catch(() => {}); }
 }
 
 // ---- analytics (Premium) -----------------------------------------------
@@ -504,19 +484,13 @@ async function analytics(argv) {
   });
   try {
     const v = resp.body?.data?.viewer_v2;
-    if (!v) {
-      die('[x-read] accountOverviewQuery had no data.viewer_v2; X shape may have changed or your account does not have Premium analytics enabled.', 5);
-    }
-    // Gemini round 3 critical: viewer_v2 contains user_results.result.legacy
-    // which embeds the authenticated user's email, phone, account settings.
-    // Strip it. Surface ONLY the analytics-shaped fields plus rest_id for
-    // identity. Caller never gets PII.
+    if (!v) bail('[x-read] accountOverviewQuery had no data.viewer_v2; X shape may have changed or your account does not have Premium analytics enabled.', 5);
+    // viewer_v2.user_results.result.legacy embeds email/phone/account
+    // settings. Allowlist analytics-shaped fields only; never pass through.
     const userResult = v.user_results?.result || {};
     const safe = {
       rest_id: userResult.rest_id || null,
       organic_metrics_time_series: userResult.organic_metrics_time_series || null,
-      // If new analytics keys appear, surface them via a shallow allowlist
-      // rather than passthrough. Document additions in graphql-endpoints.md.
       creator_analytics: userResult.creator_analytics || null,
       monetization_analytics: userResult.monetization_analytics || null
     };
@@ -526,7 +500,7 @@ async function analytics(argv) {
       fetched_at: new Date().toISOString(),
       note: 'analytics fields filtered to allowlist (organic_metrics_time_series, creator_analytics, monetization_analytics). Raw viewer_v2 contains email/phone/settings PII and is NOT surfaced. If a metric key is missing, run `node scripts/diag.mjs --target=analytics` to rediscover, then add to the allowlist in run.mjs::analytics.'
     }, null, 2));
-  } finally { await ctx.close(); }
+  } finally { await ctx.close().catch(() => {}); }
 }
 
 // ---- search <query> ----------------------------------------------------
@@ -564,7 +538,7 @@ async function search(argv) {
       truncated_note: 'first page of SearchTimeline only; cursor pagination not walked in v1.',
       fetched_at: new Date().toISOString()
     }, null, 2));
-  } finally { await ctx.close(); }
+  } finally { await ctx.close().catch(() => {}); }
 }
 
 async function login(argv) {
@@ -574,7 +548,6 @@ async function login(argv) {
 }
 
 async function status() {
-  const { readBreaker, getProfileDir } = await import('./browser.mjs');
   const dir = getProfileDir();
   const pidfilePath = join(dir, '.skill.pid');
   let pid = null;
@@ -597,7 +570,6 @@ async function status() {
 }
 
 async function resetBreaker() {
-  const { writeBreaker } = await import('./browser.mjs');
   writeBreaker({ state: 'healthy', flagged_at: null, events: [] });
   console.error('[x-read] breaker reset to healthy.');
 }
