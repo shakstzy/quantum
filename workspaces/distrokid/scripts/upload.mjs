@@ -49,9 +49,9 @@ const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
 });
 const page = ctx.pages()[0] || (await ctx.newPage());
 
-async function snap(name) {
+async function snap(name, { fullPage = true } = {}) {
   const p = join(RUN_DIR, `${Date.now()}-${name}.png`);
-  try { await page.screenshot({ path: p, fullPage: false }); console.log(`[snap] ${name}`); } catch {}
+  try { await page.screenshot({ path: p, fullPage }); console.log(`[snap] ${name}`); } catch {}
 }
 
 async function step(name, fn) {
@@ -215,22 +215,38 @@ try {
   });
 
   await step("apple-credits", async () => {
-    // Click any "Add credits" / expand toggle if present
-    const expand = page.locator("a, button, span")
-      .filter({ hasText: /add credits for each song/i }).first();
-    if (await expand.count()) await expand.click({ force: true }).catch(() => {});
-    await page.waitForTimeout(800);
+    // Bounded: a hidden span matching the regex hangs click() for 30s. Use a
+    // short timeout and only click VISIBLE matches; fall through fast otherwise.
+    const expand = page.locator("a:visible, button:visible").filter({ hasText: /add credits for each song/i }).first();
+    try {
+      if (await expand.count({ timeout: 1500 })) {
+        await expand.click({ timeout: 3000 });
+        await page.waitForTimeout(1000);
+      }
+    } catch {}
 
-    // Performer name
-    const perf = page.locator('input[name*="performer"][type="text"], input[placeholder*="erformer"], input.performer-name').first();
-    if (await perf.count()) {
-      await perf.fill("Shak STZY").catch(() => {});
-    }
-    // Producer name
-    const prod = page.locator('input[name*="producer"][type="text"], input[placeholder*="roducer"], input.producer-name').first();
-    if (await prod.count()) {
-      await prod.fill("Shak STZY").catch(() => {});
-    }
+    // Fill any visible performer/producer text inputs that surfaced.
+    await page.evaluate(() => {
+      function fillByLabelMatch(re, value) {
+        const inputs = document.querySelectorAll('input[type="text"]');
+        for (const el of inputs) {
+          const ph = (el.placeholder || "").toLowerCase();
+          const nm = (el.name || "").toLowerCase();
+          const id = (el.id || "").toLowerCase();
+          const cl = (el.className || "").toLowerCase();
+          if (re.test(ph) || re.test(nm) || re.test(id) || re.test(cl)) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0 && !el.value) {
+              el.value = value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }
+        }
+      }
+      fillByLabelMatch(/performer/i, "Shak STZY");
+      fillByLabelMatch(/producer/i, "Shak STZY");
+    });
   });
 
   await step("mandatory-checkboxes", async () => {

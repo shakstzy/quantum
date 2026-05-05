@@ -84,6 +84,24 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   if (!sels.thread_messages?.selector) {
     throw new Error("missing_selector: thread_messages. Run scripts/discover-dom.mjs.");
   }
+  // 2026-05-04: Bumble's sidebar shows "Deleted account" verbatim for matches
+  // whose accounts no longer exist. Short-circuit BEFORE opening the thread.
+  // Don't create a raw/bumble/ entity (it pollutes the graph). Track the
+  // matchId in ~/.quantum/bumble/deleted/ so subsequent pulls stay quiet.
+  if (name && /^deleted account$/i.test(String(name).trim())) {
+    try {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { resolve } = await import("node:path");
+      const { homedir } = await import("node:os");
+      const deletedDir = resolve(homedir(), ".quantum/bumble/deleted");
+      await mkdir(deletedDir, { recursive: true });
+      const safeId = String(matchId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
+      await writeFile(resolve(deletedDir, `${safeId}.json`), JSON.stringify({
+        matchId, sidebarName: name, firstSeen: new Date().toISOString(),
+      }, null, 2));
+    } catch { /* tracking is best-effort */ }
+    return { matchId, slug: null, messages_total: 0, messages_new: 0, expires_at: null, deleted_account: true };
+  }
   await openThread(page, matchId);
   await scanForHalts(page);
 
