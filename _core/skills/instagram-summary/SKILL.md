@@ -6,9 +6,7 @@ allowed-tools: Bash
 
 # instagram-summary
 
-Posts return caption + metadata + visual analysis of the image(s). Reels additionally return an audio transcript. Both paths end in a multimodal synthesis dispatched through the shared `cloud-llm` skill (gemini Pro vision across 3 cycled accounts, with claude -p sonnet as fallback). Carousels (multi-image posts) analyze up to 10 items.
-
-Implementation lives in this directory: `fetch.py` is the entrypoint. Runtime venv lives at `~/.quantum/instagram-summary/.venv/` (out of the repo, not committed).
+Synthesis is delegated to the `cloud-llm` skill (gemini Pro across cycled accounts → claude -p sonnet). Carousels analyze up to 10 items. Entrypoint is `fetch.py`; venv lives at `~/.quantum/instagram-summary/.venv/`.
 
 ## When this fires
 
@@ -62,19 +60,6 @@ stderr carries `[pipeline: Xs]` timing and instaloader retry chatter. Both ignor
 
 - `yt-dlp failed`: Instagram changed its download surface. `brew upgrade yt-dlp`.
 - Shortcode parse failure: confirm URL has `/p/`, `/reel/`, `/reels/`, `/tv/`, or `/share/(p|reel)/`.
-
-## Expected runtime (M5 Max 128GB)
-
-- Single-image post: 3-6s
-- Carousel: 8-20s depending on item count (cap 10)
-- Reel: 10-18s
-
-Daemon keeps Gemma weights warm. No per-call cold-load tax.
-
-## Layout
-
-- Code: `/Users/shakstzy/QUANTUM/_core/skills/instagram-summary/fetch.py` (committed in repo).
-- Runtime venv: `~/.quantum/instagram-summary/.venv/` (out-of-repo, not committed).
 
 ## QUANTUM notes
 

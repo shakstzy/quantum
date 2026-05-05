@@ -45,14 +45,15 @@ def shortcode(url: str) -> str:
     return m.group(1)
 
 
-def fetch_post(url: str) -> Post:
+def fetch_post(url: str) -> dict:
     L = Instaloader(quiet=True)
     try:
-        return Post.from_shortcode(L.context, shortcode(url))
+        post = Post.from_shortcode(L.context, shortcode(url))
     except LoginRequiredException:
-        sys.exit("LoginRequired: run `~/.quantum/instagram-summary/.venv/bin/instaloader --login=<username>` once.")
+        return {"error": "LoginRequired: run `~/.quantum/instagram-summary/.venv/bin/instaloader --login=<username>` once."}
     except InstaloaderException as e:
-        sys.exit(f"{type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
+    return {"post": post}
 
 
 def post_image_urls(post: Post, cap: int) -> list[str]:
@@ -86,14 +87,22 @@ def download_video(url: str, out: Path) -> None:
         sys.exit(f"yt-dlp failed: {r.stderr.strip() or r.stdout.strip()}")
 
 
-def has_audio_stream(video: Path) -> bool:
+def probe_video(video: Path) -> tuple[bool, float]:
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a",
-         "-show_entries", "stream=codec_type",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-        capture_output=True, text=True,
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format=duration:stream=codec_type",
+         "-of", "json", str(video)],
+        capture_output=True, text=True, check=True,
     )
-    return "audio" in r.stdout
+    data = json.loads(r.stdout)
+    has_audio = any(s.get("codec_type") == "audio" for s in data.get("streams", []))
+    try:
+        duration = float(data["format"]["duration"])
+    except (KeyError, ValueError):
+        duration = 0.0
+    if duration <= 0:
+        sys.exit("Could not determine video duration.")
+    return has_audio, duration
 
 
 def extract_audio(video: Path, audio: Path) -> None:
@@ -106,24 +115,8 @@ def extract_audio(video: Path, audio: Path) -> None:
         sys.exit(f"ffmpeg audio extract failed: {r.stderr.strip()}")
 
 
-def video_duration(video: Path) -> float:
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-        capture_output=True, text=True, check=True,
-    )
-    try:
-        d = float(r.stdout.strip())
-    except ValueError:
-        d = 0.0
-    if d <= 0:
-        sys.exit("Could not determine video duration.")
-    return d
-
-
-def extract_frames(video: Path, out_dir: Path, n: int) -> list[Path]:
+def extract_frames(video: Path, out_dir: Path, n: int, duration: float) -> list[Path]:
     out_dir.mkdir(exist_ok=True)
-    duration = video_duration(video)
     frames = []
     for i in range(n):
         t = duration * (i + 0.5) / n
@@ -181,13 +174,13 @@ def handle_reel(url: str) -> None:
         frames_dir = tmp / "frames"
 
         download_video(url, video)
-        audio_present = has_audio_stream(video)
+        audio_present, duration = probe_video(video)
         if audio_present:
             extract_audio(video, audio)
 
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_trans = pool.submit(transcribe, audio) if audio_present else None
-            f_frames = pool.submit(extract_frames, video, frames_dir, N_FRAMES)
+            f_frames = pool.submit(extract_frames, video, frames_dir, N_FRAMES, duration)
             f_meta = pool.submit(fetch_post, url)
             try:
                 transcript = f_trans.result() if f_trans else ""
@@ -229,9 +222,8 @@ def handle_post(url: str) -> None:
         tmp = Path(td)
         imgs_dir = tmp / "imgs"
         imgs_dir.mkdir()
-        urls = post_image_urls(post, CAROUSEL_CAP)
         paths = []
-        for i, u in enumerate(urls):
+        for i, u in enumerate(post_image_urls(post, CAROUSEL_CAP)):
             p = imgs_dir / f"img{i:02d}.jpg"
             download_image(u, p)
             paths.append(p)
