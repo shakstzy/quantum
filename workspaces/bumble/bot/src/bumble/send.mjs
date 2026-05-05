@@ -107,6 +107,21 @@ export async function sendMessage(page, { matchId, text, mode, draftId, lintScor
     await openThread(page, matchId);
     await scanForHalts(page);
 
+    // 2026-05-04: LIVE pre-send dead-thread guard. Detects expired-interstitial
+    // AND "left Bumble" interstitial. The composer is gone in both cases, so
+    // typing/clicking afterward would either fail loudly or land on the wrong
+    // element. Throw stale_match so scripts/send.mjs moves the draft to
+    // expired/ and continues the drain.
+    const blockerText = await page.$eval(".chat-blocker, [class*='chat-blocker']", el => (el.textContent || "").toLowerCase()).catch(() => "");
+    if (blockerText) {
+      const isExpired = blockerText.includes("match has expired") || blockerText.includes("expiration");
+      const isLeft = blockerText.includes("left bumble") || blockerText.includes("make another connection");
+      if (isExpired || isLeft) {
+        const reason = isLeft ? "unmatched (left Bumble)" : "expired";
+        throw new Error(`stale_match: live thread shows ${reason} interstitial for ${matchId}. Refusing send.`);
+      }
+    }
+
     // CODEX-R7-P0-2: LIVE pre-send direction check. The role guard above used
     // local entity markdown (last pull state); if Adithya manually replied via
     // the Bumble app since the last pull, our local snapshot says "her sent
