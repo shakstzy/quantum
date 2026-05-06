@@ -33,7 +33,7 @@ function isTransient(err) {
   return TRANSIENT_PATTERNS.some(re => re.test(m));
 }
 
-const MAX_PER_FIRE = Math.max(1, parseInt(process.env.QUANTUM_BUMBLE_SEND_PER_FIRE || "2", 10));
+const MAX_PER_FIRE = Math.max(1, parseInt(process.env.QUANTUM_BUMBLE_SEND_PER_FIRE || "4", 10));
 const { ctx, page } = await launchPersistent({ headless: false });
 let sentCount = 0;
 let attempts = 0;
