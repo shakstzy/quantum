@@ -391,7 +391,7 @@ export async function upsertMatch({ matchId, personId, name, source = "bumble", 
         profile_changes: nextChanges,
         visual: ent.visual || "",
       });
-      return { slug, created: false, renamed: oldCity !== city, profile_diff: diff };
+      return { slug, created: false, renamed: oldCity !== city, profile_diff: diff, priorStatus: String(ent.meta.status || "").replace(/^"|"$/g, "") };
     }
 
     const existingSlugs = await listExistingSlugs();
