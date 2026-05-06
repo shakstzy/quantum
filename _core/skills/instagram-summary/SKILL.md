@@ -1,6 +1,6 @@
 ---
 name: instagram-summary
-description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Final multimodal synthesis is delegated to the `cloud-llm` skill (gemini Pro across cycled accounts → claude -p sonnet fallback). Trigger when Adithya pastes an instagram.com/p/, /reel/, /reels/, or /tv/ URL and asks to summarize, explain, or extract takeaways.
+description: Fetch an Instagram post or reel and summarize it. Posts return caption + metadata + visual analysis. Reels also return an audio transcript. Trigger when Adithya pastes an instagram.com URL with /p/, /reel/, /reels/, /tv/, or /share/ and asks to summarize, explain, recap, tl;dr, or extract takeaways.
 allowed-tools: Bash
 ---
 
