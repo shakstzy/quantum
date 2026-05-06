@@ -1,7 +1,7 @@
 # Graph Report - QUANTUM  (2026-05-06)
 
 ## Corpus Check
-- 3342 files · ~11,870,773 words
+- 3342 files · ~11,870,823 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
