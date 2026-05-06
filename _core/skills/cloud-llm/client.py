@@ -16,13 +16,13 @@ import subprocess
 import uuid
 from pathlib import Path
 
-QUANTUM_ROOT = Path("/Users/shakstzy/QUANTUM")
-# Staging lives inside the skill itself (NOT raw/, NOT a dot-folder) so gemini's
-# workspace sandbox accepts the staged image files. Two filters apply:
-#   1) raw/* is gitignored — gemini skips gitignored paths at file-read time
-#   2) .dot-folders are excluded by gemini's default ignore policy
-# Both must be cleared.
-STAGING_DIR = QUANTUM_ROOT / "_core" / "skills" / "cloud-llm" / "staging"
+# Skill root resolves through symlinks, so `~/.claude/skills/cloud-llm/...`
+# imports land on the physical directory. Staging + gemini cwd both anchor
+# here, which means cloud-llm has no project-specific (QUANTUM/ULTRON) coupling.
+CLOUD_LLM_ROOT = Path(__file__).resolve().parent
+# Staging must be (1) under cwd, (2) not gitignored, (3) not a dot-folder —
+# gemini's workspace sandbox refuses anything else. `<skill>/staging/` clears all three.
+STAGING_DIR = CLOUD_LLM_ROOT / "staging"
 GEMINI_ACCOUNTS_DIR = Path.home() / ".gemini" / "accounts"
 GEMINI_ACTIVE_CREDS = Path.home() / ".gemini" / "oauth_creds.json"
 GEMINI_PRO_MODEL = "gemini-3-pro-preview"
