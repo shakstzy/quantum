@@ -206,6 +206,16 @@ export async function scrapeThread(page, matchId, { name = null, sidebarHints = 
   if (isLeftBumble && entityResult?.slug) {
     try { await setStatus(entityResult.slug, "unmatched"); } catch (e) { console.error(`setStatus(unmatched) failed for ${entityResult.slug}: ${e.message}`); }
   }
+  // 2026-05-06: rescue stale-expired entities. When the chat-blocker is GONE
+  // (no expired/left-bumble interstitial) AND there's a recent inbound message,
+  // the thread is alive again — she rematched OR our prior pull mistakenly set
+  // status=expired. Reset status to "new" so decide.mjs re-engages.
+  if (!isExpiredView && !isLeftBumble && entityResult?.slug && messages.length > 0) {
+    const priorStatus = String(entityResult.priorStatus || "").replace(/^"|"$/g, "");
+    if (priorStatus === "expired" || priorStatus === "unmatched") {
+      try { await setStatus(entityResult.slug, "new"); } catch (e) { console.error(`setStatus(new-rescue) failed for ${entityResult.slug}: ${e.message}`); }
+    }
+  }
 
   await idlePause({ min: caps.scrape.between_thread_opens_ms[0], max: caps.scrape.between_thread_opens_ms[1] });
   return {
